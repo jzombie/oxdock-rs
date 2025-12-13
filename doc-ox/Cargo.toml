@@ -11,6 +11,4 @@ tempfile.workspace = true
 rust-embed.workspace = true
 doc-ox-dsl.workspace = true
 doc-ox-buildtime-macros.workspace = true
-
-[dev-dependencies]
 indoc.workspace = true
