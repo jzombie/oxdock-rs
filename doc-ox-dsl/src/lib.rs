@@ -446,16 +446,33 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
 // No resolve_symlink_source: symlinks use the literal target string, which resolves at access time
 // relative to the link's directory. On unsupported platforms, we fall back to copying.
 
+fn shell_program() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+    }
+}
+
 fn shell_cmd(cmd: &str) -> ProcessCommand {
-    let mut c = ProcessCommand::new("sh");
-    c.arg("-c").arg(cmd);
+    let program = shell_program();
+    let mut c = ProcessCommand::new(program);
+    if cfg!(windows) {
+        c.arg("/C").arg(cmd);
+    } else {
+        c.arg("-c").arg(cmd);
+    }
     c
 }
 
 fn run_shell(cwd: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        let mut cmd = ProcessCommand::new("sh");
+        let mut cmd = ProcessCommand::new(shell_program());
         cmd.current_dir(cwd);
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
@@ -474,7 +491,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
     {
         use std::os::windows::process::CommandExt;
 
-        let mut cmd = ProcessCommand::new("cmd");
+        let mut cmd = ProcessCommand::new(shell_program());
         cmd.current_dir(cwd).arg("/K");
 
         // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
