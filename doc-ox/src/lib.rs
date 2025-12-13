@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use doc_ox_dsl::{parse_script, run_steps, Step};
+pub use doc_ox_dsl::{Step, parse_script, run_steps};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -126,7 +126,9 @@ pub fn execute(opts: Options) -> Result<()> {
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
-                bail!("no stdin detected; pass --script <file> or pipe a script into stdin (use --script - if explicit)");
+                bail!(
+                    "no stdin detected; pass --script <file> or pipe a script into stdin (use --script - if explicit)"
+                );
             }
             let mut buf = String::new();
             stdin
@@ -206,5 +208,9 @@ fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
             .arg("-C")
             .arg(temp_root),
     )?;
+
+    // Drop the intermediate archive to keep the temp workspace clean.
+    fs::remove_file(&archive_path)
+        .with_context(|| format!("failed to remove {}", archive_path.display()))?;
     Ok(())
 }
