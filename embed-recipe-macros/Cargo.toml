@@ -7,8 +7,8 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
-embed-recipe-dsl = { path = "../embed-recipe-dsl" }
-tempfile = "3"
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+embed-recipe-dsl.workspace = true
+tempfile.workspace = true

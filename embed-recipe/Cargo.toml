@@ -5,9 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1.0"
-serde_json = "1.0"
-tempfile = "3.10"
-rust-embed = { version = "8", features = ["include-exclude"] }
-embed-recipe-dsl = { path = "../embed-recipe-dsl" }
-embed-recipe-macros = { path = "../embed-recipe-macros" }
+anyhow.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+rust-embed.workspace = true
+embed-recipe-dsl.workspace = true
+embed-recipe-macros.workspace = true
