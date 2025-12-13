@@ -26,6 +26,90 @@ pub const COMMANDS: &[Command] = &[
     Command::Shell,
 ];
 
+fn platform_matches(target: PlatformGuard) -> bool {
+    match target {
+        PlatformGuard::Unix => cfg!(unix),
+        PlatformGuard::Windows => cfg!(windows),
+        PlatformGuard::Macos => cfg!(target_os = "macos"),
+        PlatformGuard::Linux => cfg!(target_os = "linux"),
+    }
+}
+
+fn guard_allows(guard: &Guard) -> bool {
+    let allowed = match guard {
+        Guard::Platform { target, invert } => {
+            let res = platform_matches(*target);
+            if *invert { !res } else { res }
+        }
+        Guard::EnvExists { key, invert } => {
+            let res = std::env::var(key).map(|v| !v.is_empty()).unwrap_or(false);
+            if *invert { !res } else { res }
+        }
+        Guard::EnvEquals { key, value, invert } => {
+            let res = std::env::var(key).map(|v| v == *value).unwrap_or(false);
+            if *invert { !res } else { res }
+        }
+    };
+    allowed
+}
+
+fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
+    let mut text = raw.trim();
+    let mut invert_prefix = false;
+    if let Some(rest) = text.strip_prefix('!') {
+        invert_prefix = true;
+        text = rest.trim();
+    }
+
+    if let Some(rest) = text.strip_prefix("env:") {
+        let rest = rest.trim();
+        if let Some(pos) = rest.find("!=") {
+            let key = rest[..pos].trim();
+            let value = rest[pos + 2..].trim();
+            if key.is_empty() || value.is_empty() {
+                bail!("line {}: guard env: requires key and value", line_no);
+            }
+            return Ok(Guard::EnvEquals {
+                key: key.to_string(),
+                value: value.to_string(),
+                invert: true,
+            });
+        }
+        if let Some(pos) = rest.find('=') {
+            let key = rest[..pos].trim();
+            let value = rest[pos + 1..].trim();
+            if key.is_empty() || value.is_empty() {
+                bail!("line {}: guard env: requires key and value", line_no);
+            }
+            return Ok(Guard::EnvEquals {
+                key: key.to_string(),
+                value: value.to_string(),
+                invert: invert_prefix,
+            });
+        }
+        if rest.is_empty() {
+            bail!("line {}: guard env: requires a variable name", line_no);
+        }
+        return Ok(Guard::EnvExists {
+            key: rest.to_string(),
+            invert: invert_prefix,
+        });
+    }
+
+    let tag = text.to_ascii_lowercase();
+    let target = match tag.as_str() {
+        "unix" => PlatformGuard::Unix,
+        "windows" => PlatformGuard::Windows,
+        "mac" | "macos" => PlatformGuard::Macos,
+        "linux" => PlatformGuard::Linux,
+        _ => bail!("line {}: unknown guard '{}'", line_no, raw),
+    };
+    Ok(Guard::Platform {
+        target,
+        invert: invert_prefix,
+    })
+}
+
 impl Command {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -45,8 +129,33 @@ impl Command {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Step {
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PlatformGuard {
+    Unix,
+    Windows,
+    Macos,
+    Linux,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Guard {
+    Platform {
+        target: PlatformGuard,
+        invert: bool,
+    },
+    EnvExists {
+        key: String,
+        invert: bool,
+    },
+    EnvEquals {
+        key: String,
+        value: String,
+        invert: bool,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum StepKind {
     Workdir(String),
     Run(String),
     Copy { from: String, to: String },
@@ -57,6 +166,12 @@ pub enum Step {
     Shell,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Step {
+    pub guard: Option<Guard>,
+    pub kind: StepKind,
+}
+
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     let mut steps = Vec::new();
     for (idx, line) in input.lines().enumerate() {
@@ -64,24 +179,40 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut parts = line.splitn(2, ' ');
+
+        let (guard, remainder) = if let Some(rest) = line.strip_prefix('[') {
+            let end = rest
+                .find(']')
+                .ok_or_else(|| anyhow::anyhow!("line {}: guard must close with ]", idx + 1))?;
+            let guard_raw = &rest[..end];
+            let after = rest[end + 1..].trim();
+            if after.is_empty() {
+                bail!("line {}: guard must precede a command", idx + 1);
+            }
+            let guard = parse_guard(guard_raw, idx + 1)?;
+            (Some(guard), after)
+        } else {
+            (None, line)
+        };
+
+        let mut parts = remainder.splitn(2, ' ');
         let op = parts.next().unwrap();
         let rest = parts.next().map(str::trim).unwrap_or("");
         let cmd = Command::parse(op)
             .ok_or_else(|| anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op))?;
 
-        match cmd {
+        let kind = match cmd {
             Command::Workdir => {
                 if rest.is_empty() {
                     bail!("line {}: WORKDIR requires a path", idx + 1);
                 }
-                steps.push(Step::Workdir(rest.to_string()));
+                StepKind::Workdir(rest.to_string())
             }
             Command::Run => {
                 if rest.is_empty() {
                     bail!("line {}: RUN requires a command", idx + 1);
                 }
-                steps.push(Step::Run(rest.to_string()));
+                StepKind::Run(rest.to_string())
             }
             Command::Copy => {
                 let mut p = rest.split_whitespace();
@@ -91,10 +222,10 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                 let to = p.next().ok_or_else(|| {
                     anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
                 })?;
-                steps.push(Step::Copy {
+                StepKind::Copy {
                     from: from.to_string(),
                     to: to.to_string(),
-                });
+                }
             }
             Command::Symlink => {
                 let mut p = rest.split_whitespace();
@@ -104,16 +235,16 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                 let target = p.next().ok_or_else(|| {
                     anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
                 })?;
-                steps.push(Step::Symlink {
+                StepKind::Symlink {
                     link: link.to_string(),
                     target: target.to_string(),
-                });
+                }
             }
             Command::Mkdir => {
                 if rest.is_empty() {
                     bail!("line {}: MKDIR requires a path", idx + 1);
                 }
-                steps.push(Step::Mkdir(rest.to_string()));
+                StepKind::Mkdir(rest.to_string())
             }
             Command::Ls => {
                 let path = rest
@@ -121,7 +252,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     .next()
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
-                steps.push(Step::Ls(path));
+                StepKind::Ls(path)
             }
             Command::Write => {
                 let mut p = rest.splitn(2, ' ');
@@ -131,15 +262,15 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                 let contents = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
                     anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
                 })?;
-                steps.push(Step::Write {
+                StepKind::Write {
                     path: path.to_string(),
                     contents: contents.to_string(),
-                });
+                }
             }
-            Command::Shell => {
-                steps.push(Step::Shell);
-            }
-        }
+            Command::Shell => StepKind::Shell,
+        };
+
+        steps.push(Step { guard, kind });
     }
     Ok(steps)
 }
@@ -195,25 +326,30 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     let mut cwd = fs_root.to_path_buf();
 
     for (idx, step) in steps.iter().enumerate() {
-        match step {
-            Step::Workdir(path) => {
+        if let Some(guard) = &step.guard {
+            if !guard_allows(guard) {
+                continue;
+            }
+        }
+        match &step.kind {
+            StepKind::Workdir(path) => {
                 cwd = resolve_workdir(fs_root, &cwd, path)
                     .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
             }
-            Step::Run(cmd) => {
+            StepKind::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
                 command.current_dir(&cwd);
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
             }
-            Step::Copy { from, to } => {
+            StepKind::Copy { from, to } => {
                 let from_abs = resolve_copy_source(build_context, from)?;
                 let to_abs = resolve_dest(&cwd, to);
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
-            Step::Symlink { link, target } => {
+            StepKind::Symlink { link, target } => {
                 let link_abs = resolve_dest(&cwd, link);
                 if link_abs.exists() {
                     bail!("SYMLINK link already exists: {}", link_abs.display());
@@ -249,12 +385,12 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 #[cfg(not(any(unix, windows)))]
                 copy_dir(&resolve_dest(&cwd, target), &link_abs)?;
             }
-            Step::Mkdir(path) => {
+            StepKind::Mkdir(path) => {
                 let target = resolve_dest(&cwd, path);
                 fs::create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
-            Step::Ls(path_opt) => {
+            StepKind::Ls(path_opt) => {
                 let dir = path_opt
                     .as_deref()
                     .map(|p| resolve_dest(&cwd, p))
@@ -268,7 +404,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                     println!("{}", entry.file_name().to_string_lossy());
                 }
             }
-            Step::Write { path, contents } => {
+            StepKind::Write { path, contents } => {
                 let target = resolve_dest(&cwd, path);
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
@@ -277,7 +413,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 fs::write(&target, contents)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
-            Step::Shell => {
+            StepKind::Shell => {
                 run_shell(&cwd)?;
             }
         }
@@ -526,9 +662,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
 
-        let steps = vec![Step::Run(
-            "printf %s \"$CARGO_TARGET_DIR\" > seen.txt".to_string(),
-        )];
+        let steps = vec![Step {
+            guard: None,
+            kind: StepKind::Run("printf %s \"$CARGO_TARGET_DIR\" > seen.txt".to_string()),
+        }];
 
         run_steps(root, &steps).unwrap();
 
@@ -538,6 +675,80 @@ mod tests {
             seen,
             expected.to_string_lossy(),
             "CARGO_TARGET_DIR should be scoped"
+        );
+    }
+
+    #[test]
+    fn guard_skips_when_env_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let guard_var = "DOC_OX_GUARD_TEST_TOKEN_UNSET";
+        let script = format!(
+            r#"[env:{guard}] WRITE skipped.txt hi
+WRITE kept.txt ok"#,
+            guard = guard_var
+        );
+        let steps = parse_script(&script).unwrap();
+
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            !root.join("skipped.txt").exists(),
+            "guarded WRITE should be skipped"
+        );
+        assert!(root.join("kept.txt").exists(), "unguarded WRITE should run");
+    }
+
+    #[test]
+    fn guard_respects_platform_negation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = r#"[!unix] WRITE platform.txt hi
+    WRITE always.txt ok"#;
+        let steps = parse_script(script).unwrap();
+
+        run_steps(root, &steps).unwrap();
+
+        let expect_skipped = cfg!(unix);
+        assert_eq!(
+            root.join("platform.txt").exists(),
+            !expect_skipped,
+            "platform guard should skip on unix and run elsewhere"
+        );
+        assert!(
+            root.join("always.txt").exists(),
+            "unguarded WRITE should run"
+        );
+    }
+
+    #[test]
+    fn guard_matches_profile_env() {
+        // Cargo sets PROFILE during builds/tests; verify guards see it.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        unsafe {
+            std::env::set_var("PROFILE", &profile);
+        }
+        let script = format!(
+            r#"[env:PROFILE={0}] WRITE hit.txt yes
+[env:PROFILE!={0}] WRITE miss.txt no"#,
+            profile
+        );
+
+        let steps = parse_script(&script).unwrap();
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            root.join("hit.txt").exists(),
+            "PROFILE-matching guard should run"
+        );
+        assert!(
+            !root.join("miss.txt").exists(),
+            "PROFILE inequality guard should skip for current profile"
         );
     }
 }

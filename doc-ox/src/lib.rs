@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use doc_ox_dsl::{Step, parse_script, run_steps};
+pub use doc_ox_dsl::{Guard, Step, StepKind, parse_script, run_steps};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);

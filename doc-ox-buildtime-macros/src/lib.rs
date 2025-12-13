@@ -183,7 +183,9 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
                 TokenTree::Ident(ident) => {
                     let ident_text = ident.to_string();
                     let is_command = is_command(&ident_text);
-                    if is_command && !line.trim().is_empty() {
+                    let trimmed = line.trim();
+                    let guard_prefix = trimmed.starts_with('[');
+                    if is_command && !trimmed.is_empty() && !guard_prefix {
                         finalize_line(lines, line);
                     }
                     push_fragment(line, &ident_text, *last_was_command);

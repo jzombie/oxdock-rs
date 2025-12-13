@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 
-use doc_ox::{Step, run_script};
+use doc_ox::{Step, StepKind, run_script};
 
 #[test]
 fn script_runs_copy_and_symlink() {
@@ -17,18 +17,24 @@ fn script_runs_copy_and_symlink() {
     writeln!(f, "hello").unwrap();
 
     let steps = vec![
-        Step::Workdir("client".into()),
-        Step::Run("true".into()),
-        Step::Workdir("/".into()),
-        Step::Copy {
-            from: "client/dist".into(),
-            to: "client/dist-copy".into(),
+        Step { guard: None, kind: StepKind::Workdir("client".into()) },
+        Step { guard: None, kind: StepKind::Run("true".into()) },
+        Step { guard: None, kind: StepKind::Workdir("/".into()) },
+        Step {
+            guard: None,
+            kind: StepKind::Copy {
+                from: "client/dist".into(),
+                to: "client/dist-copy".into(),
+            },
         },
-        Step::Symlink {
-            link: "server/dist".into(),
-            target: "client/dist".into(),
+        Step {
+            guard: None,
+            kind: StepKind::Symlink {
+                link: "server/dist".into(),
+                target: "client/dist".into(),
+            },
         },
-        Step::Run("true".into()),
+        Step { guard: None, kind: StepKind::Run("true".into()) },
     ];
 
     run_script(root, &steps).unwrap();

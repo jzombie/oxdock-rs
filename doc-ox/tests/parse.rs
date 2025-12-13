@@ -1,4 +1,4 @@
-use doc_ox::{Options, ScriptSource, Step, parse_script};
+use doc_ox::{Options, ScriptSource, Step, StepKind, parse_script};
 
 #[test]
 fn parse_basic_script() {
@@ -17,12 +17,20 @@ WRITE tmp/file.txt hello
 
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 9);
-    if let Step::Workdir(ref p) = steps[0] {
+    if let Step {
+        kind: StepKind::Workdir(ref p),
+        ..
+    } = steps[0]
+    {
         assert_eq!(p, "client");
     } else {
         panic!();
     }
-    if let Step::Run(ref p) = steps[1] {
+    if let Step {
+        kind: StepKind::Run(ref p),
+        ..
+    } = steps[1]
+    {
         assert_eq!(p, "npm run build");
     } else {
         panic!();
@@ -34,7 +42,11 @@ fn parse_shell_step() {
     let script = "SHELL";
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 1);
-    if let Step::Shell = steps[0] {
+    if let Step {
+        kind: StepKind::Shell,
+        ..
+    } = steps[0]
+    {
     } else {
         panic!();
     }
@@ -42,10 +54,16 @@ fn parse_shell_step() {
 
 #[test]
 fn parse_mkdir_ls_write() {
-    let script = "MKDIR a/b\nLS a\nWRITE a/b/file.txt hi";
+    let script = "MKDIR a/b
+LS a
+WRITE a/b/file.txt hi";
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 3);
-    if let Step::Mkdir(ref p) = steps[0] {
+    if let Step {
+        kind: StepKind::Mkdir(ref p),
+        ..
+    } = steps[0]
+    {
         assert_eq!(p, "a/b");
     } else {
         panic!();
