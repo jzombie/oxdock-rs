@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
@@ -237,6 +238,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let assets_dir_abs = manifest_path.join(&assets_dir_str);
 
     if should_build {
+        preflight_assets_dir_for_build(&assets_dir_abs, input.assets_dir.span())?;
         eprintln!(
             "doc-ox embed: rebuilding assets into {}",
             assets_dir_abs.display()
@@ -290,6 +292,52 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             assets_dir_abs.display()
         ),
     ))
+}
+
+fn preflight_assets_dir_for_build(
+    assets_dir: &Path,
+    assets_span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if assets_dir.exists() {
+        if !assets_dir.is_dir() {
+            return Err(syn::Error::new(
+                assets_span,
+                format!(
+                    "assets_dir exists but is not a directory: {}",
+                    assets_dir.display()
+                ),
+            ));
+        }
+    } else {
+        fs::create_dir_all(assets_dir).map_err(|e| {
+            syn::Error::new(
+                assets_span,
+                format!(
+                    "failed to create assets_dir {} during pre-check: {e}",
+                    assets_dir.display()
+                ),
+            )
+        })?;
+    }
+
+    let probe = assets_dir.join(".doc_ox_write_probe");
+    match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => Err(syn::Error::new(
+            assets_span,
+            format!("assets_dir not writable: {} ({e})", assets_dir.display()),
+        )),
+    }?;
+
+    Ok(())
 }
 
 fn build_assets(script: &str, span: proc_macro2::Span, assets_dir: &Path) -> syn::Result<PathBuf> {
@@ -445,6 +493,84 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use std::fs;
+
+    #[test]
+    #[serial]
+    fn errors_when_assets_dir_is_file_before_build() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_dir = temp.path();
+        fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
+
+        let assets_rel = "prebuilt";
+        let assets_abs = manifest_dir.join(assets_rel);
+        fs::write(&assets_abs, b"not a dir").expect("create file at assets_dir path");
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
+            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
+        }
+
+        let input = EmbedDslInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new(
+                "WRITE hello.txt hi",
+                proc_macro2::Span::call_site(),
+            )),
+            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+        };
+
+        let err = expand_embed_internal(&input).expect_err("should fail when assets_dir is file");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("assets_dir exists but is not a directory"),
+            "message should report non-directory assets_dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn errors_when_assets_dir_not_writable_before_build() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_dir = temp.path();
+        fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
+
+        let assets_rel = "prebuilt";
+        let assets_abs = manifest_dir.join(assets_rel);
+        fs::create_dir_all(&assets_abs).expect("mkdir assets_dir");
+        fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o555))
+            .expect("make assets_dir read-only");
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
+            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
+        }
+
+        let input = EmbedDslInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new(
+                "WRITE hello.txt hi",
+                proc_macro2::Span::call_site(),
+            )),
+            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+        };
+
+        let err =
+            expand_embed_internal(&input).expect_err("should fail when assets_dir not writable");
+        let msg = err.to_string();
+        fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o755))
+            .expect("restore permissions for cleanup");
+        assert!(
+            msg.contains("assets_dir not writable"),
+            "message should report non-writable assets_dir"
+        );
+    }
 
     #[test]
     fn normalizes_braced_script() {
