@@ -1,0 +1,7 @@
+[workspace]
+members = [
+	"embed-recipe",
+	"embed-recipe-dsl",
+	"embed-recipe-macros",
+]
+resolver = "2"

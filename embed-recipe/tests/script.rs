@@ -1,0 +1,45 @@
+use std::fs::{self, File};
+use std::io::Write;
+
+use embed_recipe::{Step, run_script};
+
+#[test]
+fn script_runs_copy_and_symlink() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    // Prepare minimal workspace structure
+    fs::create_dir_all(root.join("client/dist")).unwrap();
+    fs::create_dir_all(root.join("server")).unwrap();
+
+    // Seed dist with a file
+    let mut f = File::create(root.join("client/dist/test.txt")).unwrap();
+    writeln!(f, "hello").unwrap();
+
+    let steps = vec![
+        Step::Workdir("client".into()),
+        Step::Run("true".into()),
+        Step::Workdir("/".into()),
+        Step::Copy {
+            from: "client/dist".into(),
+            to: "client/dist-copy".into(),
+        },
+        Step::Symlink {
+            link: "server/dist".into(),
+            target: "../client/dist".into(),
+        },
+        Step::Run("true".into()),
+    ];
+
+    run_script(root, &steps).unwrap();
+
+    // Copy should exist and contain the file
+    let copied = root.join("client/dist-copy/test.txt");
+    assert!(copied.exists());
+    let contents = fs::read_to_string(copied).unwrap();
+    assert!(contents.contains("hello"));
+
+    // Symlink should resolve to dist (on Unix); on non-Unix we copied.
+    let linked = root.join("server/dist/test.txt");
+    assert!(linked.exists());
+}
