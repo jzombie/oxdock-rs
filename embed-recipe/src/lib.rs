@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -125,8 +125,13 @@ pub fn execute(opts: Options) -> Result<()> {
         ScriptSource::Path(path) => fs::read_to_string(path)
             .with_context(|| format!("failed to read script at {}", path.display()))?,
         ScriptSource::Stdin => {
+            let stdin = io::stdin();
+            if stdin.is_terminal() {
+                bail!("no stdin detected; pass --script <file> or pipe a script into stdin (use --script - if explicit)");
+            }
             let mut buf = String::new();
-            io::stdin()
+            stdin
+                .lock()
                 .read_to_string(&mut buf)
                 .context("failed to read script from stdin")?;
             buf
