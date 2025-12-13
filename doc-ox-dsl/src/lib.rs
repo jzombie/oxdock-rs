@@ -53,12 +53,34 @@ fn guard_allows(guard: &Guard) -> bool {
     allowed
 }
 
+fn guards_allow_all(guards: &[Guard]) -> bool {
+    guards.iter().all(guard_allows)
+}
+
 fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
     let mut text = raw.trim();
     let mut invert_prefix = false;
     if let Some(rest) = text.strip_prefix('!') {
         invert_prefix = true;
         text = rest.trim();
+    }
+
+    if let Some(after) = text.strip_prefix("platform") {
+        let after = after.trim_start();
+        if let Some(rest) = after.strip_prefix(':').or_else(|| after.strip_prefix('=')) {
+            let tag = rest.trim().to_ascii_lowercase();
+            let target = match tag.as_str() {
+                "unix" => PlatformGuard::Unix,
+                "windows" => PlatformGuard::Windows,
+                "mac" | "macos" => PlatformGuard::Macos,
+                "linux" => PlatformGuard::Linux,
+                _ => bail!("line {}: unknown platform '{}'", line_no, rest),
+            };
+            return Ok(Guard::Platform {
+                target,
+                invert: invert_prefix,
+            });
+        }
     }
 
     if let Some(rest) = text.strip_prefix("env:") {
@@ -168,7 +190,7 @@ pub enum StepKind {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Step {
-    pub guard: Option<Guard>,
+    pub guards: Vec<Guard>,
     pub kind: StepKind,
 }
 
@@ -180,19 +202,22 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             continue;
         }
 
-        let (guard, remainder) = if let Some(rest) = line.strip_prefix('[') {
+        let (guards, remainder) = if let Some(rest) = line.strip_prefix('[') {
             let end = rest
                 .find(']')
                 .ok_or_else(|| anyhow::anyhow!("line {}: guard must close with ]", idx + 1))?;
-            let guard_raw = &rest[..end];
+            let guards_raw = &rest[..end];
             let after = rest[end + 1..].trim();
             if after.is_empty() {
                 bail!("line {}: guard must precede a command", idx + 1);
             }
-            let guard = parse_guard(guard_raw, idx + 1)?;
-            (Some(guard), after)
+            let guards = guards_raw
+                .split(',')
+                .map(|g| parse_guard(g, idx + 1))
+                .collect::<Result<Vec<_>>>()?;
+            (guards, after)
         } else {
-            (None, line)
+            (Vec::new(), line)
         };
 
         let mut parts = remainder.splitn(2, ' ');
@@ -270,7 +295,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             Command::Shell => StepKind::Shell,
         };
 
-        steps.push(Step { guard, kind });
+        steps.push(Step { guards, kind });
     }
     Ok(steps)
 }
@@ -326,10 +351,8 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     let mut cwd = fs_root.to_path_buf();
 
     for (idx, step) in steps.iter().enumerate() {
-        if let Some(guard) = &step.guard {
-            if !guard_allows(guard) {
-                continue;
-            }
+        if !guards_allow_all(&step.guards) {
+            continue;
         }
         match &step.kind {
             StepKind::Workdir(path) => {
@@ -663,7 +686,7 @@ mod tests {
         let root = temp.path();
 
         let steps = vec![Step {
-            guard: None,
+            guards: Vec::new(),
             kind: StepKind::Run("printf %s \"$CARGO_TARGET_DIR\" > seen.txt".to_string()),
         }];
 
@@ -749,6 +772,62 @@ WRITE kept.txt ok"#,
         assert!(
             !root.join("miss.txt").exists(),
             "PROFILE inequality guard should skip for current profile"
+        );
+    }
+
+    #[test]
+    fn multiple_guards_all_must_pass() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let key = "DOC_OX_MULTI_GUARD_TEST_PASS";
+        unsafe {
+            std::env::set_var(key, "ok");
+        }
+
+        let script = format!(
+            r#"[env:{k},env:{k}=ok] WRITE hit.txt yes
+WRITE always.txt ok"#,
+            k = key
+        );
+        let steps = parse_script(&script).unwrap();
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            root.join("hit.txt").exists(),
+            "guarded step should run when all guards pass"
+        );
+        assert!(
+            root.join("always.txt").exists(),
+            "unguarded step should run"
+        );
+    }
+
+    #[test]
+    fn multiple_guards_skip_when_one_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let key = "DOC_OX_MULTI_GUARD_TEST_FAIL";
+        unsafe {
+            std::env::set_var(key, "ok");
+        }
+
+        let script = format!(
+            r#"[env:{k},env:{k}!=ok] WRITE miss.txt yes
+WRITE always.txt ok"#,
+            k = key
+        );
+        let steps = parse_script(&script).unwrap();
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            !root.join("miss.txt").exists(),
+            "guarded step should skip when any guard fails"
+        );
+        assert!(
+            root.join("always.txt").exists(),
+            "unguarded step should run"
         );
     }
 }

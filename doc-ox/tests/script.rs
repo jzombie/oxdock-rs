@@ -17,24 +17,36 @@ fn script_runs_copy_and_symlink() {
     writeln!(f, "hello").unwrap();
 
     let steps = vec![
-        Step { guard: None, kind: StepKind::Workdir("client".into()) },
-        Step { guard: None, kind: StepKind::Run("true".into()) },
-        Step { guard: None, kind: StepKind::Workdir("/".into()) },
         Step {
-            guard: None,
+            guards: Vec::new(),
+            kind: StepKind::Workdir("client".into()),
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Run("true".into()),
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("/".into()),
+        },
+        Step {
+            guards: Vec::new(),
             kind: StepKind::Copy {
                 from: "client/dist".into(),
                 to: "client/dist-copy".into(),
             },
         },
         Step {
-            guard: None,
+            guards: Vec::new(),
             kind: StepKind::Symlink {
                 link: "server/dist".into(),
                 target: "client/dist".into(),
             },
         },
-        Step { guard: None, kind: StepKind::Run("true".into()) },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Run("true".into()),
+        },
     ];
 
     run_script(root, &steps).unwrap();
