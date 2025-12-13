@@ -473,6 +473,10 @@ mod tests {
 
         let seen = std::fs::read_to_string(root.join("seen.txt")).unwrap();
         let expected = root.join(".cargo-target");
-        assert_eq!(seen, expected.to_string_lossy(), "CARGO_TARGET_DIR should be scoped");
+        assert_eq!(
+            seen,
+            expected.to_string_lossy(),
+            "CARGO_TARGET_DIR should be scoped"
+        );
     }
 }
