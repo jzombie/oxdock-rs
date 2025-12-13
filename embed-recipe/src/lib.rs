@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,31 +20,42 @@ pub fn run() -> Result<()> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
+pub enum ScriptSource {
+    Path(PathBuf),
+    Stdin,
+}
+
+#[derive(Debug, Clone)]
 pub struct Options {
-    pub script_path: PathBuf,
+    pub script: ScriptSource,
 }
 
 impl Options {
     pub fn parse(args: &mut impl Iterator<Item = String>) -> Result<Self> {
-        let mut script_path: Option<PathBuf> = None;
+        let mut script: Option<ScriptSource> = None;
         while let Some(arg) = args.next() {
+            if arg.is_empty() {
+                continue;
+            }
             match arg.as_str() {
                 "--script" => {
                     let p = args
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--script requires a path"))?;
-                    script_path = Some(PathBuf::from(p));
+                    if p == "-" {
+                        script = Some(ScriptSource::Stdin);
+                    } else {
+                        script = Some(ScriptSource::Path(PathBuf::from(p)));
+                    }
                 }
                 other => bail!("unexpected flag: {}", other),
             }
         }
 
-        let script_path = script_path.ok_or_else(|| {
-            anyhow::anyhow!("--script <path> is required; this runner is script-driven")
-        })?;
+        let script = script.unwrap_or(ScriptSource::Stdin);
 
-        Ok(Self { script_path })
+        Ok(Self { script })
     }
 }
 
@@ -109,8 +121,17 @@ pub fn execute(opts: Options) -> Result<()> {
     archive_head(&workspace_root, &temp_path)?;
 
     // Interpret a tiny Dockerfile-ish script
-    let script = fs::read_to_string(&opts.script_path)
-        .with_context(|| format!("failed to read script at {}", opts.script_path.display()))?;
+    let script = match &opts.script {
+        ScriptSource::Path(path) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read script at {}", path.display()))?,
+        ScriptSource::Stdin => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("failed to read script from stdin")?;
+            buf
+        }
+    };
     let steps = parse_script(&script)?;
     run_script(&temp_path, &steps)?;
 

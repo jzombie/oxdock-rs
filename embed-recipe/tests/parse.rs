@@ -1,4 +1,4 @@
-use embed_recipe::{Step, parse_script};
+use embed_recipe::{parse_script, Options, ScriptSource, Step};
 
 #[test]
 fn parse_basic_script() {
@@ -49,5 +49,25 @@ fn parse_mkdir_ls_write() {
         assert_eq!(p, "a/b");
     } else {
         panic!();
+    }
+}
+
+#[test]
+fn parse_options_accepts_stdin_dash() {
+    let mut args = "--script -".split_whitespace().map(String::from);
+    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    match opts.script {
+        ScriptSource::Stdin => {}
+        _ => panic!("expected stdin source when passing '-'"),
+    }
+}
+
+#[test]
+fn parse_options_defaults_to_stdin() {
+    let mut args = std::iter::empty();
+    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    match opts.script {
+        ScriptSource::Stdin => {}
+        _ => panic!("expected stdin source by default"),
     }
 }

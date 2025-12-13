@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,23 +40,29 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             }
             "COPY" => {
                 let mut p = rest.split_whitespace();
-                let from = p
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1))?;
-                let to = p
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1))?;
-                steps.push(Step::Copy { from: from.to_string(), to: to.to_string() });
+                let from = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
+                })?;
+                let to = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
+                })?;
+                steps.push(Step::Copy {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                });
             }
             "SYMLINK" => {
                 let mut p = rest.split_whitespace();
-                let link = p
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1))?;
-                let target = p
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1))?;
-                steps.push(Step::Symlink { link: link.to_string(), target: target.to_string() });
+                let link = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
+                })?;
+                let target = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
+                })?;
+                steps.push(Step::Symlink {
+                    link: link.to_string(),
+                    target: target.to_string(),
+                });
             }
             "MKDIR" => {
                 if rest.is_empty() {
@@ -74,15 +80,16 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             }
             "WRITE" => {
                 let mut p = rest.splitn(2, ' ');
-                let path = p
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1))?;
-                let contents = p
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1))?;
-                steps.push(Step::Write { path: path.to_string(), contents: contents.to_string() });
+                let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
+                    anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
+                })?;
+                let contents = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
+                    anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
+                })?;
+                steps.push(Step::Write {
+                    path: path.to_string(),
+                    contents: contents.to_string(),
+                });
             }
             "SHELL" => {
                 steps.push(Step::Shell);
@@ -156,10 +163,7 @@ pub fn run_steps_with_context(fs_root: &Path, build_context: &Path, steps: &[Ste
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             Step::Shell => {
-                let status = Command::new("sh").current_dir(&cwd).status()?;
-                if !status.success() {
-                    bail!("shell exited with status {}", status);
-                }
+                run_shell(&cwd)?;
             }
         }
     }
@@ -186,7 +190,8 @@ fn copy_entry(src: &Path, dst: &Path) -> Result<()> {
         copy_dir(src, dst)?;
     } else if meta.is_file() {
         if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating dir {}", parent.display()))?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
         }
         fs::copy(src, dst)
             .with_context(|| format!("copying {} to {}", src.display(), dst.display()))?;
@@ -247,7 +252,10 @@ fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
     if candidate.exists() {
         Ok(candidate)
     } else {
-        bail!("COPY source missing in build context: {}", candidate.display());
+        bail!(
+            "COPY source missing in build context: {}",
+            candidate.display()
+        );
     }
 }
 
@@ -255,4 +263,48 @@ fn shell_cmd(cmd: &str) -> Command {
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd);
     c
+}
+
+fn run_shell(cwd: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.current_dir(cwd);
+
+        // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
+        if let Ok(tty) = fs::File::open("/dev/tty") {
+            cmd.stdin(tty);
+        }
+
+        let status = cmd.status()?;
+        if !status.success() {
+            bail!("shell exited with status {}", status);
+        }
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let mut cmd = Command::new("cmd");
+        cmd.current_dir(cwd).arg("/K");
+
+        // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
+        if let Ok(con) = fs::File::open("CONIN$") {
+            cmd.stdin(con);
+        }
+
+        // CREATE_NEW_CONSOLE (0x00000010) to ensure we get an interactive console if none is attached.
+        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+        let status = cmd.status()?;
+        if !status.success() {
+            bail!("shell exited with status {}", status);
+        }
+        return Ok(());
+    }
+
+    unreachable!("platform cfg should cover all targets")
 }
