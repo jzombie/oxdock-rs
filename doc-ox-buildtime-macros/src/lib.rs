@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
+use std::fs;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
@@ -7,10 +8,15 @@ use syn::{Ident, LitStr, Token, parse_macro_input};
 /// Macro that runs the DSL at compile time, materializes assets into a temp
 /// dir, and emits a rust-embed struct pointing at that dir.
 ///
+/// ```rust,ignore
+/// use doc_ox_buildtime_macros::embed;
+///
 /// embed! {
 ///     name: DemoAssets,
 ///     script: r#"...DSL..."#,
+///     assets_dir: "prebuilt",
 /// }
+/// ```
 #[proc_macro]
 pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as EmbedDslInput);
@@ -23,7 +29,7 @@ pub fn embed(input: TokenStream) -> TokenStream {
 struct EmbedDslInput {
     name: Ident,
     script: ScriptSource,
-    prebuilt: Option<LitStr>,
+    assets_dir: LitStr,
 }
 
 enum ScriptSource {
@@ -65,41 +71,21 @@ impl Parse for EmbedDslInput {
         };
         let _ = input.parse::<Token![,]>().ok();
 
-        // Optional: prebuilt: "path" or prebuilt: None
-        let lookahead = input.lookahead1();
-        let prebuilt = if lookahead.peek(Ident) {
-            let prebuilt_label: Ident = input.parse()?;
-            if prebuilt_label != "prebuilt" {
-                return Err(syn::Error::new(
-                    prebuilt_label.span(),
-                    "expected `prebuilt` label",
-                ));
-            }
-            input.parse::<Token![:]>()?;
-            // Allow prebuilt: None as a spelled-out absence.
-            if input.peek(Ident) {
-                let none_ident: Ident = input.parse()?;
-                if none_ident != "None" {
-                    return Err(syn::Error::new(
-                        none_ident.span(),
-                        "expected string path or `None`",
-                    ));
-                }
-                let _ = input.parse::<Token![,]>();
-                None
-            } else {
-                let path: LitStr = input.parse()?;
-                let _ = input.parse::<Token![,]>();
-                Some(path)
-            }
-        } else {
-            None
-        };
+        let assets_dir_label: Ident = input.parse()?;
+        if assets_dir_label != "assets_dir" {
+            return Err(syn::Error::new(
+                assets_dir_label.span(),
+                "expected `assets_dir` label",
+            ));
+        }
+        input.parse::<Token![:]>()?;
+        let assets_dir: LitStr = input.parse()?;
+        let _ = input.parse::<Token![,]>().ok();
 
         Ok(Self {
             name,
             script,
-            prebuilt,
+            assets_dir,
         })
     }
 }
@@ -225,7 +211,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let manifest_path = Path::new(&manifest_dir);
-    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+    let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
     // Detect a Git repository by walking up from the consuming crate's manifest dir.
@@ -241,16 +227,27 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         false
     }
     let has_git = find_git_root(manifest_path);
-    let should_build = is_primary && has_git;
+    // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
+    // require the caller to supply an assets_dir instead of trying to rebuild.
+    let should_build = has_git;
 
     let name = &input.name;
 
+    let assets_dir_str = input.assets_dir.value();
+    let assets_dir_abs = manifest_path.join(&assets_dir_str);
+
     if should_build {
-        let folder = build_assets(&script_src, span)?;
-        let folder_str = folder
-            .to_str()
-            .ok_or_else(|| syn::Error::new(span, "assets path is not valid UTF-8"))?;
-        let folder_lit = syn::LitStr::new(folder_str, span);
+        eprintln!(
+            "doc-ox embed: rebuilding assets into {}",
+            assets_dir_abs.display()
+        );
+        let _final_folder = build_assets(&script_src, span, &assets_dir_abs)?;
+        let folder_lit = syn::LitStr::new(
+            assets_dir_abs
+                .to_str()
+                .ok_or_else(|| syn::Error::new(span, "assets path is not valid UTF-8"))?,
+            span,
+        );
 
         return Ok(quote! {
             #[derive(::rust_embed::RustEmbed)]
@@ -259,42 +256,50 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         });
     }
 
-    if let Some(prebuilt) = &input.prebuilt {
-        let prebuilt_str = prebuilt.value();
-        let prebuilt_abs = manifest_path.join(&prebuilt_str);
-        if !prebuilt_abs.exists() {
+    if assets_dir_abs.exists() {
+        if !assets_dir_abs.is_dir() {
             return Err(syn::Error::new(
-                prebuilt.span(),
-                format!("prebuilt assets folder not found: {}", prebuilt_str),
+                input.assets_dir.span(),
+                format!(
+                    "assets_dir exists but is not a directory: {}",
+                    assets_dir_abs.display()
+                ),
             ));
         }
-
-        let prebuilt_lit = syn::LitStr::new(
-            prebuilt_abs
-                .to_str()
-                .ok_or_else(|| syn::Error::new(prebuilt.span(), "prebuilt path not valid UTF-8"))?,
-            prebuilt.span(),
+        eprintln!(
+            "doc-ox embed: reusing assets at {}",
+            assets_dir_abs.display()
+        );
+        let assets_dir_lit = syn::LitStr::new(
+            assets_dir_abs.to_str().ok_or_else(|| {
+                syn::Error::new(input.assets_dir.span(), "assets_dir path not valid UTF-8")
+            })?,
+            input.assets_dir.span(),
         );
         return Ok(quote! {
             #[derive(::rust_embed::RustEmbed)]
-            #[folder = #prebuilt_lit]
+            #[folder = #assets_dir_lit]
             pub struct #name;
         });
     }
 
     Err(syn::Error::new(
         span,
-        "embed: refused to build assets (not primary package or .git missing) and no `prebuilt` path was provided",
+        format!(
+            "embed: refused to build assets (not primary package or .git missing) and assets_dir missing at {}",
+            assets_dir_abs.display()
+        ),
     ))
 }
 
-fn build_assets(script: &str, span: proc_macro2::Span) -> syn::Result<PathBuf> {
+fn build_assets(script: &str, span: proc_macro2::Span, assets_dir: &Path) -> syn::Result<PathBuf> {
+    // Build in a temp dir; only the final workdir gets materialized into assets_dir.
     let tempdir = tempfile::Builder::new()
         .prefix("doc_ox_")
         .tempdir()
         .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     #[allow(deprecated)]
-    let root = tempdir.into_path();
+    let temp_root = tempdir.into_path();
 
     let steps = doc_ox_dsl::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
@@ -303,10 +308,135 @@ fn build_assets(script: &str, span: proc_macro2::Span) -> syn::Result<PathBuf> {
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let build_context = std::path::Path::new(&manifest_dir);
 
-    let final_cwd = doc_ox_dsl::run_steps_with_context_result(&root, build_context, &steps)
+    let final_cwd = doc_ox_dsl::run_steps_with_context_result(&temp_root, build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
+    eprintln!(
+        "doc-ox embed: final workdir {} (temp root {})",
+        final_cwd.display(),
+        temp_root.display()
+    );
+
+    let meta = fs::metadata(&final_cwd).map_err(|e| {
+        syn::Error::new(
+            span,
+            format!(
+                "final workdir missing after build: {} ({e})",
+                final_cwd.display()
+            ),
+        )
+    })?;
+    if !meta.is_dir() {
+        return Err(syn::Error::new(
+            span,
+            format!("final workdir is not a directory: {}", final_cwd.display()),
+        ));
+    }
+
+    // Clean destination then copy the final workdir contents into the assets_dir mount.
+    if assets_dir.exists() {
+        clear_dir(assets_dir, span)?;
+    } else {
+        fs::create_dir_all(assets_dir).map_err(|e| {
+            syn::Error::new(
+                span,
+                format!("failed to create assets_dir {}: {e}", assets_dir.display()),
+            )
+        })?;
+    }
+
+    copy_dir_contents(&final_cwd, assets_dir, span)?;
+    eprintln!(
+        "doc-ox embed: populated assets_dir from final workdir; entries now: {}",
+        count_entries(assets_dir, span)?
+    );
+
     Ok(final_cwd)
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path, span: proc_macro2::Span) -> syn::Result<()> {
+    for entry in fs::read_dir(src)
+        .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", src.display())))?
+    {
+        let entry = entry.map_err(|e| syn::Error::new(span, format!("dir entry error: {e}")))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            fs::create_dir_all(&dst_path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to create dir {}: {e}", dst_path.display()),
+                )
+            })?;
+            copy_dir_contents(&src_path, &dst_path, span)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!(
+                        "failed to copy {} -> {}: {e}",
+                        src_path.display(),
+                        dst_path.display()
+                    ),
+                )
+            })?;
+        } else {
+            return Err(syn::Error::new(
+                span,
+                format!("unsupported file type: {}", src_path.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn clear_dir(dir: &Path, span: proc_macro2::Span) -> syn::Result<()> {
+    if !dir.is_dir() {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "assets_dir exists but is not a directory: {}",
+                dir.display()
+            ),
+        ));
+    }
+    for entry in fs::read_dir(dir).map_err(|e| {
+        syn::Error::new(
+            span,
+            format!("failed to read assets_dir {}: {e}", dir.display()),
+        )
+    })? {
+        let entry = entry.map_err(|e| syn::Error::new(span, format!("dir entry error: {e}")))?;
+        let path = entry.path();
+        let ft = entry
+            .file_type()
+            .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
+        if ft.is_dir() {
+            fs::remove_dir_all(&path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to remove dir {}: {e}", path.display()),
+                )
+            })?;
+        } else {
+            fs::remove_file(&path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to remove file {}: {e}", path.display()),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn count_entries(dir: &Path, span: proc_macro2::Span) -> syn::Result<usize> {
+    let entries = fs::read_dir(dir)
+        .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
+    Ok(entries.count())
 }
 
 #[cfg(test)]
@@ -339,12 +469,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn uses_prebuilt_when_not_primary_and_no_git() {
+    fn uses_assets_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
-        let prebuilt_rel = "prebuilt";
-        let prebuilt_abs = manifest_dir.join(prebuilt_rel);
-        fs::create_dir_all(&prebuilt_abs).expect("mkdir prebuilt");
+        let assets_rel = "prebuilt";
+        let assets_abs = manifest_dir.join(assets_rel);
+        fs::create_dir_all(&assets_abs).expect("mkdir assets_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
         unsafe {
@@ -357,22 +487,22 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            prebuilt: Some(LitStr::new(prebuilt_rel, proc_macro2::Span::call_site())),
+            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
-        let ts = expand_embed_internal(&input).expect("prebuilt branch should succeed");
+        let ts = expand_embed_internal(&input).expect("assets_dir branch should succeed");
         let out = ts.to_string();
-        let prebuilt_abs_str = prebuilt_abs.to_string_lossy().to_string();
+        let prebuilt_abs_str = assets_abs.to_string_lossy().to_string();
         assert!(out.contains("DemoAssets"), "should define struct name");
         assert!(
             out.contains(&prebuilt_abs_str),
-            "should point folder to prebuilt abs path"
+            "should point folder to assets_dir abs path"
         );
     }
 
     #[test]
     #[serial]
-    fn errors_without_prebuilt_when_not_primary_and_no_git() {
+    fn errors_without_assets_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
 
@@ -386,14 +516,14 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            prebuilt: None,
+            assets_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
         };
 
-        let err = expand_embed_internal(&input).expect_err("should require prebuilt path");
+        let err = expand_embed_internal(&input).expect_err("should require assets_dir path");
         let msg = err.to_string();
         assert!(
-            msg.contains("prebuilt"),
-            "error should mention prebuilt path requirement"
+            msg.contains("assets_dir missing"),
+            "error should mention missing assets_dir"
         );
     }
 
@@ -420,7 +550,7 @@ mod tests {
                 "COPY source.txt copied.txt",
                 proc_macro2::Span::call_site(),
             )),
-            prebuilt: None,
+            assets_dir: LitStr::new("prebuilt", proc_macro2::Span::call_site()),
         };
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
@@ -440,6 +570,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
         fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
+        let assets_rel = "prebuilt";
 
         unsafe {
             env::remove_var("CARGO_PRIMARY_PACKAGE");
@@ -459,24 +590,26 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new(&script, proc_macro2::Span::call_site())),
-            prebuilt: None,
+            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
         let ts = expand_embed_internal(&input).expect("should build using final WORKDIR");
         let folder_path = folder_attr_path(&ts);
-
         assert!(
-            folder_path.ends_with("dist"),
-            "folder should reflect final WORKDIR"
+            folder_path.ends_with(assets_rel),
+            "folder should be the assets_dir path"
         );
 
         let inside = std::path::Path::new(&folder_path).join("hello.txt");
-        assert!(inside.exists(), "file in final WORKDIR should exist");
+        assert!(
+            inside.exists(),
+            "file in final WORKDIR should exist in assets_dir"
+        );
 
         let outside = std::path::Path::new(&folder_path).join("outside.txt");
         assert!(
             !outside.exists(),
-            "folder should not be the root; outside file must be absent"
+            "only final WORKDIR contents should be copied into assets_dir"
         );
     }
 

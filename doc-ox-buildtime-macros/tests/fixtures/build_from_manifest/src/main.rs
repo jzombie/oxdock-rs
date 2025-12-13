@@ -3,7 +3,7 @@ use doc_ox_buildtime_macros::embed;
 embed! {
     name: DemoAssets,
     script: "COPY source.txt copied.txt",
-    prebuilt: None,
+    assets_dir: "prebuilt",
 }
 
 fn main() {

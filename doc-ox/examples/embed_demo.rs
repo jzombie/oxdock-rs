@@ -11,8 +11,8 @@ embed! {
       RUN pwd > current_directory.txt
       COPY Cargo.toml assets/dir/copied.txt
     "#,
-    // When built from crates.io (no .git) or as a non-primary package, fall back to this prebuilt folder.
-    prebuilt: "examples/prebuilt_assets",
+    // When built from crates.io (no .git) or as a non-primary package, fall back to this assets_dir.
+    assets_dir: "examples/prebuilt_assets",
 }
 
 fn main() {
