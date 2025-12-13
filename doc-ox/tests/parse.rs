@@ -1,19 +1,22 @@
 use doc_ox::{Options, ScriptSource, Step, StepKind, parse_script};
+use indoc::indoc;
 
 #[test]
 fn parse_basic_script() {
-    let script = r#"
-# build and publish
-WORKDIR client
-RUN npm run build
-WORKDIR /
-COPY client/dist client/dist
-SYMLINK server/dist ../client/dist
-RUN cargo publish --workspace --locked
-MKDIR tmp
-LS tmp
-WRITE tmp/file.txt hello
-"#;
+    let script = indoc! {
+        r#"
+        # build and publish
+        WORKDIR client
+        RUN npm run build
+        WORKDIR /
+        COPY client/dist client/dist
+        SYMLINK server/dist ../client/dist
+        RUN cargo publish --workspace --locked
+        MKDIR tmp
+        LS tmp
+        WRITE tmp/file.txt hello
+        "#
+    };
 
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 9);
@@ -54,9 +57,13 @@ fn parse_shell_step() {
 
 #[test]
 fn parse_mkdir_ls_write() {
-    let script = "MKDIR a/b
-LS a
-WRITE a/b/file.txt hi";
+    let script = indoc! {
+        "
+        MKDIR a/b
+        LS a
+        WRITE a/b/file.txt hi
+        "
+    };
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 3);
     if let Step {

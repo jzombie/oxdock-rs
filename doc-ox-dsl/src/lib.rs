@@ -679,6 +679,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
@@ -708,8 +709,12 @@ mod tests {
 
         let guard_var = "DOC_OX_GUARD_TEST_TOKEN_UNSET";
         let script = format!(
-            r#"[env:{guard}] WRITE skipped.txt hi
-WRITE kept.txt ok"#,
+            indoc!(
+                r#"
+                [env:{guard}] WRITE skipped.txt hi
+                WRITE kept.txt ok
+                "#
+            ),
             guard = guard_var
         );
         let steps = parse_script(&script).unwrap();
@@ -728,8 +733,12 @@ WRITE kept.txt ok"#,
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
 
-        let script = r#"[!unix] WRITE platform.txt hi
-    WRITE always.txt ok"#;
+        let script = indoc!(
+            r#"
+            [!unix] WRITE platform.txt hi
+            WRITE always.txt ok
+            "#
+        );
         let steps = parse_script(script).unwrap();
 
         run_steps(root, &steps).unwrap();
@@ -757,8 +766,12 @@ WRITE kept.txt ok"#,
             std::env::set_var("PROFILE", &profile);
         }
         let script = format!(
-            r#"[env:PROFILE={0}] WRITE hit.txt yes
-[env:PROFILE!={0}] WRITE miss.txt no"#,
+            indoc!(
+                r#"
+                [env:PROFILE={0}] WRITE hit.txt yes
+                [env:PROFILE!={0}] WRITE miss.txt no
+                "#
+            ),
             profile
         );
 
@@ -786,8 +799,12 @@ WRITE kept.txt ok"#,
         }
 
         let script = format!(
-            r#"[env:{k},env:{k}=ok] WRITE hit.txt yes
-WRITE always.txt ok"#,
+            indoc!(
+                r#"
+                [env:{k},env:{k}=ok] WRITE hit.txt yes
+                WRITE always.txt ok
+                "#
+            ),
             k = key
         );
         let steps = parse_script(&script).unwrap();
@@ -814,8 +831,12 @@ WRITE always.txt ok"#,
         }
 
         let script = format!(
-            r#"[env:{k},env:{k}!=ok] WRITE miss.txt yes
-WRITE always.txt ok"#,
+            indoc!(
+                r#"
+                [env:{k},env:{k}!=ok] WRITE miss.txt yes
+                WRITE always.txt ok
+                "#
+            ),
             k = key
         );
         let steps = parse_script(&script).unwrap();

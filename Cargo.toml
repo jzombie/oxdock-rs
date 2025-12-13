@@ -21,6 +21,7 @@ rust-embed = { version = "8.9.0", features = ["include-exclude"] }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 syn = { version = "2.0", features = ["full"] }
+indoc = "2.0.7"
 
 # Internal crates
 doc-ox-dsl = { path = "doc-ox-dsl", version = "0.1.0" }
