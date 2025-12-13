@@ -147,6 +147,7 @@ pub fn run_steps_with_context_result(
 }
 
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
+    let cargo_target_dir = fs_root.join(".cargo-target");
     let mut cwd = fs_root.to_path_buf();
 
     for (idx, step) in steps.iter().enumerate() {
@@ -158,6 +159,8 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             Step::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
                 command.current_dir(&cwd);
+                // Prevent contention with the outer Cargo build by isolating nested cargo targets.
+                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
             }
             Step::Copy { from, to } => {
@@ -450,5 +453,26 @@ fn run_shell(cwd: &Path) -> Result<()> {
     {
         let _ = cwd;
         bail!("run_shell unsupported on this platform");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_sets_cargo_target_dir_to_fs_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let steps = vec![Step::Run(
+            "printf %s \"$CARGO_TARGET_DIR\" > seen.txt".to_string(),
+        )];
+
+        run_steps(root, &steps).unwrap();
+
+        let seen = std::fs::read_to_string(root.join("seen.txt")).unwrap();
+        let expected = root.join(".cargo-target");
+        assert_eq!(seen, expected.to_string_lossy(), "CARGO_TARGET_DIR should be scoped");
     }
 }
