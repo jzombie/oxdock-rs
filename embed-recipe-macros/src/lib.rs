@@ -170,8 +170,10 @@ mod tests {
     use super::*;
     use std::env;
     use std::fs;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn uses_prebuilt_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
@@ -181,6 +183,8 @@ mod tests {
 
         // Simulate crates.io tarball: no .git, not primary package.
         unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
             env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
             env::set_var("CARGO_PRIMARY_PACKAGE", "0");
         }
@@ -202,11 +206,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn errors_without_prebuilt_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
 
         unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
             env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
             env::set_var("CARGO_PRIMARY_PACKAGE", "0");
         }
@@ -223,5 +230,57 @@ mod tests {
             msg.contains("prebuilt"),
             "error should mention prebuilt path requirement"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn builds_from_manifest_dir_when_primary_with_git() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_dir = temp.path();
+        fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
+
+        // Source file only exists under the provided manifest dir; COPY should succeed from there.
+        fs::write(manifest_dir.join("source.txt"), b"hello from manifest").expect("write source");
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
+            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
+        }
+
+        let input = EmbedDslInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: LitStr::new("COPY source.txt copied.txt", proc_macro2::Span::call_site()),
+            prebuilt: None,
+        };
+
+        let ts = expand_embed_internal(&input).expect("should build using manifest dir");
+        let folder_path = folder_attr_path(&ts);
+
+        let copied = std::path::Path::new(&folder_path).join("copied.txt");
+        let contents = fs::read_to_string(&copied).expect("copied file readable");
+        assert_eq!(contents, "hello from manifest", "copy should read from manifest dir");
+    }
+
+    fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {
+        let item: syn::DeriveInput = syn::parse2(ts.clone()).expect("parse derive input");
+        let attr = item
+            .attrs
+            .iter()
+            .find(|a| a.path().is_ident("folder"))
+            .expect("folder attribute present");
+        match attr.meta {
+            syn::Meta::NameValue(ref nv) => match &nv.value {
+                syn::Expr::Lit(expr_lit) => {
+                    if let syn::Lit::Str(ref litstr) = expr_lit.lit {
+                        return litstr.value();
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        panic!("folder attribute did not contain a string literal");
     }
 }

@@ -1,0 +1,9 @@
+[package]
+name = "fixture-build-from-manifest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+embed-recipe-macros.workspace = true
+rust-embed = { workspace = true, features = ["include-exclude"] }

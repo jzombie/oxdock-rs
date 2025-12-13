@@ -3,6 +3,13 @@ members = [
 	"embed-recipe",
 	"embed-recipe-dsl",
 	"embed-recipe-macros",
+	# Fixture crate used by embed-recipe-macros trybuild test to verify manifest-dir behavior.
+  "embed-recipe-macros/tests/fixtures/build_from_manifest",
+]
+default-members = [
+	"embed-recipe",
+	"embed-recipe-dsl",
+	"embed-recipe-macros",
 ]
 resolver = "2"
 

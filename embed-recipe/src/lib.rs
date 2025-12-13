@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -108,7 +107,7 @@ impl EmbedOptions {
 }
 
 pub fn execute(opts: Options) -> Result<()> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?.as_str());
     let workspace_root = manifest_dir
         .parent()
         .context("embed-recipe manifest dir has no parent")?

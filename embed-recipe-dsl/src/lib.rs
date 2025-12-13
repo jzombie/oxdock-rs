@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -306,5 +306,9 @@ fn run_shell(cwd: &Path) -> Result<()> {
         return Ok(());
     }
 
-    unreachable!("platform cfg should cover all targets")
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = cwd;
+        bail!("run_shell unsupported on this platform");
+    }
 }

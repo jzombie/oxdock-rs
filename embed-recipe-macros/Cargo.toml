@@ -12,3 +12,8 @@ quote.workspace = true
 syn.workspace = true
 embed-recipe-dsl.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+trybuild = "1.0.114"
+rust-embed.workspace = true
+serial_test = "3.2.0"
