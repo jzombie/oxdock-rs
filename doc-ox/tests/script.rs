@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 
-use embed_recipe::{Step, run_script};
+use doc_ox::{Step, run_script};
 
 #[test]
 fn script_runs_copy_and_symlink() {

@@ -1,4 +1,4 @@
-use embed_recipe::{parse_script, Options, ScriptSource, Step};
+use doc_ox::{Options, ScriptSource, Step, parse_script};
 
 #[test]
 fn parse_basic_script() {

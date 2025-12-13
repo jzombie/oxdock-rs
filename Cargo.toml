@@ -1,15 +1,15 @@
 [workspace]
 members = [
-	"embed-recipe",
-	"embed-recipe-dsl",
-	"embed-recipe-macros",
-	# Fixture crate used by embed-recipe-macros trybuild test to verify manifest-dir behavior.
-  "embed-recipe-macros/tests/fixtures/build_from_manifest",
+	"doc-ox",
+	"doc-ox-dsl",
+	"doc-ox-buildtime-macros",
+	# Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
+	"doc-ox-buildtime-macros/tests/fixtures/build_from_manifest",
 ]
 default-members = [
-	"embed-recipe",
-	"embed-recipe-dsl",
-	"embed-recipe-macros",
+	"doc-ox",
+	"doc-ox-dsl",
+	"doc-ox-buildtime-macros",
 ]
 resolver = "2"
 
@@ -23,5 +23,5 @@ quote = "1.0.42"
 syn = { version = "2.0", features = ["full"] }
 
 # Internal crates
-embed-recipe-dsl = { path = "embed-recipe-dsl", version = "0.1.0" }
-embed-recipe-macros = { path = "embed-recipe-macros", version = "0.1.0" }
+doc-ox-dsl = { path = "doc-ox-dsl", version = "0.1.0" }
+doc-ox-buildtime-macros = { path = "doc-ox-buildtime-macros", version = "0.1.0" }

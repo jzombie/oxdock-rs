@@ -1,5 +1,5 @@
 fn main() {
-    if let Err(err) = embed_recipe::run() {
+    if let Err(err) = doc_ox::run() {
         eprintln!("{err:?}");
         std::process::exit(1);
     }

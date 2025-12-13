@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-embed-recipe-macros.workspace = true
+doc-ox-buildtime-macros.workspace = true
 rust-embed = { workspace = true, features = ["include-exclude"] }

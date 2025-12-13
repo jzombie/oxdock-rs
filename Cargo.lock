@@ -78,30 +78,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "embed-recipe"
+name = "doc-ox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "embed-recipe-dsl",
- "embed-recipe-macros",
+ "doc-ox-buildtime-macros",
+ "doc-ox-dsl",
  "rust-embed",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
-name = "embed-recipe-dsl"
+name = "doc-ox-buildtime-macros"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "tempfile",
-]
-
-[[package]]
-name = "embed-recipe-macros"
-version = "0.1.0"
-dependencies = [
- "embed-recipe-dsl",
+ "doc-ox-dsl",
  "proc-macro2",
  "quote",
  "rust-embed",
@@ -109,6 +101,14 @@ dependencies = [
  "syn",
  "tempfile",
  "trybuild",
+]
+
+[[package]]
+name = "doc-ox-dsl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tempfile",
 ]
 
 [[package]]
@@ -137,7 +137,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 name = "fixture-build-from-manifest"
 version = "0.1.0"
 dependencies = [
- "embed-recipe-macros",
+ "doc-ox-buildtime-macros",
  "rust-embed",
 ]
 

@@ -1,5 +1,5 @@
 [package]
-name = "embed-recipe-dsl"
+name = "doc-ox-dsl"
 version = "0.1.0"
 edition = "2024"
 

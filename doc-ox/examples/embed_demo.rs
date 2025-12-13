@@ -1,6 +1,6 @@
-use embed_recipe_macros::embed_dsl;
+use doc_ox_buildtime_macros::embed;
 
-embed_dsl! {
+embed! {
     name: DemoAssets,
     script: r#"
       WORKDIR /

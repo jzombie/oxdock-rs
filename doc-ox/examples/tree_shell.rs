@@ -1,4 +1,4 @@
-use embed_recipe::{parse_script, run_script};
+use doc_ox::{parse_script, run_script};
 
 // Embedded DSL script: builds a small demo tree and drops you into a shell inside it.
 const SCRIPT: &str = r#"

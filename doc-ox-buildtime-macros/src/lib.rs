@@ -7,12 +7,12 @@ use syn::{Ident, LitStr, Token, parse_macro_input};
 /// Macro that runs the DSL at compile time, materializes assets into a temp
 /// dir, and emits a rust-embed struct pointing at that dir.
 ///
-/// embed_dsl! {
+/// embed! {
 ///     name: DemoAssets,
 ///     script: r#"...DSL..."#,
 /// }
 #[proc_macro]
-pub fn embed_dsl(input: TokenStream) -> TokenStream {
+pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as EmbedDslInput);
     match expand_embed_internal(&input) {
         Ok(ts) => ts.into(),
@@ -152,26 +152,26 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
 
     Err(syn::Error::new(
         span,
-        "embed_dsl: refused to build assets (not primary package or .git missing) and no `prebuilt` path was provided",
+        "embed: refused to build assets (not primary package or .git missing) and no `prebuilt` path was provided",
     ))
 }
 
 fn build_assets(script: &str, span: proc_macro2::Span) -> syn::Result<PathBuf> {
     let tempdir = tempfile::Builder::new()
-        .prefix("embed_recipe_")
+        .prefix("doc_ox_")
         .tempdir()
         .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     #[allow(deprecated)]
     let root = tempdir.into_path();
 
-    let steps = embed_recipe_dsl::parse_script(script)
+    let steps = doc_ox_dsl::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let build_context = std::path::Path::new(&manifest_dir);
 
-    let final_cwd = embed_recipe_dsl::run_steps_with_context_result(&root, build_context, &steps)
+    let final_cwd = doc_ox_dsl::run_steps_with_context_result(&root, build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     Ok(final_cwd)

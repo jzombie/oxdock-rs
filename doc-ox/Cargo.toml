@@ -1,5 +1,5 @@
 [package]
-name = "embed-recipe"
+name = "doc-ox"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -9,5 +9,5 @@ anyhow.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 rust-embed.workspace = true
-embed-recipe-dsl.workspace = true
-embed-recipe-macros.workspace = true
+doc-ox-dsl.workspace = true
+doc-ox-buildtime-macros.workspace = true
