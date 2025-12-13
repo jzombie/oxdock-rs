@@ -1,7 +1,49 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::Command as ProcessCommand;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Command {
+    Workdir,
+    Run,
+    Copy,
+    Symlink,
+    Mkdir,
+    Ls,
+    Write,
+    Shell,
+}
+
+pub const COMMANDS: &[Command] = &[
+    Command::Workdir,
+    Command::Run,
+    Command::Copy,
+    Command::Symlink,
+    Command::Mkdir,
+    Command::Ls,
+    Command::Write,
+    Command::Shell,
+];
+
+impl Command {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Command::Workdir => "WORKDIR",
+            Command::Run => "RUN",
+            Command::Copy => "COPY",
+            Command::Symlink => "SYMLINK",
+            Command::Mkdir => "MKDIR",
+            Command::Ls => "LS",
+            Command::Write => "WRITE",
+            Command::Shell => "SHELL",
+        }
+    }
+
+    pub fn parse(op: &str) -> Option<Self> {
+        COMMANDS.iter().copied().find(|c| c.as_str() == op)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Step {
@@ -25,20 +67,23 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         let mut parts = line.splitn(2, ' ');
         let op = parts.next().unwrap();
         let rest = parts.next().map(str::trim).unwrap_or("");
-        match op {
-            "WORKDIR" => {
+        let cmd = Command::parse(op)
+            .ok_or_else(|| anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op))?;
+
+        match cmd {
+            Command::Workdir => {
                 if rest.is_empty() {
                     bail!("line {}: WORKDIR requires a path", idx + 1);
                 }
                 steps.push(Step::Workdir(rest.to_string()));
             }
-            "RUN" => {
+            Command::Run => {
                 if rest.is_empty() {
                     bail!("line {}: RUN requires a command", idx + 1);
                 }
                 steps.push(Step::Run(rest.to_string()));
             }
-            "COPY" => {
+            Command::Copy => {
                 let mut p = rest.split_whitespace();
                 let from = p.next().ok_or_else(|| {
                     anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
@@ -51,7 +96,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     to: to.to_string(),
                 });
             }
-            "SYMLINK" => {
+            Command::Symlink => {
                 let mut p = rest.split_whitespace();
                 let link = p.next().ok_or_else(|| {
                     anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
@@ -64,13 +109,13 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     target: target.to_string(),
                 });
             }
-            "MKDIR" => {
+            Command::Mkdir => {
                 if rest.is_empty() {
                     bail!("line {}: MKDIR requires a path", idx + 1);
                 }
                 steps.push(Step::Mkdir(rest.to_string()));
             }
-            "LS" => {
+            Command::Ls => {
                 let path = rest
                     .split_whitespace()
                     .next()
@@ -78,7 +123,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     .map(|s| s.to_string());
                 steps.push(Step::Ls(path));
             }
-            "WRITE" => {
+            Command::Write => {
                 let mut p = rest.splitn(2, ' ');
                 let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
                     anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
@@ -91,10 +136,9 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     contents: contents.to_string(),
                 });
             }
-            "SHELL" => {
+            Command::Shell => {
                 steps.push(Step::Shell);
             }
-            other => bail!("line {}: unknown instruction '{}'", idx + 1, other),
         }
     }
     Ok(steps)
@@ -242,7 +286,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     Ok(cwd)
 }
 
-fn run_cmd(cmd: &mut Command) -> Result<()> {
+fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     let status = cmd
         .status()
         .with_context(|| format!("failed to run {:?}", cmd))?;
@@ -402,8 +446,8 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
 // No resolve_symlink_source: symlinks use the literal target string, which resolves at access time
 // relative to the link's directory. On unsupported platforms, we fall back to copying.
 
-fn shell_cmd(cmd: &str) -> Command {
-    let mut c = Command::new("sh");
+fn shell_cmd(cmd: &str) -> ProcessCommand {
+    let mut c = ProcessCommand::new("sh");
     c.arg("-c").arg(cmd);
     c
 }
@@ -411,7 +455,7 @@ fn shell_cmd(cmd: &str) -> Command {
 fn run_shell(cwd: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        let mut cmd = Command::new("sh");
+        let mut cmd = ProcessCommand::new("sh");
         cmd.current_dir(cwd);
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
@@ -430,7 +474,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
     {
         use std::os::windows::process::CommandExt;
 
-        let mut cmd = Command::new("cmd");
+        let mut cmd = ProcessCommand::new("cmd");
         cmd.current_dir(cwd).arg("/K");
 
         // Reattach stdin to the console if available; CONIN$ is the Windows console input device.

@@ -107,9 +107,9 @@ impl Parse for EmbedDslInput {
 fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String> {
     use proc_macro2::{Delimiter, TokenTree};
 
-    const COMMANDS: &[&str] = &[
-        "WORKDIR", "RUN", "COPY", "SYMLINK", "MKDIR", "LS", "WRITE", "SHELL",
-    ];
+    fn is_command(name: &str) -> bool {
+        doc_ox_dsl::COMMANDS.iter().any(|c| c.as_str() == name)
+    }
 
     fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
         let trimmed = line.trim();
@@ -195,7 +195,7 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
                 }
                 TokenTree::Ident(ident) => {
                     let ident_text = ident.to_string();
-                    let is_command = COMMANDS.contains(&ident_text.as_str());
+                    let is_command = is_command(&ident_text);
                     if is_command && !line.trim().is_empty() {
                         finalize_line(lines, line);
                     }
