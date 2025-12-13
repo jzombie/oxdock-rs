@@ -15,7 +15,7 @@ use syn::{Ident, LitStr, Token, parse_macro_input};
 /// embed! {
 ///     name: DemoAssets,
 ///     script: r#"...DSL..."#,
-///     assets_dir: "prebuilt",
+///     out_dir: "prebuilt",
 /// }
 /// ```
 #[proc_macro]
@@ -30,7 +30,7 @@ pub fn embed(input: TokenStream) -> TokenStream {
 struct EmbedDslInput {
     name: Ident,
     script: ScriptSource,
-    assets_dir: LitStr,
+    out_dir: LitStr,
 }
 
 enum ScriptSource {
@@ -72,21 +72,21 @@ impl Parse for EmbedDslInput {
         };
         let _ = input.parse::<Token![,]>().ok();
 
-        let assets_dir_label: Ident = input.parse()?;
-        if assets_dir_label != "assets_dir" {
+        let out_dir_label: Ident = input.parse()?;
+        if out_dir_label != "out_dir" {
             return Err(syn::Error::new(
-                assets_dir_label.span(),
-                "expected `assets_dir` label",
+                out_dir_label.span(),
+                "expected `out_dir` label",
             ));
         }
         input.parse::<Token![:]>()?;
-        let assets_dir: LitStr = input.parse()?;
+        let out_dir: LitStr = input.parse()?;
         let _ = input.parse::<Token![,]>().ok();
 
         Ok(Self {
             name,
             script,
-            assets_dir,
+            out_dir,
         })
     }
 }
@@ -229,25 +229,22 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     }
     let has_git = find_git_root(manifest_path);
     // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
-    // require the caller to supply an assets_dir instead of trying to rebuild.
+    // require the caller to supply an out_dir instead of trying to rebuild.
     let should_build = has_git;
 
     let name = &input.name;
 
-    let assets_dir_str = input.assets_dir.value();
-    let assets_dir_abs = manifest_path.join(&assets_dir_str);
+    let out_dir_str = input.out_dir.value();
+    let out_dir_abs = manifest_path.join(&out_dir_str);
 
     if should_build {
-        preflight_assets_dir_for_build(&assets_dir_abs, input.assets_dir.span())?;
-        eprintln!(
-            "doc-ox embed: rebuilding assets into {}",
-            assets_dir_abs.display()
-        );
-        let _final_folder = build_assets(&script_src, span, &assets_dir_abs)?;
+        preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
+        eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
+        let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
         let folder_lit = syn::LitStr::new(
-            assets_dir_abs
+            out_dir_abs
                 .to_str()
-                .ok_or_else(|| syn::Error::new(span, "assets path is not valid UTF-8"))?,
+                .ok_or_else(|| syn::Error::new(span, "out_dir path is not valid UTF-8"))?,
             span,
         );
 
@@ -258,29 +255,26 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         });
     }
 
-    if assets_dir_abs.exists() {
-        if !assets_dir_abs.is_dir() {
+    if out_dir_abs.exists() {
+        if !out_dir_abs.is_dir() {
             return Err(syn::Error::new(
-                input.assets_dir.span(),
+                input.out_dir.span(),
                 format!(
-                    "assets_dir exists but is not a directory: {}",
-                    assets_dir_abs.display()
+                    "out_dir exists but is not a directory: {}",
+                    out_dir_abs.display()
                 ),
             ));
         }
-        eprintln!(
-            "doc-ox embed: reusing assets at {}",
-            assets_dir_abs.display()
-        );
-        let assets_dir_lit = syn::LitStr::new(
-            assets_dir_abs.to_str().ok_or_else(|| {
-                syn::Error::new(input.assets_dir.span(), "assets_dir path not valid UTF-8")
+        eprintln!("embed: reusing assets at {}", out_dir_abs.display());
+        let out_dir_lit = syn::LitStr::new(
+            out_dir_abs.to_str().ok_or_else(|| {
+                syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
             })?,
-            input.assets_dir.span(),
+            input.out_dir.span(),
         );
         return Ok(quote! {
             #[derive(::rust_embed::RustEmbed)]
-            #[folder = #assets_dir_lit]
+            #[folder = #out_dir_lit]
             pub struct #name;
         });
     }
@@ -288,39 +282,36 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     Err(syn::Error::new(
         span,
         format!(
-            "embed: refused to build assets (not primary package or .git missing) and assets_dir missing at {}",
-            assets_dir_abs.display()
+            "embed: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
+            out_dir_abs.display()
         ),
     ))
 }
 
-fn preflight_assets_dir_for_build(
-    assets_dir: &Path,
-    assets_span: proc_macro2::Span,
-) -> syn::Result<()> {
-    if assets_dir.exists() {
-        if !assets_dir.is_dir() {
+fn preflight_out_dir_for_build(out_dir: &Path, out_dir_span: proc_macro2::Span) -> syn::Result<()> {
+    if out_dir.exists() {
+        if !out_dir.is_dir() {
             return Err(syn::Error::new(
-                assets_span,
+                out_dir_span,
                 format!(
-                    "assets_dir exists but is not a directory: {}",
-                    assets_dir.display()
+                    "out_dir exists but is not a directory: {}",
+                    out_dir.display()
                 ),
             ));
         }
     } else {
-        fs::create_dir_all(assets_dir).map_err(|e| {
+        fs::create_dir_all(out_dir).map_err(|e| {
             syn::Error::new(
-                assets_span,
+                out_dir_span,
                 format!(
-                    "failed to create assets_dir {} during pre-check: {e}",
-                    assets_dir.display()
+                    "failed to create out_dir {} during pre-check: {e}",
+                    out_dir.display()
                 ),
             )
         })?;
     }
 
-    let probe = assets_dir.join(".doc_ox_write_probe");
+    let probe = out_dir.join(".doc_ox_write_probe");
     match OpenOptions::new()
         .write(true)
         .create(true)
@@ -332,16 +323,16 @@ fn preflight_assets_dir_for_build(
             Ok(())
         }
         Err(e) => Err(syn::Error::new(
-            assets_span,
-            format!("assets_dir not writable: {} ({e})", assets_dir.display()),
+            out_dir_span,
+            format!("out_dir not writable: {} ({e})", out_dir.display()),
         )),
     }?;
 
     Ok(())
 }
 
-fn build_assets(script: &str, span: proc_macro2::Span, assets_dir: &Path) -> syn::Result<PathBuf> {
-    // Build in a temp dir; only the final workdir gets materialized into assets_dir.
+fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::Result<PathBuf> {
+    // Build in a temp dir; only the final workdir gets materialized into out_dir.
     let tempdir = tempfile::Builder::new()
         .prefix("doc_ox_")
         .tempdir()
@@ -360,7 +351,7 @@ fn build_assets(script: &str, span: proc_macro2::Span, assets_dir: &Path) -> syn
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     eprintln!(
-        "doc-ox embed: final workdir {} (temp root {})",
+        "embed: final workdir {} (temp root {})",
         final_cwd.display(),
         temp_root.display()
     );
@@ -381,22 +372,22 @@ fn build_assets(script: &str, span: proc_macro2::Span, assets_dir: &Path) -> syn
         ));
     }
 
-    // Clean destination then copy the final workdir contents into the assets_dir mount.
-    if assets_dir.exists() {
-        clear_dir(assets_dir, span)?;
+    // Clean destination then copy the final workdir contents into the out_dir mount.
+    if out_dir.exists() {
+        clear_dir(out_dir, span)?;
     } else {
-        fs::create_dir_all(assets_dir).map_err(|e| {
+        fs::create_dir_all(out_dir).map_err(|e| {
             syn::Error::new(
                 span,
-                format!("failed to create assets_dir {}: {e}", assets_dir.display()),
+                format!("failed to create out_dir {}: {e}", out_dir.display()),
             )
         })?;
     }
 
-    copy_dir_contents(&final_cwd, assets_dir, span)?;
+    copy_dir_contents(&final_cwd, out_dir, span)?;
     eprintln!(
-        "doc-ox embed: populated assets_dir from final workdir; entries now: {}",
-        count_entries(assets_dir, span)?
+        "embed: populated out_dir from final workdir; entries now: {}",
+        count_entries(out_dir, span)?
     );
 
     Ok(final_cwd)
@@ -445,16 +436,13 @@ fn clear_dir(dir: &Path, span: proc_macro2::Span) -> syn::Result<()> {
     if !dir.is_dir() {
         return Err(syn::Error::new(
             span,
-            format!(
-                "assets_dir exists but is not a directory: {}",
-                dir.display()
-            ),
+            format!("out_dir exists but is not a directory: {}", dir.display()),
         ));
     }
     for entry in fs::read_dir(dir).map_err(|e| {
         syn::Error::new(
             span,
-            format!("failed to read assets_dir {}: {e}", dir.display()),
+            format!("failed to read out_dir {}: {e}", dir.display()),
         )
     })? {
         let entry = entry.map_err(|e| syn::Error::new(span, format!("dir entry error: {e}")))?;
@@ -496,14 +484,14 @@ mod tests {
 
     #[test]
     #[serial]
-    fn errors_when_assets_dir_is_file_before_build() {
+    fn errors_when_out_dir_is_file_before_build() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
         fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
 
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel);
-        fs::write(&assets_abs, b"not a dir").expect("create file at assets_dir path");
+        fs::write(&assets_abs, b"not a dir").expect("create file at out_dir path");
 
         unsafe {
             env::remove_var("CARGO_PRIMARY_PACKAGE");
@@ -518,21 +506,21 @@ mod tests {
                 "WRITE hello.txt hi",
                 proc_macro2::Span::call_site(),
             )),
-            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
-        let err = expand_embed_internal(&input).expect_err("should fail when assets_dir is file");
+        let err = expand_embed_internal(&input).expect_err("should fail when out_dir is file");
         let msg = err.to_string();
         assert!(
-            msg.contains("assets_dir exists but is not a directory"),
-            "message should report non-directory assets_dir"
+            msg.contains("out_dir exists but is not a directory"),
+            "message should report non-directory out_dir"
         );
     }
 
     #[cfg(unix)]
     #[test]
     #[serial]
-    fn errors_when_assets_dir_not_writable_before_build() {
+    fn errors_when_out_dir_not_writable_before_build() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("tempdir");
@@ -541,9 +529,9 @@ mod tests {
 
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel);
-        fs::create_dir_all(&assets_abs).expect("mkdir assets_dir");
+        fs::create_dir_all(&assets_abs).expect("mkdir out_dir");
         fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o555))
-            .expect("make assets_dir read-only");
+            .expect("make out_dir read-only");
 
         unsafe {
             env::remove_var("CARGO_PRIMARY_PACKAGE");
@@ -558,17 +546,16 @@ mod tests {
                 "WRITE hello.txt hi",
                 proc_macro2::Span::call_site(),
             )),
-            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
-        let err =
-            expand_embed_internal(&input).expect_err("should fail when assets_dir not writable");
+        let err = expand_embed_internal(&input).expect_err("should fail when out_dir not writable");
         let msg = err.to_string();
         fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o755))
             .expect("restore permissions for cleanup");
         assert!(
-            msg.contains("assets_dir not writable"),
-            "message should report non-writable assets_dir"
+            msg.contains("out_dir not writable"),
+            "message should report non-writable out_dir"
         );
     }
 
@@ -595,12 +582,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn uses_assets_dir_when_not_primary_and_no_git() {
+    fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel);
-        fs::create_dir_all(&assets_abs).expect("mkdir assets_dir");
+        fs::create_dir_all(&assets_abs).expect("mkdir out_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
         unsafe {
@@ -613,22 +600,22 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
-        let ts = expand_embed_internal(&input).expect("assets_dir branch should succeed");
+        let ts = expand_embed_internal(&input).expect("out_dir branch should succeed");
         let out = ts.to_string();
         let prebuilt_abs_str = assets_abs.to_string_lossy().to_string();
         assert!(out.contains("DemoAssets"), "should define struct name");
         assert!(
             out.contains(&prebuilt_abs_str),
-            "should point folder to assets_dir abs path"
+            "should point folder to out_dir abs path"
         );
     }
 
     #[test]
     #[serial]
-    fn errors_without_assets_dir_when_not_primary_and_no_git() {
+    fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
 
@@ -642,14 +629,14 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            assets_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
+            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
         };
 
-        let err = expand_embed_internal(&input).expect_err("should require assets_dir path");
+        let err = expand_embed_internal(&input).expect_err("should require out_dir path");
         let msg = err.to_string();
         assert!(
-            msg.contains("assets_dir missing"),
-            "error should mention missing assets_dir"
+            msg.contains("out_dir missing"),
+            "error should mention missing out_dir"
         );
     }
 
@@ -676,7 +663,7 @@ mod tests {
                 "COPY source.txt copied.txt",
                 proc_macro2::Span::call_site(),
             )),
-            assets_dir: LitStr::new("prebuilt", proc_macro2::Span::call_site()),
+            out_dir: LitStr::new("prebuilt", proc_macro2::Span::call_site()),
         };
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
@@ -716,26 +703,26 @@ mod tests {
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
             script: ScriptSource::Literal(LitStr::new(&script, proc_macro2::Span::call_site())),
-            assets_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
         let ts = expand_embed_internal(&input).expect("should build using final WORKDIR");
         let folder_path = folder_attr_path(&ts);
         assert!(
             folder_path.ends_with(assets_rel),
-            "folder should be the assets_dir path"
+            "folder should be the out_dir path"
         );
 
         let inside = std::path::Path::new(&folder_path).join("hello.txt");
         assert!(
             inside.exists(),
-            "file in final WORKDIR should exist in assets_dir"
+            "file in final WORKDIR should exist in out_dir"
         );
 
         let outside = std::path::Path::new(&folder_path).join("outside.txt");
         assert!(
             !outside.exists(),
-            "only final WORKDIR contents should be copied into assets_dir"
+            "only final WORKDIR contents should be copied into out_dir"
         );
     }
 
