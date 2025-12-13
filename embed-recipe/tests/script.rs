@@ -26,7 +26,7 @@ fn script_runs_copy_and_symlink() {
         },
         Step::Symlink {
             link: "server/dist".into(),
-            target: "../client/dist".into(),
+            target: "client/dist".into(),
         },
         Step::Run("true".into()),
     ];
@@ -40,6 +40,15 @@ fn script_runs_copy_and_symlink() {
     assert!(contents.contains("hello"));
 
     // Symlink should resolve to dist (on Unix); on non-Unix we copied.
-    let linked = root.join("server/dist/test.txt");
-    assert!(linked.exists());
+    #[cfg(unix)]
+    {
+        let linked = root.join("server/dist/test.txt");
+        assert!(linked.exists());
+    }
+    #[cfg(not(unix))]
+    {
+        // On non-Unix, symlink_dir may not be available; ensure copy fallback works.
+        let linked_copy = root.join("server/dist/test.txt");
+        assert!(linked_copy.exists());
+    }
 }

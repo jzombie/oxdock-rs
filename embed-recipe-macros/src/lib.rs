@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, Ident, LitStr, Token};
+use syn::{Ident, LitStr, Token, parse_macro_input};
 
 /// Macro that runs the DSL at compile time, materializes assets into a temp
 /// dir, and emits a rust-embed struct pointing at that dir.
@@ -96,7 +96,19 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    let has_git = manifest_path.join(".git").exists();
+    // Detect a Git repository by walking up from the consuming crate's manifest dir.
+    // This supports workspace layouts where .git is at the root rather than per-crate.
+    fn find_git_root(start: &Path) -> bool {
+        let mut cur = Some(start);
+        while let Some(p) = cur {
+            if p.join(".git").exists() {
+                return true;
+            }
+            cur = p.parent();
+        }
+        false
+    }
+    let has_git = find_git_root(manifest_path);
     let should_build = is_primary && has_git;
 
     let name = &input.name;
@@ -168,9 +180,9 @@ fn build_assets(script: &str, span: proc_macro2::Span) -> syn::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
-    use serial_test::serial;
 
     #[test]
     #[serial]
@@ -260,7 +272,10 @@ mod tests {
 
         let copied = std::path::Path::new(&folder_path).join("copied.txt");
         let contents = fs::read_to_string(&copied).expect("copied file readable");
-        assert_eq!(contents, "hello from manifest", "copy should read from manifest dir");
+        assert_eq!(
+            contents, "hello from manifest",
+            "copy should read from manifest dir"
+        );
     }
 
     fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {

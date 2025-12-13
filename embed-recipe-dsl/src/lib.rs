@@ -105,32 +105,91 @@ pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
 }
 
 pub fn run_steps_with_context(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<()> {
+    match run_steps_inner(fs_root, build_context, steps) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Compose a single error message with the top cause plus a compact fs snapshot.
+            let chain = err.chain().map(|e| e.to_string()).collect::<Vec<_>>();
+            let primary = chain
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown error".into());
+            let rest = if chain.len() > 1 {
+                let causes = chain
+                    .iter()
+                    .skip(1)
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n  ");
+                format!("\ncauses:\n  {}", causes)
+            } else {
+                String::new()
+            };
+            let tree = describe_dir(fs_root, 2, 24);
+            let snapshot = format!(
+                "filesystem snapshot (root {}):\n{}",
+                fs_root.display(),
+                tree
+            );
+            let msg = format!("{}{}\n{}", primary, rest, snapshot);
+            Err(anyhow::anyhow!(msg))
+        }
+    }
+}
+
+fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<()> {
     let mut cwd = fs_root.to_path_buf();
 
-    for step in steps {
+    for (idx, step) in steps.iter().enumerate() {
         match step {
             Step::Workdir(path) => {
-                cwd = resolve_workdir(fs_root, &cwd, path)?;
+                cwd = resolve_workdir(fs_root, &cwd, path)
+                    .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
             }
             Step::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
                 command.current_dir(&cwd);
-                run_cmd(&mut command)?;
+                run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
             }
             Step::Copy { from, to } => {
                 let from_abs = resolve_copy_source(build_context, from)?;
                 let to_abs = resolve_dest(&cwd, to);
-                copy_entry(&from_abs, &to_abs)?;
+                copy_entry(&from_abs, &to_abs)
+                    .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             Step::Symlink { link, target } => {
                 let link_abs = resolve_dest(&cwd, link);
                 if link_abs.exists() {
-                    fs::remove_file(&link_abs)?;
+                    bail!("SYMLINK link already exists: {}", link_abs.display());
+                }
+                let target_abs = if Path::new(target).is_absolute() {
+                    PathBuf::from(target)
+                } else {
+                    let from_build = build_context.join(target);
+                    if from_build.exists() {
+                        from_build
+                    } else {
+                        build_context
+                            .parent()
+                            .map(|p| p.join(target))
+                            .unwrap_or(from_build)
+                    }
+                };
+                if target_abs == link_abs {
+                    bail!(
+                        "SYMLINK target resolves to the link itself: {}",
+                        target_abs.display()
+                    );
+                }
+                if !target_abs.exists() {
+                    bail!("SYMLINK target missing: {}", target_abs.display());
                 }
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(target, &link_abs)?;
+                std::os::unix::fs::symlink(&target_abs, &link_abs)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, link, target))?;
                 #[cfg(all(windows, not(unix)))]
-                std::os::windows::fs::symlink_dir(target, &link_abs)?;
+                std::os::windows::fs::symlink_dir(&target_abs, &link_abs)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, link, target))?;
                 #[cfg(not(any(unix, windows)))]
                 copy_dir(&resolve_dest(&cwd, target), &link_abs)?;
             }
@@ -230,10 +289,33 @@ fn resolve_workdir(root: &Path, current: &Path, new_dir: &str) -> Result<PathBuf
     } else {
         current.join(new_dir)
     };
-    if !candidate.exists() {
-        bail!("WORKDIR does not exist: {}", candidate.display());
+    if let Ok(meta) = fs::symlink_metadata(&candidate) {
+        if meta.is_dir() {
+            return Ok(candidate);
+        }
+        if meta.file_type().is_symlink() {
+            let target = fs::read_link(&candidate)
+                .with_context(|| format!("reading symlink target for {}", candidate.display()))?;
+            let target_abs = if target.is_absolute() {
+                target
+            } else {
+                candidate
+                    .parent()
+                    .map(|p| p.join(&target))
+                    .unwrap_or(target)
+            };
+            if !target_abs.exists() {
+                fs::create_dir_all(&target_abs)
+                    .with_context(|| format!("creating symlink target {}", target_abs.display()))?;
+            }
+            return Ok(candidate);
+        }
+        bail!(
+            "WORKDIR path is not a directory or symlink: {}",
+            candidate.display()
+        );
     }
-    Ok(candidate)
+    bail!("WORKDIR does not exist: {}", candidate.display());
 }
 
 fn resolve_dest(cwd: &Path, rel: &str) -> PathBuf {
@@ -258,6 +340,55 @@ fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
         );
     }
 }
+
+fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
+    fn helper(path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
+        if *left == 0 {
+            return;
+        }
+        let indent = "  ".repeat(depth);
+        if depth > 0 {
+            out.push_str(&format!(
+                "{}{}\n",
+                indent,
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
+        if depth >= max_depth {
+            return;
+        }
+        let entries = match fs::read_dir(path) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mut names: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        names.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        for entry in names {
+            if *left == 0 {
+                return;
+            }
+            *left -= 1;
+            let p = entry.path();
+            if p.is_dir() {
+                helper(&p, depth + 1, max_depth, left, out);
+            } else {
+                out.push_str(&format!(
+                    "{}  {}\n",
+                    indent,
+                    entry.file_name().to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    let mut out = String::new();
+    let mut left = max_entries;
+    helper(root, 0, max_depth, &mut left, &mut out);
+    out
+}
+
+// No resolve_symlink_source: symlinks use the literal target string, which resolves at access time
+// relative to the link's directory. On unsupported platforms, we fall back to copying.
 
 fn shell_cmd(cmd: &str) -> Command {
     let mut c = Command::new("sh");
