@@ -22,8 +22,13 @@ pub fn embed(input: TokenStream) -> TokenStream {
 
 struct EmbedDslInput {
     name: Ident,
-    script: LitStr,
+    script: ScriptSource,
     prebuilt: Option<LitStr>,
+}
+
+enum ScriptSource {
+    Literal(LitStr),
+    Braced(proc_macro2::TokenStream),
 }
 
 impl Parse for EmbedDslInput {
@@ -34,7 +39,7 @@ impl Parse for EmbedDslInput {
         }
         input.parse::<Token![:]>()?;
         let name: Ident = input.parse()?;
-        input.parse::<Token![,]>()?;
+        let _ = input.parse::<Token![,]>().ok();
 
         let script_label: Ident = input.parse()?;
         if script_label != "script" {
@@ -44,8 +49,21 @@ impl Parse for EmbedDslInput {
             ));
         }
         input.parse::<Token![:]>()?;
-        let script: LitStr = input.parse()?;
-        let _ = input.parse::<Token![,]>();
+        let script = if input.peek(LitStr) {
+            let s: LitStr = input.parse()?;
+            ScriptSource::Literal(s)
+        } else if input.peek(syn::token::Brace) {
+            let content;
+            syn::braced!(content in input);
+            let ts: proc_macro2::TokenStream = content.parse()?;
+            ScriptSource::Braced(ts)
+        } else {
+            return Err(syn::Error::new(
+                input.span(),
+                "expected string literal or braced script block",
+            ));
+        };
+        let _ = input.parse::<Token![,]>().ok();
 
         // Optional: prebuilt: "path" or prebuilt: None
         let lookahead = input.lookahead1();
@@ -86,9 +104,123 @@ impl Parse for EmbedDslInput {
     }
 }
 
+fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String> {
+    use proc_macro2::{Delimiter, TokenTree};
+
+    const COMMANDS: &[&str] = &[
+        "WORKDIR", "RUN", "COPY", "SYMLINK", "MKDIR", "LS", "WRITE", "SHELL",
+    ];
+
+    fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+        line.clear();
+    }
+
+    fn sticky(c: char) -> bool {
+        matches!(c, '/' | '.' | '-' | ':')
+    }
+
+    fn needs_space(prev: char, next: char) -> bool {
+        if prev.is_whitespace() || next.is_whitespace() {
+            return false;
+        }
+        if sticky(prev) || sticky(next) {
+            return false;
+        }
+        if (prev == '&' && next == '&') || (prev == '|' && next == '|') {
+            return false;
+        }
+        true
+    }
+
+    fn push_fragment(buf: &mut String, frag: &str, force_space: bool) {
+        if frag.is_empty() {
+            return;
+        }
+        let next_char = frag.chars().next().unwrap_or(' ');
+        if let Some(prev) = buf.chars().rev().find(|c| !c.is_whitespace()) {
+            if force_space && !prev.is_whitespace() {
+                buf.push(' ');
+            } else if needs_space(prev, next_char) {
+                buf.push(' ');
+            }
+        }
+        buf.push_str(frag);
+    }
+
+    fn delim_pair(delim: Delimiter) -> Option<(char, char)> {
+        match delim {
+            Delimiter::Parenthesis => Some(('(', ')')),
+            Delimiter::Brace => Some(('{', '}')),
+            Delimiter::Bracket => Some(('[', ']')),
+            Delimiter::None => None,
+        }
+    }
+
+    fn walk(
+        ts: proc_macro2::TokenStream,
+        line: &mut String,
+        lines: &mut Vec<String>,
+        last_was_command: &mut bool,
+    ) -> syn::Result<()> {
+        for tt in ts {
+            match tt {
+                TokenTree::Punct(ref p) if matches!(p.as_char(), ';' | ',') => {
+                    finalize_line(lines, line);
+                    *last_was_command = false;
+                }
+                TokenTree::Group(g) => {
+                    if let Some((open, close)) = delim_pair(g.delimiter()) {
+                        push_fragment(line, &open.to_string(), *last_was_command);
+                        *last_was_command = false;
+                        walk(g.stream(), line, lines, last_was_command)?;
+                        push_fragment(line, &close.to_string(), *last_was_command);
+                    } else {
+                        walk(g.stream(), line, lines, last_was_command)?;
+                    }
+                }
+                TokenTree::Literal(lit) => {
+                    let text = syn::parse_str::<syn::LitStr>(&lit.to_string())
+                        .map(|s| s.value())
+                        .unwrap_or_else(|_| lit.to_string());
+                    push_fragment(line, &text, *last_was_command);
+                    *last_was_command = false;
+                }
+                TokenTree::Punct(p) => {
+                    push_fragment(line, &p.as_char().to_string(), *last_was_command);
+                    *last_was_command = false;
+                }
+                TokenTree::Ident(ident) => {
+                    let ident_text = ident.to_string();
+                    let is_command = COMMANDS.contains(&ident_text.as_str());
+                    if is_command && !line.trim().is_empty() {
+                        finalize_line(lines, line);
+                    }
+                    push_fragment(line, &ident_text, *last_was_command);
+                    *last_was_command = is_command;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut last_was_command = false;
+    walk(ts.clone(), &mut current, &mut lines, &mut last_was_command)?;
+    finalize_line(&mut lines, &mut current);
+
+    Ok(lines.join("\n"))
+}
+
 fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::TokenStream> {
-    let script_src = input.script.value();
-    let span = input.script.span();
+    let (script_src, span) = match &input.script {
+        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
+        ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
+    };
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
@@ -185,6 +317,27 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn normalizes_braced_script() {
+        let ts: proc_macro2::TokenStream = quote! {
+            WORKDIR /
+            MKDIR assets;
+            WRITE assets/hello.txt "hi there";
+            RUN echo && ls
+        };
+
+        let normalized = normalize_braced_script(&ts).expect("normalize braced script");
+        let expected = [
+            "WORKDIR /",
+            "MKDIR assets",
+            "WRITE assets/hello.txt hi there",
+            "RUN echo && ls",
+        ]
+        .join("\n");
+
+        assert_eq!(normalized, expected);
+    }
+
+    #[test]
     #[serial]
     fn uses_prebuilt_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -203,7 +356,7 @@ mod tests {
 
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: LitStr::new("", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
             prebuilt: Some(LitStr::new(prebuilt_rel, proc_macro2::Span::call_site())),
         };
 
@@ -232,7 +385,7 @@ mod tests {
 
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: LitStr::new("", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
             prebuilt: None,
         };
 
@@ -263,7 +416,10 @@ mod tests {
 
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: LitStr::new("COPY source.txt copied.txt", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new(
+                "COPY source.txt copied.txt",
+                proc_macro2::Span::call_site(),
+            )),
             prebuilt: None,
         };
 
@@ -302,7 +458,7 @@ mod tests {
 
         let input = EmbedDslInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: LitStr::new(&script, proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new(&script, proc_macro2::Span::call_site())),
             prebuilt: None,
         };
 
