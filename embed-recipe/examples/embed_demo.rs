@@ -11,9 +11,11 @@ embed_dsl! {
       RUN pwd > current_directory.txt
       COPY Cargo.toml assets/dir/copied.txt
     "#,
+    // When built from crates.io (no .git) or as a non-primary package, fall back to this prebuilt folder.
+    prebuilt: "examples/prebuilt_assets",
 }
 
-fn main()  {
+fn main() {
     println!("\nIterating embedded assets via DemoAssets::iter():");
     for f in DemoAssets::iter() {
         let name = f.as_ref();
