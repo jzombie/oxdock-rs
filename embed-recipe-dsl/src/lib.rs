@@ -105,8 +105,17 @@ pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
 }
 
 pub fn run_steps_with_context(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<()> {
+    run_steps_with_context_result(fs_root, build_context, steps).map(|_| ())
+}
+
+/// Execute the DSL and return the final working directory after all steps.
+pub fn run_steps_with_context_result(
+    fs_root: &Path,
+    build_context: &Path,
+    steps: &[Step],
+) -> Result<PathBuf> {
     match run_steps_inner(fs_root, build_context, steps) {
-        Ok(()) => Ok(()),
+        Ok(final_cwd) => Ok(final_cwd),
         Err(err) => {
             // Compose a single error message with the top cause plus a compact fs snapshot.
             let chain = err.chain().map(|e| e.to_string()).collect::<Vec<_>>();
@@ -137,7 +146,7 @@ pub fn run_steps_with_context(fs_root: &Path, build_context: &Path, steps: &[Ste
     }
 }
 
-fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<()> {
+fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
     let mut cwd = fs_root.to_path_buf();
 
     for (idx, step) in steps.iter().enumerate() {
@@ -227,7 +236,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
         }
     }
 
-    Ok(())
+    Ok(cwd)
 }
 
 fn run_cmd(cmd: &mut Command) -> Result<()> {

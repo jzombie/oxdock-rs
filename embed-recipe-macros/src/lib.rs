@@ -171,10 +171,10 @@ fn build_assets(script: &str, span: proc_macro2::Span) -> syn::Result<PathBuf> {
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let build_context = std::path::Path::new(&manifest_dir);
 
-    embed_recipe_dsl::run_steps_with_context(&root, build_context, &steps)
+    let final_cwd = embed_recipe_dsl::run_steps_with_context_result(&root, build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
-    Ok(root)
+    Ok(final_cwd)
 }
 
 #[cfg(test)]
@@ -275,6 +275,52 @@ mod tests {
         assert_eq!(
             contents, "hello from manifest",
             "copy should read from manifest dir"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn uses_final_workdir_for_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_dir = temp.path();
+        fs::create_dir_all(manifest_dir.join(".git")).expect("mkdir .git");
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
+            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
+        }
+
+        let script = [
+            "MKDIR dist",
+            "WRITE dist/hello.txt hi",
+            "WRITE outside.txt nope",
+            "WORKDIR dist",
+        ]
+        .join("\n");
+
+        let input = EmbedDslInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: LitStr::new(&script, proc_macro2::Span::call_site()),
+            prebuilt: None,
+        };
+
+        let ts = expand_embed_internal(&input).expect("should build using final WORKDIR");
+        let folder_path = folder_attr_path(&ts);
+
+        assert!(
+            folder_path.ends_with("dist"),
+            "folder should reflect final WORKDIR"
+        );
+
+        let inside = std::path::Path::new(&folder_path).join("hello.txt");
+        assert!(inside.exists(), "file in final WORKDIR should exist");
+
+        let outside = std::path::Path::new(&folder_path).join("outside.txt");
+        assert!(
+            !outside.exists(),
+            "folder should not be the root; outside file must be absent"
         );
     }
 
