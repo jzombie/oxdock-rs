@@ -1,12 +1,13 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Child, Command as ProcessCommand, ExitStatus};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     Workdir,
     Run,
+    RunBg,
     Copy,
     Symlink,
     Mkdir,
@@ -18,6 +19,7 @@ pub enum Command {
 pub const COMMANDS: &[Command] = &[
     Command::Workdir,
     Command::Run,
+    Command::RunBg,
     Command::Copy,
     Command::Symlink,
     Command::Mkdir,
@@ -137,6 +139,7 @@ impl Command {
         match self {
             Command::Workdir => "WORKDIR",
             Command::Run => "RUN",
+            Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
             Command::Symlink => "SYMLINK",
             Command::Mkdir => "MKDIR",
@@ -180,6 +183,7 @@ pub enum Guard {
 pub enum StepKind {
     Workdir(String),
     Run(String),
+    RunBg(String),
     Copy { from: String, to: String },
     Symlink { link: String, target: String },
     Mkdir(String),
@@ -238,6 +242,12 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     bail!("line {}: RUN requires a command", idx + 1);
                 }
                 StepKind::Run(rest.to_string())
+            }
+            Command::RunBg => {
+                if rest.is_empty() {
+                    bail!("line {}: RUN_BG requires a command", idx + 1);
+                }
+                StepKind::RunBg(rest.to_string())
             }
             Command::Copy => {
                 let mut p = rest.split_whitespace();
@@ -349,6 +359,29 @@ pub fn run_steps_with_context_result(
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
     let cargo_target_dir = fs_root.join(".cargo-target");
     let mut cwd = fs_root.to_path_buf();
+    let mut bg_children: Vec<Child> = Vec::new();
+
+    let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
+        let mut finished: Option<ExitStatus> = None;
+        for child in bg.iter_mut() {
+            if let Some(status) = child.try_wait()? {
+                finished = Some(status);
+                break;
+            }
+        }
+        if let Some(status) = finished {
+            // Tear down remaining background children.
+            for child in bg.iter_mut() {
+                if child.try_wait()?.is_none() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            bg.clear();
+            return Ok(Some(status));
+        }
+        Ok(None)
+    };
 
     for (idx, step) in steps.iter().enumerate() {
         if !guards_allow_all(&step.guards) {
@@ -365,6 +398,15 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+            }
+            StepKind::RunBg(cmd) => {
+                let mut command = shell_cmd(cmd);
+                command.current_dir(&cwd);
+                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
+                let child = command
+                    .spawn()
+                    .with_context(|| format!("step {}: RUN_BG {}", idx + 1, cmd))?;
+                bg_children.push(child);
             }
             StepKind::Copy { from, to } => {
                 let from_abs = resolve_copy_source(build_context, from)?;
@@ -439,6 +481,32 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             StepKind::Shell => {
                 run_shell(&cwd)?;
             }
+        }
+
+        if let Some(status) = check_bg(&mut bg_children)? {
+            if status.success() {
+                return Ok(cwd);
+            } else {
+                bail!("RUN_BG exited with status {}", status);
+            }
+        }
+    }
+
+    if !bg_children.is_empty() {
+        // Wait for the first background process to exit, then propagate its status and tear down the rest.
+        let mut first = bg_children.remove(0);
+        let status = first.wait()?;
+        for child in bg_children.iter_mut() {
+            if child.try_wait()?.is_none() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        bg_children.clear();
+        if status.success() {
+            return Ok(cwd);
+        } else {
+            bail!("RUN_BG exited with status {}", status);
         }
     }
 
@@ -680,6 +748,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use indoc::indoc;
+    use std::time::Instant;
 
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
@@ -849,6 +918,73 @@ mod tests {
         assert!(
             root.join("always.txt").exists(),
             "unguarded step should run"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_bg_exits_success_and_stops_pipeline() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        // Background succeeds quickly; pipeline should complete without error.
+        let script = "RUN_BG sh -c 'sleep 0.05'";
+        let steps = parse_script(script).unwrap();
+        let res = run_steps(root, &steps);
+        assert!(res.is_ok(), "RUN_BG success should allow clean exit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_bg_failure_bubbles_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = "RUN_BG sh -c 'sleep 0.05; exit 7'";
+        let steps = parse_script(script).unwrap();
+        let err = run_steps(root, &steps).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RUN_BG exited with status") || msg.contains("exit status: 7"),
+            "should surface failing RUN_BG exit code"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc! {
+            r#"
+            RUN_BG sh -c 'sleep 0.2; echo one > one.txt'
+            RUN_BG sh -c 'sleep 0.5; echo two > two.txt'
+            WRITE done.txt ok
+            "#
+        };
+
+        let steps = parse_script(script).unwrap();
+        let start = Instant::now();
+        let res = run_steps(root, &steps);
+        let elapsed = start.elapsed();
+
+        assert!(res.is_ok(), "RUN_BG success should allow clean exit");
+        assert!(
+            root.join("done.txt").exists(),
+            "foreground step should run after spawning backgrounds"
+        );
+        assert!(
+            root.join("one.txt").exists(),
+            "first background should finish and emit output"
+        );
+        assert!(
+            !root.join("two.txt").exists(),
+            "second background should be terminated once the first exits"
+        );
+        assert!(
+            elapsed.as_secs_f32() < 0.45 && elapsed.as_secs_f32() > 0.15,
+            "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
         );
     }
 }
