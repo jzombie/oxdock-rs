@@ -1,0 +1,11 @@
+[licenses]
+# Allow common permissive/open-source licenses used by our dependencies.
+# This list intentionally includes both "MIT" and "Apache-2.0" to permit
+# dual-licensed crates and common SPDX expressions like "MIT OR Apache-2.0".
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "Unlicense",
+  "Unicode-3.0",
+]
