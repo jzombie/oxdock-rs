@@ -1,6 +1,6 @@
 # OxDock (CLI)
 
-`oxdock-cli` is a small CLI / library that runs Doc‑Ox DSL scripts against a repository snapshot (separate directory tree) and can also be used to run against the main repository tree.
+`oxdock-cli` is a small CLI / library that runs OxDock DSL scripts against a repository snapshot (separate directory tree) and can also be used to run against the main repository tree.
 
 Its primary use case is to provide the ability to script together an environment with the same syntax that is used in the [build-time macros](../oxdock-buildtime-macros/).
 
@@ -19,12 +19,12 @@ OxDock does not enforce pinned dependency resolution on its own.  It strives to 
 
 Run a script file:
 ```sh
-oxdock --script ./build.docox
+oxdock --script ./build.oxfile
 ```
 
 Pipe a script into the CLI:
 ```sh
-cat my-script.docox | oxdock
+cat my-script.oxfile | oxdock
 ```
 
 Drop into a shell inside the snapshot (interactive):
