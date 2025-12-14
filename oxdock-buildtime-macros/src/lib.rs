@@ -607,10 +607,12 @@ mod tests {
 
         let ts = expand_embed_internal(&input).expect("out_dir branch should succeed");
         let out = ts.to_string();
-        let prebuilt_abs_str = assets_abs.to_string_lossy().to_string();
         assert!(out.contains("DemoAssets"), "should define struct name");
-        assert!(
-            out.contains(&prebuilt_abs_str),
+
+        let folder_path = folder_attr_path(&ts);
+        assert_eq!(
+            std::path::Path::new(&folder_path),
+            assets_abs,
             "should point folder to out_dir abs path"
         );
     }

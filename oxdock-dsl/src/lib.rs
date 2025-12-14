@@ -992,6 +992,7 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
 mod tests {
     use super::*;
     use indoc::indoc;
+    #[cfg(unix)]
     use std::time::Instant;
 
     #[test]
@@ -999,9 +1000,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
 
+        let cmd = if cfg!(windows) {
+            "echo %CARGO_TARGET_DIR% > seen.txt"
+        } else {
+            "printf %s \"$CARGO_TARGET_DIR\" > seen.txt"
+        };
+
         let steps = vec![Step {
             guards: Vec::new(),
-            kind: StepKind::Run("printf %s \"$CARGO_TARGET_DIR\" > seen.txt".to_string()),
+            kind: StepKind::Run(cmd.to_string()),
         }];
 
         run_steps(root, &steps).unwrap();
@@ -1009,7 +1016,7 @@ mod tests {
         let seen = std::fs::read_to_string(root.join("seen.txt")).unwrap();
         let expected = root.join(".cargo-target");
         assert_eq!(
-            seen,
+            seen.trim(),
             expected.to_string_lossy(),
             "CARGO_TARGET_DIR should be scoped"
         );
@@ -1334,22 +1341,39 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
 
-        let script = indoc! {
-            r#"
-            ENV FOO=bar
-            RUN sh -c 'printf %s "$FOO" > run.txt'
-            RUN_BG sh -c 'printf %s "$FOO" > bg.txt'
-            "#
+        let script = if cfg!(windows) {
+            indoc! {
+                r#"
+                ENV FOO=bar
+                RUN echo %FOO% > run.txt
+                RUN_BG echo %FOO% > bg.txt
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ENV FOO=bar
+                RUN sh -c 'printf %s "$FOO" > run.txt'
+                RUN_BG sh -c 'printf %s "$FOO" > bg.txt'
+                "#
+            }
         };
 
         let steps = parse_script(script).unwrap();
         run_steps(root, &steps).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(root.join("run.txt")).unwrap(),
+            std::fs::read_to_string(root.join("run.txt"))
+                .unwrap()
+                .trim(),
             "bar"
         );
-        assert_eq!(std::fs::read_to_string(root.join("bg.txt")).unwrap(), "bar");
+        assert_eq!(
+            std::fs::read_to_string(root.join("bg.txt"))
+                .unwrap()
+                .trim(),
+            "bar"
+        );
     }
 
     #[test]

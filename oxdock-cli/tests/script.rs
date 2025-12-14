@@ -23,7 +23,7 @@ fn script_runs_copy_and_symlink() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Run("true".into()),
+            kind: StepKind::Run("echo ok".into()),
         },
         Step {
             guards: Vec::new(),
@@ -45,7 +45,7 @@ fn script_runs_copy_and_symlink() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Run("true".into()),
+            kind: StepKind::Run("echo ok".into()),
         },
     ];
 
