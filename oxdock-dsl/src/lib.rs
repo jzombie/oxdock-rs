@@ -236,29 +236,45 @@ pub enum WorkspaceTarget {
 
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     let mut steps = Vec::new();
+    let mut pending_guards: Vec<Guard> = Vec::new();
     for (idx, line) in input.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
 
-        let (guards, remainder) = if let Some(rest) = line.strip_prefix('[') {
+        // If a line begins with a guard block, parse it. If the guard block
+        // is followed by a command on the same line, apply guards (plus any
+        // previously-pending guards) to that command. If the guard block is
+        // on its own line (no command after `]`), stash the guards to apply
+        // to the next non-empty command line.
+        let (guards, remainder_opt) = if let Some(rest) = line.strip_prefix('[') {
             let end = rest
                 .find(']')
                 .ok_or_else(|| anyhow::anyhow!("line {}: guard must close with ]", idx + 1))?;
             let guards_raw = &rest[..end];
             let after = rest[end + 1..].trim();
-            if after.is_empty() {
-                bail!("line {}: guard must precede a command", idx + 1);
-            }
             let guards = guards_raw
                 .split(',')
                 .map(|g| parse_guard(g, idx + 1))
                 .collect::<Result<Vec<_>>>()?;
-            (guards, after)
+            if after.is_empty() {
+                // Guard-only line: accumulate and continue to next line.
+                pending_guards.extend(guards);
+                continue;
+            }
+            (guards, Some(after))
         } else {
-            (Vec::new(), line)
+            (Vec::new(), Some(line))
         };
+
+        // Combine any pending guards (from previous guard-only lines) with any
+        // guards parsed on this line.
+        let mut all_guards = Vec::new();
+        all_guards.append(&mut pending_guards);
+        all_guards.extend(guards);
+        pending_guards.clear();
+        let remainder = remainder_opt.unwrap();
 
         let mut parts = remainder.splitn(2, ' ');
         let op = parts.next().unwrap();
@@ -380,7 +396,10 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             }
         };
 
-        steps.push(Step { guards, kind });
+        steps.push(Step {
+            guards: all_guards,
+            kind,
+        });
     }
     Ok(steps)
 }
@@ -947,6 +966,33 @@ mod tests {
         assert!(
             root.join("always.txt").exists(),
             "WRITE after ECHO should run"
+        );
+    }
+
+    #[test]
+    fn guard_on_previous_line_applies_to_next_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc!(
+            r#"
+            ENV FOO=1
+            [env:FOO]
+            WRITE hit.txt yes
+            WRITE always.txt ok
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            root.join("hit.txt").exists(),
+            "guarded WRITE on next line should run"
+        );
+        assert!(
+            root.join("always.txt").exists(),
+            "unguarded WRITE should run"
         );
     }
 

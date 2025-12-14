@@ -1,20 +1,27 @@
 # All commands except RUN are intended to have similar cross-platform support.
 
-[env:FOO] ECHO "Foo is set?"
+[env:FOO]
+ECHO "Foo is set?"
 
 ENV FOO=1
 
-[env:FOO] ECHO "Foo is now set..."
+[env:FOO]
+ECHO "Foo is now set..."
 
-[!env:FOO] ECHO "Foo is still not set?"
+[!env:FOO]
+ECHO "Foo is still not set?"
 
-[platform=mac] ECHO "Hello from Mac"
+[platform=mac]
+ECHO "Hello from Mac"
 
-[platform=linux] ECHO "Hello from Linux"
+[platform=linux]
+ECHO "Hello from Linux"
 
-[platform=unix] ECHO "You're using a Unix platform"
+[platform=unix]
+ECHO "You're using a Unix platform"
 
-[platform=windows] ECHO "Hello from Windows"
+[platform=windows]
+ECHO "Hello from Windows"
 
 # Native system commands can be executed using RUN
 # RUN env | grep FOO
