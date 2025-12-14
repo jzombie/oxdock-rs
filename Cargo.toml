@@ -7,7 +7,7 @@ members = [
 	"doc-ox-buildtime-macros/tests/fixtures/build_from_manifest",
 ]
 default-members = [
-	"doc-ox",
+	"doc-ox-cli",
 	"doc-ox-dsl",
 	"doc-ox-buildtime-macros",
 ]
