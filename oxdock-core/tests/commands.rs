@@ -1,4 +1,4 @@
-use oxdock_core::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
+use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
 use std::fs;
 use tempfile::tempdir;
 
@@ -165,7 +165,10 @@ fn commands_behave_cross_platform() {
 
     // SYMLINK resolves to target dir and exposes contents
     let linked_file = snapshot.path().join("client/dist-link/hello.txt");
-    assert!(linked_file.exists(), "symlink should point at target contents");
+    assert!(
+        linked_file.exists(),
+        "symlink should point at target contents"
+    );
     assert_eq!(read_trimmed(&linked_file), "hi");
 
     // WORKSPACE switches between snapshot and local roots

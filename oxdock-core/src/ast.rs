@@ -987,4 +987,3 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
     }
     out
 }
-

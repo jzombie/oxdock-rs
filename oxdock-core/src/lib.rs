@@ -382,9 +382,7 @@ mod tests {
             "bar"
         );
         assert_eq!(
-            std::fs::read_to_string(root.join("bg.txt"))
-                .unwrap()
-                .trim(),
+            std::fs::read_to_string(root.join("bg.txt")).unwrap().trim(),
             "bar"
         );
     }
