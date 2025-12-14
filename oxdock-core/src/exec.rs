@@ -7,6 +7,23 @@ use std::process::{Child, Command as ProcessCommand, ExitStatus};
 
 use crate::ast::{Step, StepKind, WorkspaceTarget};
 
+#[derive(Clone, Copy, Debug)]
+enum AccessMode {
+    Read,
+    Write,
+    Passthru,
+}
+
+impl AccessMode {
+    fn name(&self) -> &'static str {
+        match self {
+            AccessMode::Read => "READ",
+            AccessMode::Write => "WRITE",
+            AccessMode::Passthru => "PASSTHRU",
+        }
+    }
+}
+
 pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
     run_steps_with_context(fs_root, fs_root, steps)
 }
@@ -129,13 +146,13 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             StepKind::Copy { from, to } => {
                 let from_abs = resolve_copy_source(build_context, from)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                let to_abs = resolve_dest(&root, &cwd, to)
+                let to_abs = resolve_with_access(&root, &cwd, to, AccessMode::Write)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::Symlink { from, to } => {
-                let to_abs = resolve_dest(&root, &cwd, to)
+                let to_abs = resolve_with_access(&root, &cwd, to, AccessMode::Write)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if to_abs.exists() {
                     bail!("SYMLINK destination already exists: {}", to_abs.display());
@@ -158,14 +175,14 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 copy_dir(&from_abs, &to_abs)?;
             }
             StepKind::Mkdir(path) => {
-                let target = resolve_dest(&root, &cwd, path)
+                let target = resolve_with_access(&root, &cwd, path, AccessMode::Write)
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 fs::create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
                 let dir = if let Some(p) = path_opt.as_deref() {
-                    resolve_dest(&root, &cwd, p)
+                    resolve_with_access(&root, &cwd, p, AccessMode::Read)
                         .with_context(|| format!("step {}: LS {}", idx + 1, p))?
                 } else {
                     cwd.clone()
@@ -180,7 +197,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 }
             }
             StepKind::Cat(path) => {
-                let target = resolve_dest(&root, &cwd, path)
+                let target = resolve_with_access(&root, &cwd, path, AccessMode::Read)
                     .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
                 let data = fs::read(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
@@ -190,7 +207,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 out.flush().ok();
             }
             StepKind::Write { path, contents } => {
-                let target = resolve_dest(&root, &cwd, path)
+                let target = resolve_with_access(&root, &cwd, path, AccessMode::Write)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
@@ -292,178 +309,39 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 
 fn resolve_workdir(root: &Path, current: &Path, new_dir: &str) -> Result<PathBuf> {
     if new_dir == "/" {
-        return Ok(root.to_path_buf());
+        return fs::canonicalize(root).or_else(|_| Ok(root.to_path_buf()));
     }
     let candidate = if Path::new(new_dir).is_absolute() {
         PathBuf::from(new_dir)
     } else {
         current.join(new_dir)
     };
-    let root_abs = fs::canonicalize(root)
-        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
 
-    if let Ok(cand_abs) = fs::canonicalize(&candidate) {
-        if !cand_abs.starts_with(&root_abs) {
-            bail!(
-                "WORKDIR {} escapes allowed root {}",
-                cand_abs.display(),
-                root_abs.display()
-            );
-        }
-        let meta = fs::metadata(&cand_abs)
-            .with_context(|| format!("failed to stat resolved WORKDIR {}", cand_abs.display()))?;
+    let resolved = check_access(root, &candidate, AccessMode::Passthru)
+        .with_context(|| format!("WORKDIR {} escapes root", candidate.display()))?;
+
+    if let Ok(meta) = fs::metadata(&resolved) {
         if meta.is_dir() {
-            return Ok(cand_abs);
+            return fs::canonicalize(&resolved).or(Ok(resolved));
         }
-        bail!("WORKDIR path is not a directory: {}", cand_abs.display());
+        bail!("WORKDIR path is not a directory: {}", resolved.display());
     }
 
-    let mut ancestor = candidate.as_path();
-    while !ancestor.exists() {
-        if let Some(parent) = ancestor.parent() {
-            ancestor = parent;
-        } else {
-            ancestor = root;
-            break;
-        }
-    }
-
-    let ancestor_abs = fs::canonicalize(ancestor)
-        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
-
-    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
-    {
-        let mut skip = ancestor.components();
-        let mut full = candidate.components();
-        loop {
-            match (skip.next(), full.next()) {
-                (Some(s), Some(f)) if s == f => continue,
-                (_opt_s, opt_f) => {
-                    if let Some(f) = opt_f {
-                        rem_components.push(f.as_os_str().to_os_string());
-                        for comp in full {
-                            rem_components.push(comp.as_os_str().to_os_string());
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    let mut cand_abs = ancestor_abs.clone();
-    for c in rem_components.iter() {
-        let s = std::ffi::OsStr::new(&c);
-        if s == "." {
-            continue;
-        }
-        if s == ".." {
-            cand_abs = cand_abs
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(cand_abs);
-            continue;
-        }
-        cand_abs.push(s);
-    }
-
-    if !cand_abs.starts_with(&root_abs) {
-        bail!(
-            "WORKDIR {} escapes allowed root {}",
-            cand_abs.display(),
-            root_abs.display()
-        );
-    }
-
-    fs::create_dir_all(&cand_abs)
-        .with_context(|| format!("failed to create WORKDIR {}", cand_abs.display()))?;
-    let final_abs = fs::canonicalize(&cand_abs).with_context(|| {
-        format!(
-            "failed to canonicalize created WORKDIR {}",
-            cand_abs.display()
-        )
-    })?;
+    fs::create_dir_all(&resolved)
+        .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
+    let final_abs = fs::canonicalize(&resolved)
+        .with_context(|| format!("failed to canonicalize created WORKDIR {}", resolved.display()))?;
     Ok(final_abs)
 }
 
-fn resolve_dest(root: &Path, cwd: &Path, rel: &str) -> Result<PathBuf> {
+fn resolve_with_access(root: &Path, cwd: &Path, rel: &str, mode: AccessMode) -> Result<PathBuf> {
     let candidate = if Path::new(rel).is_absolute() {
         PathBuf::from(rel)
     } else {
         cwd.join(rel)
     };
 
-    let root_abs = fs::canonicalize(root)
-        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
-
-    if let Ok(cand_abs) = fs::canonicalize(&candidate) {
-        if !cand_abs.starts_with(&root_abs) {
-            bail!(
-                "destination {} escapes allowed root {}",
-                cand_abs.display(),
-                root_abs.display()
-            );
-        }
-        return Ok(cand_abs);
-    }
-
-    let mut ancestor = candidate.as_path();
-    while !ancestor.exists() {
-        if let Some(parent) = ancestor.parent() {
-            ancestor = parent;
-        } else {
-            ancestor = root;
-            break;
-        }
-    }
-    let ancestor_abs = fs::canonicalize(ancestor)
-        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
-
-    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
-    {
-        let mut skip = ancestor.components();
-        let mut full = candidate.components();
-        loop {
-            match (skip.next(), full.next()) {
-                (Some(s), Some(f)) if s == f => continue,
-                (_opt_s, opt_f) => {
-                    if let Some(f) = opt_f {
-                        rem_components.push(f.as_os_str().to_os_string());
-                        for comp in full {
-                            rem_components.push(comp.as_os_str().to_os_string());
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    let mut cand_abs = ancestor_abs.clone();
-    for c in rem_components.iter() {
-        let s = std::ffi::OsStr::new(&c);
-        if s == "." {
-            continue;
-        }
-        if s == ".." {
-            cand_abs = cand_abs
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(cand_abs);
-            continue;
-        }
-        cand_abs.push(s);
-    }
-
-    if !cand_abs.starts_with(&root_abs) {
-        bail!(
-            "destination {} escapes allowed root {}",
-            cand_abs.display(),
-            root_abs.display()
-        );
-    }
-
-    Ok(cand_abs)
+    check_access(root, &candidate, mode)
 }
 
 fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
@@ -471,28 +349,96 @@ fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
         bail!("COPY source must be relative to build context");
     }
     let candidate = build_context.join(from);
-    if !candidate.exists() {
+    let guarded = check_access(build_context, &candidate, AccessMode::Read).with_context(|| {
+        format!("failed to resolve COPY source {}", candidate.display())
+    })?;
+
+    if !guarded.exists() {
         bail!(
             "COPY source missing in build context: {}",
-            candidate.display()
+            guarded.display()
         );
     }
 
-    let build_abs = fs::canonicalize(build_context).with_context(|| {
-        format!(
-            "failed to canonicalize build context {}",
-            build_context.display()
-        )
-    })?;
-    let cand_abs = fs::canonicalize(&candidate)
-        .with_context(|| format!("failed to canonicalize COPY source {}", candidate.display()))?;
-    if !cand_abs.starts_with(&build_abs) {
+    let cand_abs = fs::canonicalize(&guarded)
+        .with_context(|| format!("failed to canonicalize COPY source {}", guarded.display()))?;
+    Ok(cand_abs)
+}
+
+fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
+    let root_abs = fs::canonicalize(root)
+        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
+
+    if let Ok(cand_abs) = fs::canonicalize(candidate) {
+        if !cand_abs.starts_with(&root_abs) {
+            bail!(
+                "{} access to {} escapes allowed root {}",
+                mode.name(),
+                cand_abs.display(),
+                root_abs.display()
+            );
+        }
+        return Ok(cand_abs);
+    }
+
+    let mut ancestor = candidate;
+    while !ancestor.exists() {
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            ancestor = root;
+            break;
+        }
+    }
+
+    let ancestor_abs = fs::canonicalize(ancestor)
+        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
+
+    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
+    {
+        let mut skip = ancestor.components();
+        let mut full = candidate.components();
+        loop {
+            match (skip.next(), full.next()) {
+                (Some(s), Some(f)) if s == f => continue,
+                (_opt_s, opt_f) => {
+                    if let Some(f) = opt_f {
+                        rem_components.push(f.as_os_str().to_os_string());
+                        for comp in full {
+                            rem_components.push(comp.as_os_str().to_os_string());
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut cand_abs = ancestor_abs.clone();
+    for c in rem_components.iter() {
+        let s = std::ffi::OsStr::new(&c);
+        if s == "." {
+            continue;
+        }
+        if s == ".." {
+            cand_abs = cand_abs
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(cand_abs);
+            continue;
+        }
+        cand_abs.push(s);
+    }
+
+    if !cand_abs.starts_with(&root_abs) {
         bail!(
-            "COPY source {} is outside build context {}",
+            "{} access to {} escapes allowed root {}",
+            mode.name(),
             cand_abs.display(),
-            build_abs.display()
+            root_abs.display()
         );
     }
+
     Ok(cand_abs)
 }
 
