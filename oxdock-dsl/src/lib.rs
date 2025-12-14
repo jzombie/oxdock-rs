@@ -74,11 +74,22 @@ fn guard_allows(guard: &Guard, script_envs: &std::collections::HashMap<String, S
     allowed
 }
 
-fn guards_allow_all(
-    guards: &[Guard],
+fn guard_group_allows(
+    group: &[Guard],
     script_envs: &std::collections::HashMap<String, String>,
 ) -> bool {
-    guards.iter().all(|g| guard_allows(g, script_envs))
+    group.iter().all(|g| guard_allows(g, script_envs))
+}
+
+fn guards_allow_any(
+    groups: &[Vec<Guard>],
+    script_envs: &std::collections::HashMap<String, String>,
+) -> bool {
+    // No guards means allow.
+    if groups.is_empty() {
+        return true;
+    }
+    groups.iter().any(|g| guard_group_allows(g, script_envs))
 }
 
 fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
@@ -224,7 +235,7 @@ pub enum StepKind {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Step {
-    pub guards: Vec<Guard>,
+    pub guards: Vec<Vec<Guard>>,
     pub kind: StepKind,
 }
 
@@ -236,7 +247,7 @@ pub enum WorkspaceTarget {
 
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     let mut steps = Vec::new();
-    let mut pending_guards: Vec<Guard> = Vec::new();
+    let mut pending_guards: Vec<Vec<Guard>> = Vec::new();
     for (idx, line) in input.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -248,31 +259,63 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         // previously-pending guards) to that command. If the guard block is
         // on its own line (no command after `]`), stash the guards to apply
         // to the next non-empty command line.
-        let (guards, remainder_opt) = if let Some(rest) = line.strip_prefix('[') {
+        let (groups, remainder_opt) = if let Some(rest) = line.strip_prefix('[') {
             let end = rest
                 .find(']')
                 .ok_or_else(|| anyhow::anyhow!("line {}: guard must close with ]", idx + 1))?;
             let guards_raw = &rest[..end];
             let after = rest[end + 1..].trim();
-            let guards = guards_raw
-                .split(',')
-                .map(|g| parse_guard(g, idx + 1))
-                .collect::<Result<Vec<_>>>()?;
+            // Parse alternatives separated by `|`, each alternative is a comma-separated AND group.
+            let mut parsed_groups: Vec<Vec<Guard>> = Vec::new();
+            for alt in guards_raw.split('|') {
+                let mut group: Vec<Guard> = Vec::new();
+                for g in alt.split(',') {
+                    let parsed = parse_guard(g, idx + 1)?;
+                    group.push(parsed);
+                }
+                parsed_groups.push(group);
+            }
             if after.is_empty() {
-                // Guard-only line: accumulate and continue to next line.
-                pending_guards.extend(guards);
+                // Guard-only line: combine with pending_guards by ANDing groups (cartesian product).
+                if pending_guards.is_empty() {
+                    pending_guards = parsed_groups;
+                } else {
+                    let mut new_pending: Vec<Vec<Guard>> = Vec::new();
+                    for p in pending_guards.iter() {
+                        for q in parsed_groups.iter() {
+                            let mut merged = p.clone();
+                            merged.extend(q.clone());
+                            new_pending.push(merged);
+                        }
+                    }
+                    pending_guards = new_pending;
+                }
                 continue;
             }
-            (guards, Some(after))
+            (parsed_groups, Some(after))
         } else {
             (Vec::new(), Some(line))
         };
 
-        // Combine any pending guards (from previous guard-only lines) with any
-        // guards parsed on this line.
-        let mut all_guards = Vec::new();
-        all_guards.append(&mut pending_guards);
-        all_guards.extend(guards);
+        // Combine any pending guard groups (from previous guard-only lines)
+        // with any groups parsed on this line. Combination is an AND between
+        // groups (cartesian product), producing OR-of-AND groups for the
+        // resulting step. If there are no inline groups, use pending groups.
+        let mut all_groups: Vec<Vec<Guard>> = Vec::new();
+        if groups.is_empty() {
+            // No inline groups: attach pending groups (if any) to this step.
+            all_groups = pending_guards.clone();
+        } else if pending_guards.is_empty() {
+            all_groups = groups.clone();
+        } else {
+            for p in pending_guards.iter() {
+                for q in groups.iter() {
+                    let mut merged = p.clone();
+                    merged.extend(q.clone());
+                    all_groups.push(merged);
+                }
+            }
+        }
         pending_guards.clear();
         let remainder = remainder_opt.unwrap();
 
@@ -397,7 +440,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         };
 
         steps.push(Step {
-            guards: all_guards,
+            guards: all_groups,
             kind,
         });
     }
@@ -480,7 +523,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     };
 
     for (idx, step) in steps.iter().enumerate() {
-        if !guards_allow_all(&step.guards, &envs) {
+        if !guards_allow_any(&step.guards, &envs) {
             continue;
         }
         match &step.kind {

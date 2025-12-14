@@ -1,27 +1,33 @@
 # All commands except RUN are intended to have similar cross-platform support.
 
 [env:FOO]
-ECHO "Foo is set?"
+ECHO Foo is set?
 
 ENV FOO=1
 
 [env:FOO]
-ECHO "Foo is now set..."
+ECHO Foo is now set...
 
 [!env:FOO]
-ECHO "Foo is still not set?"
+ECHO Foo is still not set?
+
+[!env:FOO|env:FOO]
+ECHO This should echo regardless if FOO is set or not
+
+[platform=windows|platform=unix]
+ECHO I see you're using Windows OR Unix! Let's find out which...
 
 [platform=mac]
-ECHO "Hello from Mac"
+ECHO Hello from Mac
 
 [platform=linux]
-ECHO "Hello from Linux"
+ECHO Hello from Linux
 
 [platform=unix]
-ECHO "You're using a Unix platform"
+ECHO You're using a Unix platform
 
 [platform=windows]
-ECHO "Hello from Windows"
+ECHO Hello from Windows
 
 # Native system commands can be executed using RUN
 # RUN env | grep FOO
