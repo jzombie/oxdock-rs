@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -186,11 +187,32 @@ fn shell_program() -> String {
     }
 }
 
+fn shell_banner(cwd: &Path) -> String {
+    let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
+    format!("{} shell workspace: {}", pkg, cwd.display())
+}
+
+#[cfg(windows)]
+fn escape_for_cmd(s: &str) -> String {
+    // Escape characters that would otherwise be interpreted by cmd when echoed.
+    s.replace('^', "^^")
+        .replace('&', "^&")
+        .replace('|', "^|")
+        .replace('>', "^>")
+        .replace('<', "^<")
+}
+
 fn run_shell(cwd: &Path) -> Result<()> {
+    let banner = shell_banner(cwd);
+
     #[cfg(unix)]
     {
         let mut cmd = Command::new(shell_program());
         cmd.current_dir(cwd);
+
+        // Print a single banner inside the subshell, then exec the user's shell to stay interactive.
+        let script = format!("printf '%s\\n' \"{}\"; exec {}", banner, shell_program());
+        cmd.arg("-c").arg(script);
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         if let Ok(tty) = fs::File::open("/dev/tty") {
@@ -217,7 +239,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
             .arg(cwd)
             .arg("cmd")
             .arg("/K")
-            .arg("cd /d .");
+            .arg(format!("echo {} && cd /d .", escape_for_cmd(&banner)));
 
         // Fire-and-forget so the parent console regains control immediately; the child window is
         // fully interactive. If the launch fails, surface the error right away.
