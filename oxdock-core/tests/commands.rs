@@ -34,12 +34,6 @@ fn commands_behave_cross_platform() {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
     };
 
-    let link_target = snapshot
-        .path()
-        .join("client/dist")
-        .to_string_lossy()
-        .to_string();
-
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -78,15 +72,15 @@ fn commands_behave_cross_platform() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Copy {
-                from: "source.txt".into(),
-                to: "client/dist/from_build.txt".into(),
+                from: "./source.txt".into(),
+                to: "./client/dist/from_build.txt".into(),
             },
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Symlink {
-                from: link_target.clone(),
-                to: "client/dist-link".into(),
+                from: "./target_dir".into(),
+                to: "./client/dist-link".into(),
             },
         },
         Step {
@@ -163,13 +157,13 @@ fn commands_behave_cross_platform() {
         "from build"
     );
 
-    // SYMLINK resolves to target dir and exposes contents
-    let linked_file = snapshot.path().join("client/dist-link/hello.txt");
+    // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
+    let linked_file = snapshot.path().join("client/dist-link/inner.txt");
     assert!(
         linked_file.exists(),
         "symlink should point at target contents"
     );
-    assert_eq!(read_trimmed(&linked_file), "hi");
+    assert_eq!(read_trimmed(&linked_file), "symlink target");
 
     // WORKSPACE switches between snapshot and local roots
     assert_eq!(read_trimmed(&local.path().join("local_note.txt")), "local");
