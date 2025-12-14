@@ -19,7 +19,6 @@ pub enum Command {
     Ls,
     Cat,
     Write,
-    Shell,
     Exit,
 }
 
@@ -36,7 +35,6 @@ pub const COMMANDS: &[Command] = &[
     Command::Ls,
     Command::Cat,
     Command::Write,
-    Command::Shell,
     Command::Exit,
 ];
 
@@ -184,7 +182,6 @@ impl Command {
             Command::Ls => "LS",
             Command::Cat => "CAT",
             Command::Write => "WRITE",
-            Command::Shell => "SHELL",
             Command::Exit => "EXIT",
         }
     }
@@ -233,7 +230,6 @@ pub enum StepKind {
     Ls(Option<String>),
     Cat(String),
     Write { path: String, contents: String },
-    Shell,
     Exit(i32),
 }
 
@@ -484,7 +480,6 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                         contents: contents.to_string(),
                     }
                 }
-                Command::Shell => StepKind::Shell,
                 Command::Exit => {
                     if rest.is_empty() {
                         bail!("line {}: EXIT requires a code", idx + 1);
@@ -701,9 +696,6 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 }
                 fs::write(&target, contents)
                     .with_context(|| format!("failed to write {}", target.display()))?;
-            }
-            StepKind::Shell => {
-                run_shell(&cwd)?;
             }
             StepKind::Exit(code) => {
                 // Tear down backgrounds before exiting.
@@ -1097,53 +1089,9 @@ fn shell_cmd(cmd: &str) -> ProcessCommand {
     c
 }
 
-fn run_shell(cwd: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let mut cmd = ProcessCommand::new(shell_program());
-        cmd.current_dir(cwd);
-
-        // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
-        if let Ok(tty) = fs::File::open("/dev/tty") {
-            cmd.stdin(tty);
-        }
-
-        let status = cmd.status()?;
-        if !status.success() {
-            bail!("shell exited with status {}", status);
-        }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        let mut cmd = ProcessCommand::new(shell_program());
-        cmd.current_dir(cwd).arg("/K");
-
-        // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
-        if let Ok(con) = fs::File::open("CONIN$") {
-            cmd.stdin(con);
-        }
-
-        // CREATE_NEW_CONSOLE (0x00000010) to ensure we get an interactive console if none is attached.
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
-
-        let status = cmd.status()?;
-        if !status.success() {
-            bail!("shell exited with status {}", status);
-        }
-        return Ok(());
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = cwd;
-        bail!("run_shell unsupported on this platform");
-    }
-}
+// Note: interactive shell (previously the `SHELL` step) is handled by the CLI
+// with `--shell`. The core library provides `shell_cmd` for running shell
+// commands (used by `RUN`/`RUN_BG`).
 
 #[allow(clippy::while_let_on_iterator)]
 fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {

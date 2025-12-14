@@ -40,20 +40,7 @@ fn parse_basic_script() {
     }
 }
 
-#[test]
-fn parse_shell_step() {
-    let script = "SHELL";
-    let steps = parse_script(script).expect("parse should succeed");
-    assert_eq!(steps.len(), 1);
-    if let Step {
-        kind: StepKind::Shell,
-        ..
-    } = steps[0]
-    {
-    } else {
-        panic!();
-    }
-}
+
 
 #[test]
 fn parse_mkdir_ls_write() {

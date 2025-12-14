@@ -9,7 +9,8 @@ MKDIR demo/logs
 WRITE demo/assets/hello.txt hello
 LS demo
 WORKDIR demo
-SHELL
+# To drop into the demo workspace after running the script, run this example with
+# the CLI `--shell` flag (e.g. `cargo run --example tree_shell -- --shell`).
 "#;
 
 fn main() -> anyhow::Result<()> {
