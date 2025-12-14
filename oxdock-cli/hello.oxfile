@@ -1,33 +1,59 @@
 # All commands except RUN are intended to have similar cross-platform support.
+# Hello examples for oxdock-cli DSL
+#
+# This file demonstrates:
+# - unguarded commands (run always)
+# - guarded commands using `[...]` (supporting AND with `,` and OR with `|`)
+# - guard-only lines that apply to the next command
+# - `ENV` which sets variables for subsequent RUN/RUN_BG commands
+# - platform guards, negation, and env-equality checks
 
-[env:FOO]
-ECHO Foo is set?
+# --- Unguarded commands run unconditionally ---
+ECHO "This runs unconditionally"
 
+# --- Platform-specific guarded RUNs (inline guards) ---
+[platform=mac] ECHO "Hello from Mac"
+[platform=linux] ECHO "Hello from Linux"
+[platform=windows] ECHO "Hello from Windows"
+
+# Negation: run when NOT on Windows
+[!windows] ECHO "Not on Windows"
+
+# OR: run on mac OR linux
+[platform=mac|platform=linux] ECHO "mac or linux"
+
+# --- ENV and env-guards ---
+# Set an environment variable for subsequent RUN commands
 ENV FOO=1
 
+# Guard on the same line: only runs when FOO is set
+[env:FOO] ECHO "(inline) Foo is set"
+
+# Guard-only line (previous-line guard): applies to the next command
 [env:FOO]
-ECHO Foo is now set...
+ECHO "(previous-line) Foo is set"
 
-[!env:FOO]
-ECHO Foo is still not set?
+# Example mixing AND/OR: (FOO and linux) OR mac
+[env:FOO,platform=linux|platform=mac] ECHO "Foo on linux, or any mac"
 
-[!env:FOO|env:FOO]
-ECHO This should echo regardless if FOO is set or not
+# Show that ECHO can print the ENV we set earlier (cross-platform)
+ECHO $FOO
 
-[platform=windows|platform=unix]
-ECHO I see you're using Windows OR Unix! Let's find out which...
+# --- Notes ---
+# - Guards in `[...]` support comma-separated AND and `|` separated OR alternatives.
+# - Guard-only lines accumulate and apply to the next non-empty command line.
+# - `ENV` affects subsequent RUN and RUN_BG commands and is also considered by guards.
 
-[platform=mac]
-ECHO Hello from Mac
+# --- RUN (native commands) examples ---
+# Use `ECHO` for cross-platform DSL output. Use `RUN` when you need to execute
+# native shell/OS commands; these are often platform-specific so guard them.
+# Example: list the current directory using the native command on each platform.
+[platform=unix] RUN ls -la
+[platform=windows] RUN dir
 
-[platform=linux]
-ECHO Hello from Linux
+# Example: show the `FOO` env using native commands (guarded per-platform).
+[platform=unix] RUN env | grep FOO
+[platform=windows] RUN cmd /C "echo %FOO%"
 
-[platform=unix]
-ECHO You're using a Unix platform
-
-[platform=windows]
-ECHO Hello from Windows
-
-# Native system commands can be executed using RUN
-# RUN env | grep FOO
+# Note: The LS command is also a built-in command
+# LS

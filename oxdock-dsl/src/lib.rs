@@ -553,8 +553,12 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
             }
             StepKind::Echo(msg) => {
-                // ECHO is a DSL primitive that writes a message to stdout in a cross-platform way.
-                println!("{}", msg);
+                // ECHO is a DSL primitive that writes a message to stdout in a
+                // cross-platform way. Support simple variable interpolation so
+                // `ECHO $FOO` or `ECHO {FOO}` prints values from script ENV or
+                // the process environment.
+                let out = interpolate(msg, &envs);
+                println!("{}", out);
             }
             StepKind::RunBg(cmd) => {
                 let mut command = shell_cmd(cmd);
@@ -910,6 +914,78 @@ fn run_shell(cwd: &Path) -> Result<()> {
         let _ = cwd;
         bail!("run_shell unsupported on this platform");
     }
+}
+
+fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            // Support $VAR and ${VAR}
+            if let Some(&'{') = chars.peek() {
+                // consume '{'
+                chars.next();
+                let mut name = String::new();
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch == '}' {
+                        break;
+                    }
+                    name.push(ch);
+                }
+                if !name.is_empty() {
+                    let val = script_envs
+                        .get(&name)
+                        .cloned()
+                        .or_else(|| std::env::var(&name).ok())
+                        .unwrap_or_default();
+                    out.push_str(&val);
+                }
+            } else {
+                // parse identifier
+                let mut name = String::new();
+                while let Some(&ch) = chars.peek() {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        name.push(ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if !name.is_empty() {
+                    let val = script_envs
+                        .get(&name)
+                        .cloned()
+                        .or_else(|| std::env::var(&name).ok())
+                        .unwrap_or_default();
+                    out.push_str(&val);
+                } else {
+                    // literal '$' if no name
+                    out.push('$');
+                }
+            }
+        } else if c == '{' {
+            // Support {VAR} as shorthand
+            let mut name = String::new();
+            while let Some(ch) = chars.next() {
+                if ch == '}' {
+                    break;
+                }
+                name.push(ch);
+            }
+            if !name.is_empty() {
+                let val = script_envs
+                    .get(&name)
+                    .cloned()
+                    .or_else(|| std::env::var(&name).ok())
+                    .unwrap_or_default();
+                out.push_str(&val);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
