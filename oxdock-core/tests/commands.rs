@@ -1,4 +1,4 @@
-use oxdock_dsl::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
+use oxdock_core::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
 use std::fs;
 use tempfile::tempdir;
 

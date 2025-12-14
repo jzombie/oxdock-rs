@@ -95,7 +95,7 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
     use proc_macro2::{Delimiter, TokenTree};
 
     fn is_command(name: &str) -> bool {
-        oxdock_dsl::COMMANDS.iter().any(|c| c.as_str() == name)
+        oxdock_core::COMMANDS.iter().any(|c| c.as_str() == name)
     }
 
     fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
@@ -342,14 +342,14 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
     #[allow(deprecated)]
     let temp_root = tempdir.into_path();
 
-    let steps = oxdock_dsl::parse_script(script)
+    let steps = oxdock_core::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let build_context = std::path::Path::new(&manifest_dir);
 
-    let final_cwd = oxdock_dsl::run_steps_with_context_result(&temp_root, build_context, &steps)
+    let final_cwd = oxdock_core::run_steps_with_context_result(&temp_root, build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     eprintln!(

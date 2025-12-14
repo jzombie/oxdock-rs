@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 oxdock-buildtime-macros.workspace = true
-oxdock-dsl.workspace = true
+oxdock-core.workspace = true
 rust-embed.workspace = true
 tempfile.workspace = true
 

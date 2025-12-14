@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use oxdock_dsl::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);

@@ -1,5 +1,5 @@
 [package]
-name = "oxdock-dsl"
+name = "oxdock-core"
 version = "0.1.0"
 edition = "2024"
 

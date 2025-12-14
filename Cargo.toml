@@ -4,9 +4,9 @@ members = [
     # Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
     "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
     "oxdock-cli",
-    "oxdock-dsl",
+    "oxdock-core",
 ]
-default-members = ["oxdock-cli", "oxdock-dsl", "oxdock-buildtime-macros"]
+default-members = ["oxdock-cli", "oxdock-core", "oxdock-buildtime-macros"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -15,7 +15,7 @@ indoc = "2.0.7"
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0" }
 
 # Internal crates
-oxdock-dsl = { path = "oxdock-dsl", version = "0.1.0" }
+oxdock-core = { path = "oxdock-core", version = "0.1.0" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 rust-embed = { version = "8.9.0", features = ["include-exclude"] }
