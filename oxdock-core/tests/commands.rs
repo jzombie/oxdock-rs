@@ -85,8 +85,8 @@ fn commands_behave_cross_platform() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Symlink {
-                link: "client/dist-link".into(),
-                target: link_target.clone(),
+                from: link_target.clone(),
+                to: "client/dist-link".into(),
             },
         },
         Step {

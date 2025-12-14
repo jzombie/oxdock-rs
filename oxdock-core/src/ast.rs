@@ -224,7 +224,7 @@ pub enum StepKind {
     Echo(String),
     RunBg(String),
     Copy { from: String, to: String },
-    Symlink { link: String, target: String },
+    Symlink { from: String, to: String },
     Mkdir(String),
     Ls(Option<String>),
     Write { path: String, contents: String },
@@ -388,15 +388,15 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             }
             Command::Symlink => {
                 let mut p = rest.split_whitespace();
-                let link = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
+                let from = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
                 })?;
-                let target = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: SYMLINK requires <link> <target>", idx + 1)
+                let to = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
                 })?;
                 StepKind::Symlink {
-                    link: link.to_string(),
-                    target: target.to_string(),
+                    from: from.to_string(),
+                    to: to.to_string(),
                 }
             }
             Command::Mkdir => {
@@ -575,41 +575,41 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
-            StepKind::Symlink { link, target } => {
-                let link_abs = resolve_dest(&cwd, link);
-                if link_abs.exists() {
-                    bail!("SYMLINK link already exists: {}", link_abs.display());
+            StepKind::Symlink { from, to } => {
+                let to_abs = resolve_dest(&cwd, to);
+                if to_abs.exists() {
+                    bail!("SYMLINK destination already exists: {}", to_abs.display());
                 }
-                let target_abs = if Path::new(target).is_absolute() {
-                    PathBuf::from(target)
+                let from_abs = if Path::new(from).is_absolute() {
+                    PathBuf::from(from)
                 } else {
-                    let from_build = build_context.join(target);
+                    let from_build = build_context.join(from);
                     if from_build.exists() {
                         from_build
                     } else {
                         build_context
                             .parent()
-                            .map(|p| p.join(target))
+                            .map(|p| p.join(from))
                             .unwrap_or(from_build)
                     }
                 };
-                if target_abs == link_abs {
+                if from_abs == to_abs {
                     bail!(
-                        "SYMLINK target resolves to the link itself: {}",
-                        target_abs.display()
+                        "SYMLINK source resolves to the destination itself: {}",
+                        from_abs.display()
                     );
                 }
-                if !target_abs.exists() {
-                    bail!("SYMLINK target missing: {}", target_abs.display());
+                if !from_abs.exists() {
+                    bail!("SYMLINK source missing: {}", from_abs.display());
                 }
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(&target_abs, &link_abs)
-                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, link, target))?;
+                std::os::unix::fs::symlink(&from_abs, &to_abs)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 #[cfg(all(windows, not(unix)))]
-                std::os::windows::fs::symlink_dir(&target_abs, &link_abs)
-                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, link, target))?;
+                std::os::windows::fs::symlink_dir(&from_abs, &to_abs)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 #[cfg(not(any(unix, windows)))]
-                copy_dir(&resolve_dest(&cwd, target), &link_abs)?;
+                copy_dir(&from_abs, &to_abs)?;
             }
             StepKind::Mkdir(path) => {
                 let target = resolve_dest(&cwd, path);
