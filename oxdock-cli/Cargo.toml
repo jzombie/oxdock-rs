@@ -6,11 +6,10 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-serde_json.workspace = true
-tempfile.workspace = true
-oxdock-dsl.workspace = true
 oxdock-buildtime-macros.workspace = true
+oxdock-dsl.workspace = true
 rust-embed.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
