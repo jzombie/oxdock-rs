@@ -215,6 +215,36 @@ fn accepts_semicolon_separated_commands() {
 }
 
 #[test]
+fn workdir_cannot_escape_root() {
+    let root = tempdir().unwrap();
+    // Attempt to switch to parent of root which should be disallowed
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("../".into()),
+    }];
+
+    let err = run_steps(root.path(), &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WORKDIR") && err.to_string().contains("escapes"),
+        "expected WORKDIR escape error, got {}",
+        err
+    );
+}
+
+#[test]
+fn workdir_creates_missing_dirs_within_root() {
+    let root = tempdir().unwrap();
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("a/b/c".into()),
+    }];
+
+    run_steps(root.path(), &steps).unwrap();
+
+    assert!(root.path().join("a/b/c").exists());
+}
+
+#[test]
 fn cat_reads_file_contents_without_error() {
     let root = tempdir().unwrap();
     fs::write(root.path().join("file.txt"), "hello cat").unwrap();

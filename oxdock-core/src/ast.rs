@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use std::io::{self, Write};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus};
 
@@ -284,7 +284,9 @@ fn split_dsl_commands(line: &str) -> Vec<String> {
 }
 
 fn starts_with_command(text: &str) -> bool {
-    let Some(first) = text.split_whitespace().next() else { return false; };
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
     COMMANDS.iter().any(|c| c.as_str() == first)
 }
 
@@ -370,9 +372,8 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
             let mut parts = cmd_text.splitn(2, ' ');
             let op = parts.next().unwrap();
             let rest = parts.next().map(str::trim).unwrap_or("");
-            let cmd = Command::parse(op).ok_or_else(|| {
-                anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op)
-            })?;
+            let cmd = Command::parse(op)
+                .ok_or_else(|| anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op))?;
 
             let kind = match cmd {
                 Command::Workdir => {
@@ -395,11 +396,12 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                         .next()
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
-                        .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
-                    let value = parts
-                        .next()
-                        .map(str::to_string)
-                        .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1)
+                        })?;
+                    let value = parts.next().map(str::to_string).ok_or_else(|| {
+                        anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1)
+                    })?;
                     StepKind::Env {
                         key: key.to_string(),
                         value,
@@ -627,37 +629,27 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 bg_children.push(child);
             }
             StepKind::Copy { from, to } => {
-                let from_abs = resolve_copy_source(build_context, from)?;
-                let to_abs = resolve_dest(&cwd, to);
+                let from_abs = resolve_copy_source(build_context, from)
+                    .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
+                let to_abs = resolve_dest(&root, &cwd, to)
+                    .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::Symlink { from, to } => {
-                let to_abs = resolve_dest(&cwd, to);
+                let to_abs = resolve_dest(&root, &cwd, to)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if to_abs.exists() {
                     bail!("SYMLINK destination already exists: {}", to_abs.display());
                 }
-                let from_abs = if Path::new(from).is_absolute() {
-                    PathBuf::from(from)
-                } else {
-                    let from_build = build_context.join(from);
-                    if from_build.exists() {
-                        from_build
-                    } else {
-                        build_context
-                            .parent()
-                            .map(|p| p.join(from))
-                            .unwrap_or(from_build)
-                    }
-                };
+                // Resolve source from build context and ensure it is within build_context.
+                let from_abs = resolve_copy_source(build_context, from)
+                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if from_abs == to_abs {
                     bail!(
                         "SYMLINK source resolves to the destination itself: {}",
                         from_abs.display()
                     );
-                }
-                if !from_abs.exists() {
-                    bail!("SYMLINK source missing: {}", from_abs.display());
                 }
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(&from_abs, &to_abs)
@@ -669,15 +661,18 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 copy_dir(&from_abs, &to_abs)?;
             }
             StepKind::Mkdir(path) => {
-                let target = resolve_dest(&cwd, path);
+                let target = resolve_dest(&root, &cwd, path)
+                    .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 fs::create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
-                let dir = path_opt
-                    .as_deref()
-                    .map(|p| resolve_dest(&cwd, p))
-                    .unwrap_or_else(|| cwd.clone());
+                let dir = if let Some(p) = path_opt.as_deref() {
+                    resolve_dest(&root, &cwd, p)
+                        .with_context(|| format!("step {}: LS {}", idx + 1, p))?
+                } else {
+                    cwd.clone()
+                };
                 let mut entries: Vec<_> = fs::read_dir(&dir)
                     .with_context(|| format!("failed to read dir {}", dir.display()))?
                     .collect::<Result<_, _>>()?;
@@ -688,7 +683,8 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 }
             }
             StepKind::Cat(path) => {
-                let target = resolve_dest(&cwd, path);
+                let target = resolve_dest(&root, &cwd, path)
+                    .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
                 let data = fs::read(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
                 let mut out = io::stdout();
@@ -697,7 +693,8 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 out.flush().ok();
             }
             StepKind::Write { path, contents } => {
-                let target = resolve_dest(&cwd, path);
+                let target = resolve_dest(&root, &cwd, path)
+                    .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
@@ -810,40 +807,191 @@ fn resolve_workdir(root: &Path, current: &Path, new_dir: &str) -> Result<PathBuf
     } else {
         current.join(new_dir)
     };
-    if let Ok(meta) = fs::symlink_metadata(&candidate) {
+    // Ensure the workdir is contained under `root` and create it if missing.
+    // We canonicalize `root` and use a hybrid approach to resolve the candidate
+    // even when it does not yet exist: find the nearest existing ancestor,
+    // canonicalize that, apply remaining path components (resolving `.`/`..`),
+    // then ensure the final absolute path is within `root` before creating it.
+    let root_abs = fs::canonicalize(root)
+        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
+
+    // If the candidate exists, canonicalize and validate directly.
+    if let Ok(cand_abs) = fs::canonicalize(&candidate) {
+        if !cand_abs.starts_with(&root_abs) {
+            bail!(
+                "WORKDIR {} escapes allowed root {}",
+                cand_abs.display(),
+                root_abs.display()
+            );
+        }
+        let meta = fs::metadata(&cand_abs)
+            .with_context(|| format!("failed to stat resolved WORKDIR {}", cand_abs.display()))?;
         if meta.is_dir() {
-            return Ok(candidate);
+            return Ok(cand_abs);
         }
-        if meta.file_type().is_symlink() {
-            let target = fs::read_link(&candidate)
-                .with_context(|| format!("reading symlink target for {}", candidate.display()))?;
-            let target_abs = if target.is_absolute() {
-                target
-            } else {
-                candidate
-                    .parent()
-                    .map(|p| p.join(&target))
-                    .unwrap_or(target)
-            };
-            if !target_abs.exists() {
-                fs::create_dir_all(&target_abs)
-                    .with_context(|| format!("creating symlink target {}", target_abs.display()))?;
+        bail!("WORKDIR path is not a directory: {}", cand_abs.display());
+    }
+
+    // Candidate does not exist yet. Find the nearest existing ancestor.
+    let mut ancestor = candidate.as_path();
+    while !ancestor.exists() {
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            // No existing ancestor found; use root as the ancestor base.
+            ancestor = root;
+            break;
+        }
+    }
+
+    let ancestor_abs = fs::canonicalize(ancestor)
+        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
+
+    // Compute the remaining components from ancestor to candidate.
+    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
+    {
+        let mut skip = ancestor.components();
+        let mut full = candidate.components();
+        // Skip shared prefix components equal to ancestor
+        loop {
+            match (skip.next(), full.next()) {
+                (Some(s), Some(f)) if s == f => continue,
+                (_opt_s, opt_f) => {
+                    if let Some(f) = opt_f {
+                        rem_components.push(f.as_os_str().to_os_string());
+                        for comp in full {
+                            rem_components.push(comp.as_os_str().to_os_string());
+                        }
+                    }
+                    break;
+                }
             }
-            return Ok(candidate);
         }
+    }
+
+    // Apply remaining components resolving '.' and '..' without following symlinks.
+    let mut cand_abs = ancestor_abs.clone();
+    for c in rem_components.iter() {
+        let s = std::ffi::OsStr::new(&c);
+        if s == "." {
+            continue;
+        }
+        if s == ".." {
+            cand_abs = cand_abs
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(cand_abs);
+            continue;
+        }
+        cand_abs.push(s);
+    }
+
+    // Ensure the resolved candidate would remain inside root.
+    if !cand_abs.starts_with(&root_abs) {
         bail!(
-            "WORKDIR path is not a directory or symlink: {}",
-            candidate.display()
+            "WORKDIR {} escapes allowed root {}",
+            cand_abs.display(),
+            root_abs.display()
         );
     }
-    bail!("WORKDIR does not exist: {}", candidate.display());
+
+    // Create the directory and canonicalize the created path.
+    fs::create_dir_all(&cand_abs)
+        .with_context(|| format!("failed to create WORKDIR {}", cand_abs.display()))?;
+    let final_abs = fs::canonicalize(&cand_abs).with_context(|| {
+        format!(
+            "failed to canonicalize created WORKDIR {}",
+            cand_abs.display()
+        )
+    })?;
+    Ok(final_abs)
 }
-fn resolve_dest(cwd: &Path, rel: &str) -> PathBuf {
-    if Path::new(rel).is_absolute() {
+fn resolve_dest(root: &Path, cwd: &Path, rel: &str) -> Result<PathBuf> {
+    // Resolve a destination path relative to `cwd` and ensure it stays inside
+    // `root`. If the path (or its ancestors) do not exist yet, we normalize
+    // the path components and validate containment before returning the
+    // non-canonical candidate (the caller may create it).
+    let candidate = if Path::new(rel).is_absolute() {
         PathBuf::from(rel)
     } else {
         cwd.join(rel)
+    };
+
+    let root_abs = fs::canonicalize(root)
+        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
+
+    // If candidate exists, canonicalize and validate containment.
+    if let Ok(cand_abs) = fs::canonicalize(&candidate) {
+        if !cand_abs.starts_with(&root_abs) {
+            bail!(
+                "destination {} escapes allowed root {}",
+                cand_abs.display(),
+                root_abs.display()
+            );
+        }
+        return Ok(cand_abs);
     }
+
+    // Candidate missing: find nearest existing ancestor and apply remaining
+    // components similar to `resolve_workdir`.
+    let mut ancestor = candidate.as_path();
+    while !ancestor.exists() {
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            ancestor = root;
+            break;
+        }
+    }
+    let ancestor_abs = fs::canonicalize(ancestor)
+        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
+
+    // Build remaining components
+    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
+    {
+        let mut skip = ancestor.components();
+        let mut full = candidate.components();
+        loop {
+            match (skip.next(), full.next()) {
+                (Some(s), Some(f)) if s == f => continue,
+                (_opt_s, opt_f) => {
+                    if let Some(f) = opt_f {
+                        rem_components.push(f.as_os_str().to_os_string());
+                        for comp in full {
+                            rem_components.push(comp.as_os_str().to_os_string());
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut cand_abs = ancestor_abs.clone();
+    for c in rem_components.iter() {
+        let s = std::ffi::OsStr::new(&c);
+        if s == "." {
+            continue;
+        }
+        if s == ".." {
+            cand_abs = cand_abs
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(cand_abs);
+            continue;
+        }
+        cand_abs.push(s);
+    }
+
+    if !cand_abs.starts_with(&root_abs) {
+        bail!(
+            "destination {} escapes allowed root {}",
+            cand_abs.display(),
+            root_abs.display()
+        );
+    }
+
+    Ok(cand_abs)
 }
 
 fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
@@ -851,14 +999,30 @@ fn resolve_copy_source(build_context: &Path, from: &str) -> Result<PathBuf> {
         bail!("COPY source must be relative to build context");
     }
     let candidate = build_context.join(from);
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
+    if !candidate.exists() {
         bail!(
             "COPY source missing in build context: {}",
             candidate.display()
         );
     }
+
+    // Canonicalize candidate and ensure it is contained within build_context.
+    let build_abs = fs::canonicalize(build_context).with_context(|| {
+        format!(
+            "failed to canonicalize build context {}",
+            build_context.display()
+        )
+    })?;
+    let cand_abs = fs::canonicalize(&candidate)
+        .with_context(|| format!("failed to canonicalize COPY source {}", candidate.display()))?;
+    if !cand_abs.starts_with(&build_abs) {
+        bail!(
+            "COPY source {} is outside build context {}",
+            cand_abs.display(),
+            build_abs.display()
+        );
+    }
+    Ok(cand_abs)
 }
 
 fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
