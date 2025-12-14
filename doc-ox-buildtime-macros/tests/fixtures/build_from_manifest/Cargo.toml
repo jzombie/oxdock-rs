@@ -1,9 +1,0 @@
-[package]
-name = "fixture-build-from-manifest"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-doc-ox-buildtime-macros.workspace = true
-rust-embed = { workspace = true, features = ["include-exclude"] }

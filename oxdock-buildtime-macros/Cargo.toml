@@ -1,0 +1,19 @@
+[package]
+name = "oxdock-buildtime-macros"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+oxdock-dsl.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+trybuild = "1.0.114"
+rust-embed.workspace = true
+serial_test = "3.2.0"

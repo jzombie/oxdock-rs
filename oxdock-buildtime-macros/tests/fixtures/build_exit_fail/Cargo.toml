@@ -1,0 +1,11 @@
+[package]
+name = "fixture-build-exit-fail"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+oxdock-buildtime-macros = { path = "../../.." }
+rust-embed = { version = "8.9.0", features = ["include-exclude"] }
