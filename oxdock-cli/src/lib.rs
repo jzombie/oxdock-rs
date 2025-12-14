@@ -57,12 +57,20 @@ impl Options {
 }
 
 pub fn execute(opts: Options) -> Result<()> {
+    #[cfg(windows)]
+    maybe_reexec_shell_to_temp(&opts)?;
+
     // Prefer the runtime env var when present (e.g., under `cargo run`), but fall back to the
     // compile-time value so the binary can be invoked directly without CARGO_MANIFEST_DIR set.
     let workspace_root = discover_workspace_root()?;
 
     let temp = tempfile::tempdir().context("failed to create temp dir")?;
-    let temp_path = temp.path().to_path_buf();
+    // Keep the workspace alive for interactive shells; otherwise the tempdir cleans up on drop.
+    let temp_path = if opts.shell {
+        temp.into_path()
+    } else {
+        temp.path().to_path_buf()
+    };
 
     // Materialize source tree without .git
     archive_head(&workspace_root, &temp_path)?;
@@ -101,6 +109,39 @@ pub fn execute(opts: Options) -> Result<()> {
     run_steps_with_context(&temp_path, &workspace_root, &steps)?;
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
+    // Only used for interactive shells. Copy the binary to a temp path and run it there so the
+    // original target exe is free for rebuilding while the shell stays open.
+    if !opts.shell {
+        return Ok(());
+    }
+    if std::env::var("OXDOCK_SHELL_REEXEC").ok().as_deref() == Some("1") {
+        return Ok(());
+    }
+
+    let self_path = std::env::current_exe().context("determine current executable")?;
+    let mut temp_path = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    temp_path.push(format!("oxdock-shell-{ts}-{}.exe", std::process::id()));
+
+    fs::copy(&self_path, &temp_path)
+        .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
+
+    let mut cmd = Command::new(&temp_path);
+    cmd.args(std::env::args_os().skip(1));
+    cmd.env("OXDOCK_SHELL_REEXEC", "1");
+
+    cmd.spawn()
+        .with_context(|| format!("failed to spawn shell from {}", temp_path.display()))?;
+
+    // Exit immediately so the original binary can be rebuilt while the shell child stays running.
+    std::process::exit(0);
 }
 
 fn discover_workspace_root() -> Result<PathBuf> {
@@ -165,26 +206,23 @@ fn run_shell(cwd: &Path) -> Result<()> {
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
+        // Launch via `start` so Windows opens a real interactive console window rooted at the temp
+        // workspace. Using `start` avoids stdin/handle inheritance issues that can make the child
+        // non-interactive when CREATE_NEW_CONSOLE is set.
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C")
+            .arg("start")
+            .arg("oxdock shell")
+            .arg("/D")
+            .arg(cwd)
+            .arg("cmd")
+            .arg("/K")
+            .arg("cd /d .");
 
-        // Inherit the current console so the spawned shell stays attached to the caller's terminal
-        // instead of flashing a new window that immediately closes. /K keeps cmd.exe running until
-        // the user exits.
-        let mut cmd = Command::new(shell_program());
-        cmd.current_dir(cwd).arg("/K");
-
-        // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
-        if let Ok(con) = fs::File::open("CONIN$") {
-            cmd.stdin(con);
-        }
-
-        // Do not create a new console; inherit the current one for interactive use.
-        cmd.creation_flags(0);
-
-        let status = cmd.status()?;
-        if !status.success() {
-            bail!("shell exited with status {}", status);
-        }
+        // Fire-and-forget so the parent console regains control immediately; the child window is
+        // fully interactive. If the launch fails, surface the error right away.
+        cmd.spawn()
+            .context("failed to start interactive shell window")?;
         Ok(())
     }
 
