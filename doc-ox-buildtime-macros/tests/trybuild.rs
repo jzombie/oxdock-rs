@@ -20,16 +20,18 @@ fn trybuild_manifest_dir() {
 fn trybuild_exit_fail() {
     use std::process::Command;
 
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .arg("run")
         .arg("--manifest-path")
         .arg("tests/fixtures/build_exit_fail/Cargo.toml")
         .arg("--quiet")
-        .status()
+        .output()
         .expect("failed to spawn cargo");
 
     assert!(
-        !status.success(),
-        "fixture build_exit_fail should fail compilation when EXIT is nonzero"
+        !output.status.success(),
+        "fixture build_exit_fail should fail compilation when EXIT is nonzero. stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
