@@ -1,6 +1,6 @@
-# doc-ox (CLI)
+# Doc-Ox (CLI)
 
-`doc-ox` is a small CLI / library that runs Doc‑Ox DSL scripts against a repository snapshot (separate directory tree) and can be used to run against the main repository tree.
+`doc-ox-cli` is a small CLI / library that runs Doc‑Ox DSL scripts against a repository snapshot (separate directory tree) and can be used to run against the main repository tree.
 
 Its primary use case is to provide the ability to script together an environment with the same syntax that is used in the [build-time macros](../doc-ox-buildtime-macros/).
 

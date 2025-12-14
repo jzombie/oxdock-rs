@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 
-use doc_ox::{Step, StepKind, run_script};
+use doc_ox_cli::{Step, StepKind, run_script};
 
 #[test]
 fn script_runs_copy_and_symlink() {

@@ -1,4 +1,4 @@
-use doc_ox::{Options, ScriptSource, Step, StepKind, parse_script};
+use doc_ox_cli::{Options, ScriptSource, Step, StepKind, parse_script};
 use indoc::indoc;
 
 #[test]

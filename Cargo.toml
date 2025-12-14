@@ -1,6 +1,6 @@
 [workspace]
 members = [
-	"doc-ox",
+	"doc-ox-cli",
 	"doc-ox-dsl",
 	"doc-ox-buildtime-macros",
 	# Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.

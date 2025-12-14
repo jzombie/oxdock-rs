@@ -78,19 +78,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "doc-ox"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "doc-ox-buildtime-macros",
- "doc-ox-dsl",
- "indoc",
- "rust-embed",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "doc-ox-buildtime-macros"
 version = "0.1.0"
 dependencies = [
@@ -102,6 +89,19 @@ dependencies = [
  "syn",
  "tempfile",
  "trybuild",
+]
+
+[[package]]
+name = "doc-ox-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "doc-ox-buildtime-macros",
+ "doc-ox-dsl",
+ "indoc",
+ "rust-embed",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
