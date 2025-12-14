@@ -244,6 +244,45 @@ pub enum WorkspaceTarget {
     Local,
 }
 
+fn split_dsl_commands(line: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    let bytes = line.as_bytes();
+
+    while i < bytes.len() {
+        if bytes[i] == b';' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let rest = &line[j..];
+            if starts_with_command(rest) {
+                let seg = line[start..i].trim();
+                if !seg.is_empty() {
+                    commands.push(seg.to_string());
+                }
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    let tail = line[start..].trim();
+    if !tail.is_empty() {
+        commands.push(tail.to_string());
+    }
+
+    commands
+}
+
+fn starts_with_command(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else { return false; };
+    COMMANDS.iter().any(|c| c.as_str() == first)
+}
+
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     let mut steps = Vec::new();
     let mut pending_guards: Vec<Vec<Guard>> = Vec::new();
@@ -318,8 +357,11 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         let remainder = remainder_opt.unwrap();
 
         // Allow multiple commands on one line separated by ';'. Each segment
-        // gets the same guard set derived above.
-        for cmd_text in remainder.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        // gets the same guard set derived above. We only split on semicolons
+        // that precede another DSL instruction (e.g., `; WORKDIR ...`). This
+        // prevents breaking shell commands like `RUN echo a; echo b`, where the
+        // semicolon is part of the shell command itself and should be kept.
+        for cmd_text in split_dsl_commands(remainder).into_iter() {
             let mut parts = cmd_text.splitn(2, ' ');
             let op = parts.next().unwrap();
             let rest = parts.next().map(str::trim).unwrap_or("");
