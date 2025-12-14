@@ -1,5 +1,7 @@
 pub mod ast;
+pub mod exec;
 pub use ast::*;
+pub use exec::*;
 
 #[cfg(test)]
 mod tests {
