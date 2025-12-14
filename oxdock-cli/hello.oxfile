@@ -6,9 +6,13 @@ ENV FOO=1
 
 [env:FOO] ECHO "Foo is now set..."
 
+[!env:FOO] ECHO "Foo is still not set?"
+
 [platform=mac] ECHO "Hello from Mac"
 
 [platform=linux] ECHO "Hello from Linux"
+
+[platform=unix] ECHO "You're using a Unix platform"
 
 [platform=windows] ECHO "Hello from Windows"
 
