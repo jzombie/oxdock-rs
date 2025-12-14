@@ -167,6 +167,9 @@ fn run_shell(cwd: &Path) -> Result<()> {
     {
         use std::os::windows::process::CommandExt;
 
+        // Inherit the current console so the spawned shell stays attached to the caller's terminal
+        // instead of flashing a new window that immediately closes. /K keeps cmd.exe running until
+        // the user exits.
         let mut cmd = Command::new(shell_program());
         cmd.current_dir(cwd).arg("/K");
 
@@ -175,9 +178,8 @@ fn run_shell(cwd: &Path) -> Result<()> {
             cmd.stdin(con);
         }
 
-        // CREATE_NEW_CONSOLE (0x00000010) to ensure we get an interactive console if none is attached.
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
+        // Do not create a new console; inherit the current one for interactive use.
+        cmd.creation_flags(0);
 
         let status = cmd.status()?;
         if !status.success() {
