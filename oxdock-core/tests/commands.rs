@@ -219,3 +219,16 @@ fn accepts_semicolon_separated_commands() {
     assert_eq!(read_trimmed(&root.path().join("one.txt")), "1");
     assert_eq!(read_trimmed(&root.path().join("two.txt")), "2");
 }
+
+#[test]
+fn cat_reads_file_contents_without_error() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("file.txt"), "hello cat").unwrap();
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Cat("file.txt".into()),
+    }];
+
+    // This should succeed and emit contents to stdout; we only verify it does not error.
+    run_steps(root.path(), &steps).unwrap();
+}

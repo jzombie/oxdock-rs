@@ -78,6 +78,22 @@ fn parse_mkdir_ls_write() {
 }
 
 #[test]
+fn parse_cat() {
+    let script = "CAT path/to/file.txt";
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 1);
+    if let Step {
+        kind: StepKind::Cat(ref p),
+        ..
+    } = steps[0]
+    {
+        assert_eq!(p, "path/to/file.txt");
+    } else {
+        panic!();
+    }
+}
+
+#[test]
 fn parse_options_accepts_stdin_dash() {
     let mut args = "--script -".split_whitespace().map(String::from);
     let opts = Options::parse(&mut args).expect("options parse should succeed");

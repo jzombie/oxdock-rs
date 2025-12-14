@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::io::{self, Write};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ pub enum Command {
     Symlink,
     Mkdir,
     Ls,
+    Cat,
     Write,
     Shell,
     Exit,
@@ -32,6 +34,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Symlink,
     Command::Mkdir,
     Command::Ls,
+    Command::Cat,
     Command::Write,
     Command::Shell,
     Command::Exit,
@@ -179,6 +182,7 @@ impl Command {
             Command::Symlink => "SYMLINK",
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
+            Command::Cat => "CAT",
             Command::Write => "WRITE",
             Command::Shell => "SHELL",
             Command::Exit => "EXIT",
@@ -227,6 +231,7 @@ pub enum StepKind {
     Symlink { from: String, to: String },
     Mkdir(String),
     Ls(Option<String>),
+    Cat(String),
     Write { path: String, contents: String },
     Shell,
     Exit(i32),
@@ -458,6 +463,12 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                         .map(|s| s.to_string());
                     StepKind::Ls(path)
                 }
+                Command::Cat => {
+                    if rest.is_empty() {
+                        bail!("line {}: CAT requires a path", idx + 1);
+                    }
+                    StepKind::Cat(rest.to_string())
+                }
                 Command::Write => {
                     let mut p = rest.splitn(2, ' ');
                     let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
@@ -675,6 +686,15 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 for entry in entries {
                     println!("{}", entry.file_name().to_string_lossy());
                 }
+            }
+            StepKind::Cat(path) => {
+                let target = resolve_dest(&cwd, path);
+                let data = fs::read(&target)
+                    .with_context(|| format!("failed to read {}", target.display()))?;
+                let mut out = io::stdout();
+                out.write_all(&data)
+                    .with_context(|| format!("failed to write {} to stdout", target.display()))?;
+                out.flush().ok();
             }
             StepKind::Write { path, contents } => {
                 let target = resolve_dest(&cwd, path);
