@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-cli"
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
