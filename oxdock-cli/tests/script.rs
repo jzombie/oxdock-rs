@@ -23,7 +23,7 @@ fn script_runs_copy_and_symlink() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Run("true".into()),
+            kind: StepKind::Run("echo ok".into()),
         },
         Step {
             guards: Vec::new(),
@@ -32,20 +32,20 @@ fn script_runs_copy_and_symlink() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Copy {
-                from: "client/dist".into(),
-                to: "client/dist-copy".into(),
+                from: "./client/dist".into(),
+                to: "./client/dist-copy".into(),
             },
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Symlink {
-                link: "server/dist".into(),
-                target: "client/dist".into(),
+                from: "./client/dist".into(),
+                to: "./server/dist".into(),
             },
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Run("true".into()),
+            kind: StepKind::Run("echo ok".into()),
         },
     ];
 

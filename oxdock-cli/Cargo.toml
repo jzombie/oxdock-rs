@@ -3,14 +3,14 @@ name = "oxdock-cli"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 anyhow.workspace = true
-serde_json.workspace = true
-tempfile.workspace = true
-oxdock-dsl.workspace = true
 oxdock-buildtime-macros.workspace = true
+oxdock-core.workspace = true
 rust-embed.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

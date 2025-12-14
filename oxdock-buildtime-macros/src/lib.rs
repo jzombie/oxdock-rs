@@ -95,7 +95,7 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
     use proc_macro2::{Delimiter, TokenTree};
 
     fn is_command(name: &str) -> bool {
-        oxdock_dsl::COMMANDS.iter().any(|c| c.as_str() == name)
+        oxdock_core::COMMANDS.iter().any(|c| c.as_str() == name)
     }
 
     fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
@@ -128,12 +128,10 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
             return;
         }
         let next_char = frag.chars().next().unwrap_or(' ');
-        if let Some(prev) = buf.chars().rev().find(|c| !c.is_whitespace()) {
-            if force_space && !prev.is_whitespace() {
-                buf.push(' ');
-            } else if needs_space(prev, next_char) {
-                buf.push(' ');
-            }
+        if let Some(prev) = buf.chars().rev().find(|c| !c.is_whitespace())
+            && ((force_space && !prev.is_whitespace()) || needs_space(prev, next_char))
+        {
+            buf.push(' ');
         }
         buf.push_str(frag);
     }
@@ -342,14 +340,14 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
     #[allow(deprecated)]
     let temp_root = tempdir.into_path();
 
-    let steps = oxdock_dsl::parse_script(script)
+    let steps = oxdock_core::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
     let build_context = std::path::Path::new(&manifest_dir);
 
-    let final_cwd = oxdock_dsl::run_steps_with_context_result(&temp_root, build_context, &steps)
+    let final_cwd = oxdock_core::run_steps_with_context_result(&temp_root, build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     eprintln!(
@@ -607,10 +605,12 @@ mod tests {
 
         let ts = expand_embed_internal(&input).expect("out_dir branch should succeed");
         let out = ts.to_string();
-        let prebuilt_abs_str = assets_abs.to_string_lossy().to_string();
         assert!(out.contains("DemoAssets"), "should define struct name");
-        assert!(
-            out.contains(&prebuilt_abs_str),
+
+        let folder_path = folder_attr_path(&ts);
+        assert_eq!(
+            std::path::Path::new(&folder_path),
+            assets_abs,
             "should point folder to out_dir abs path"
         );
     }
@@ -735,16 +735,11 @@ mod tests {
             .iter()
             .find(|a| a.path().is_ident("folder"))
             .expect("folder attribute present");
-        match attr.meta {
-            syn::Meta::NameValue(ref nv) => match &nv.value {
-                syn::Expr::Lit(expr_lit) => {
-                    if let syn::Lit::Str(ref litstr) = expr_lit.lit {
-                        return litstr.value();
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        if let syn::Meta::NameValue(ref nv) = attr.meta
+            && let syn::Expr::Lit(expr_lit) = &nv.value
+            && let syn::Lit::Str(ref litstr) = expr_lit.lit
+        {
+            return litstr.value();
         }
         panic!("folder attribute did not contain a string literal");
     }

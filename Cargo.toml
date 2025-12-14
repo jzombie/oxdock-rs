@@ -1,28 +1,24 @@
 [workspace]
 members = [
-	"oxdock-cli",
-	"oxdock-dsl",
-	"oxdock-buildtime-macros",
-	# Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
-	"oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
+    "oxdock-buildtime-macros",
+    # Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
+    "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
+    "oxdock-cli",
+    "oxdock-core",
 ]
-default-members = [
-	"oxdock-cli",
-	"oxdock-dsl",
-	"oxdock-buildtime-macros",
-]
+default-members = ["oxdock-cli", "oxdock-core", "oxdock-buildtime-macros"]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-serde_json = "1.0.145"
-tempfile = "3.23.0"
-rust-embed = { version = "8.9.0", features = ["include-exclude"] }
-proc-macro2 = "1.0.103"
-quote = "1.0.42"
-syn = { version = "2.0", features = ["full"] }
 indoc = "2.0.7"
+oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0" }
 
 # Internal crates
-oxdock-dsl = { path = "oxdock-dsl", version = "0.1.0" }
-oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0" }
+oxdock-core = { path = "oxdock-core", version = "0.1.0" }
+proc-macro2 = "1.0.103"
+quote = "1.0.42"
+rust-embed = { version = "8.9.0", features = ["include-exclude"] }
+serial_test = "3.2.0"
+syn = { version = "2.0", features = ["full"] }
+tempfile = "3.23.0"

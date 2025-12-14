@@ -78,6 +78,22 @@ fn parse_mkdir_ls_write() {
 }
 
 #[test]
+fn parse_cat() {
+    let script = "CAT path/to/file.txt";
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 1);
+    if let Step {
+        kind: StepKind::Cat(ref p),
+        ..
+    } = steps[0]
+    {
+        assert_eq!(p, "path/to/file.txt");
+    } else {
+        panic!();
+    }
+}
+
+#[test]
 fn parse_options_accepts_stdin_dash() {
     let mut args = "--script -".split_whitespace().map(String::from);
     let opts = Options::parse(&mut args).expect("options parse should succeed");
@@ -107,5 +123,42 @@ fn parse_options_accepts_shell_flag() {
     match opts.script {
         ScriptSource::Stdin => {}
         _ => panic!("expected stdin default even when shell is requested"),
+    }
+}
+
+#[test]
+fn parse_semicolon_keeps_shell_payload_together() {
+    let script = "RUN echo one; echo two";
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 1);
+    if let Step {
+        kind: StepKind::Run(ref cmd),
+        ..
+    } = steps[0]
+    {
+        assert_eq!(cmd, "echo one; echo two");
+    } else {
+        panic!("expected RUN step");
+    }
+}
+
+#[test]
+fn parse_semicolon_splits_multiple_instructions() {
+    let script = "WRITE one.txt 1; WRITE two.txt 2";
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 2);
+    match &steps[0].kind {
+        StepKind::Write { path, contents } => {
+            assert_eq!(path, "one.txt");
+            assert_eq!(contents, "1");
+        }
+        _ => panic!("expected first WRITE"),
+    }
+    match &steps[1].kind {
+        StepKind::Write { path, contents } => {
+            assert_eq!(path, "two.txt");
+            assert_eq!(contents, "2");
+        }
+        _ => panic!("expected second WRITE"),
     }
 }

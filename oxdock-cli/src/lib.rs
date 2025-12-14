@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail};
+use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use oxdock_dsl::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -57,12 +58,20 @@ impl Options {
 }
 
 pub fn execute(opts: Options) -> Result<()> {
+    #[cfg(windows)]
+    maybe_reexec_shell_to_temp(&opts)?;
+
     // Prefer the runtime env var when present (e.g., under `cargo run`), but fall back to the
     // compile-time value so the binary can be invoked directly without CARGO_MANIFEST_DIR set.
     let workspace_root = discover_workspace_root()?;
 
     let temp = tempfile::tempdir().context("failed to create temp dir")?;
-    let temp_path = temp.path().to_path_buf();
+    // Keep the workspace alive for interactive shells; otherwise the tempdir cleans up on drop.
+    let temp_path = if opts.shell {
+        temp.keep()
+    } else {
+        temp.path().to_path_buf()
+    };
 
     // Materialize source tree without .git
     archive_head(&workspace_root, &temp_path)?;
@@ -73,7 +82,7 @@ pub fn execute(opts: Options) -> Result<()> {
         if !stdin.is_terminal() {
             bail!("--shell requires a tty (stdin is piped)");
         }
-        return run_shell(&temp_path);
+        return run_shell(&temp_path, &workspace_root);
     }
 
     // Interpret a tiny Dockerfile-ish script
@@ -103,15 +112,48 @@ pub fn execute(opts: Options) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
+    // Only used for interactive shells. Copy the binary to a temp path and run it there so the
+    // original target exe is free for rebuilding while the shell stays open.
+    if !opts.shell {
+        return Ok(());
+    }
+    if std::env::var("OXDOCK_SHELL_REEXEC").ok().as_deref() == Some("1") {
+        return Ok(());
+    }
+
+    let self_path = std::env::current_exe().context("determine current executable")?;
+    let mut temp_path = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    temp_path.push(format!("oxdock-shell-{ts}-{}.exe", std::process::id()));
+
+    fs::copy(&self_path, &temp_path)
+        .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
+
+    let mut cmd = Command::new(&temp_path);
+    cmd.args(std::env::args_os().skip(1));
+    cmd.env("OXDOCK_SHELL_REEXEC", "1");
+
+    cmd.spawn()
+        .with_context(|| format!("failed to spawn shell from {}", temp_path.display()))?;
+
+    // Exit immediately so the original binary can be rebuilt while the shell child stays running.
+    std::process::exit(0);
+}
+
 fn discover_workspace_root() -> Result<PathBuf> {
     if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
         return Ok(PathBuf::from(root));
     }
 
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        if let Some(parent) = PathBuf::from(manifest_dir).parent() {
-            return Ok(parent.to_path_buf());
-        }
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
+        && let Some(parent) = PathBuf::from(manifest_dir).parent()
+    {
+        return Ok(parent.to_path_buf());
     }
 
     // Prefer the git repository root of the current working directory.
@@ -119,12 +161,11 @@ fn discover_workspace_root() -> Result<PathBuf> {
         .arg("rev-parse")
         .arg("--show-toplevel")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
-            }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -146,11 +187,37 @@ fn shell_program() -> String {
     }
 }
 
-fn run_shell(cwd: &Path) -> Result<()> {
+fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {
+    let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
+    format!(
+        "{} shell workspace: {} (materialized from git HEAD at {})",
+        pkg,
+        cwd.display(),
+        workspace_root.display()
+    )
+}
+
+#[cfg(windows)]
+fn escape_for_cmd(s: &str) -> String {
+    // Escape characters that would otherwise be interpreted by cmd when echoed.
+    s.replace('^', "^^")
+        .replace('&', "^&")
+        .replace('|', "^|")
+        .replace('>', "^>")
+        .replace('<', "^<")
+}
+
+fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
+    let banner = shell_banner(cwd, workspace_root);
+
     #[cfg(unix)]
     {
         let mut cmd = Command::new(shell_program());
         cmd.current_dir(cwd);
+
+        // Print a single banner inside the subshell, then exec the user's shell to stay interactive.
+        let script = format!("printf '%s\\n' \"{}\"; exec {}", banner, shell_program());
+        cmd.arg("-c").arg(script);
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         if let Ok(tty) = fs::File::open("/dev/tty") {
@@ -161,30 +228,29 @@ fn run_shell(cwd: &Path) -> Result<()> {
         if !status.success() {
             bail!("shell exited with status {}", status);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
+        // Launch via `start` so Windows opens a real interactive console window rooted at the temp
+        // workspace. Using `start` avoids stdin/handle inheritance issues that can make the child
+        // non-interactive when CREATE_NEW_CONSOLE is set.
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C")
+            .arg("start")
+            .arg("oxdock shell")
+            .arg("/D")
+            .arg(cwd)
+            .arg("cmd")
+            .arg("/K")
+            .arg(format!("echo {} && cd /d .", escape_for_cmd(&banner)));
 
-        let mut cmd = Command::new(shell_program());
-        cmd.current_dir(cwd).arg("/K");
-
-        // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
-        if let Ok(con) = fs::File::open("CONIN$") {
-            cmd.stdin(con);
-        }
-
-        // CREATE_NEW_CONSOLE (0x00000010) to ensure we get an interactive console if none is attached.
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
-
-        let status = cmd.status()?;
-        if !status.success() {
-            bail!("shell exited with status {}", status);
-        }
-        return Ok(());
+        // Fire-and-forget so the parent console regains control immediately; the child window is
+        // fully interactive. If the launch fails, surface the error right away.
+        cmd.spawn()
+            .context("failed to start interactive shell window")?;
+        Ok(())
     }
 
     #[cfg(not(any(unix, windows)))]
