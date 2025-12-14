@@ -82,7 +82,7 @@ pub fn execute(opts: Options) -> Result<()> {
         if !stdin.is_terminal() {
             bail!("--shell requires a tty (stdin is piped)");
         }
-        return run_shell(&temp_path);
+        return run_shell(&temp_path, &workspace_root);
     }
 
     // Interpret a tiny Dockerfile-ish script
@@ -187,9 +187,14 @@ fn shell_program() -> String {
     }
 }
 
-fn shell_banner(cwd: &Path) -> String {
+fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
-    format!("{} shell workspace: {}", pkg, cwd.display())
+    format!(
+        "{} shell workspace: {} (materialized from git HEAD at {})",
+        pkg,
+        cwd.display(),
+        workspace_root.display()
+    )
 }
 
 #[cfg(windows)]
@@ -202,8 +207,8 @@ fn escape_for_cmd(s: &str) -> String {
         .replace('<', "^<")
 }
 
-fn run_shell(cwd: &Path) -> Result<()> {
-    let banner = shell_banner(cwd);
+fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
+    let banner = shell_banner(cwd, workspace_root);
 
     #[cfg(unix)]
     {
