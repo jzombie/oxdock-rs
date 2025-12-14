@@ -209,3 +209,13 @@ fn exit_stops_pipeline_and_reports_code() {
     assert!(root.path().join("before.txt").exists());
     assert!(!root.path().join("after.txt").exists());
 }
+
+#[test]
+fn accepts_semicolon_separated_commands() {
+    let root = tempdir().unwrap();
+    let script = "WRITE one.txt 1; WRITE two.txt 2";
+    let steps = oxdock_core::parse_script(script).unwrap();
+    run_steps(root.path(), &steps).unwrap();
+    assert_eq!(read_trimmed(&root.path().join("one.txt")), "1");
+    assert_eq!(read_trimmed(&root.path().join("two.txt")), "2");
+}

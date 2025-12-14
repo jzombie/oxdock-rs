@@ -302,7 +302,6 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         // resulting step. If there are no inline groups, use pending groups.
         let mut all_groups: Vec<Vec<Guard>> = Vec::new();
         if groups.is_empty() {
-            // No inline groups: attach pending groups (if any) to this step.
             all_groups = pending_guards.clone();
         } else if pending_guards.is_empty() {
             all_groups = groups.clone();
@@ -318,130 +317,135 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
         pending_guards.clear();
         let remainder = remainder_opt.unwrap();
 
-        let mut parts = remainder.splitn(2, ' ');
-        let op = parts.next().unwrap();
-        let rest = parts.next().map(str::trim).unwrap_or("");
-        let cmd = Command::parse(op)
-            .ok_or_else(|| anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op))?;
+        // Allow multiple commands on one line separated by ';'. Each segment
+        // gets the same guard set derived above.
+        for cmd_text in remainder.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let mut parts = cmd_text.splitn(2, ' ');
+            let op = parts.next().unwrap();
+            let rest = parts.next().map(str::trim).unwrap_or("");
+            let cmd = Command::parse(op).ok_or_else(|| {
+                anyhow::anyhow!("line {}: unknown instruction '{}'", idx + 1, op)
+            })?;
 
-        let kind = match cmd {
-            Command::Workdir => {
-                if rest.is_empty() {
-                    bail!("line {}: WORKDIR requires a path", idx + 1);
+            let kind = match cmd {
+                Command::Workdir => {
+                    if rest.is_empty() {
+                        bail!("line {}: WORKDIR requires a path", idx + 1);
+                    }
+                    StepKind::Workdir(rest.to_string())
                 }
-                StepKind::Workdir(rest.to_string())
-            }
-            Command::Workspace => {
-                let target = match rest {
-                    "SNAPSHOT" | "snapshot" => WorkspaceTarget::Snapshot,
-                    "LOCAL" | "local" => WorkspaceTarget::Local,
-                    _ => bail!("line {}: WORKSPACE requires LOCAL or SNAPSHOT", idx + 1),
-                };
-                StepKind::Workspace(target)
-            }
-            Command::Env => {
-                let mut parts = rest.splitn(2, '=');
-                let key = parts
-                    .next()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
-                let value = parts
-                    .next()
-                    .map(str::to_string)
-                    .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
-                StepKind::Env {
-                    key: key.to_string(),
-                    value,
+                Command::Workspace => {
+                    let target = match rest {
+                        "SNAPSHOT" | "snapshot" => WorkspaceTarget::Snapshot,
+                        "LOCAL" | "local" => WorkspaceTarget::Local,
+                        _ => bail!("line {}: WORKSPACE requires LOCAL or SNAPSHOT", idx + 1),
+                    };
+                    StepKind::Workspace(target)
                 }
-            }
-            Command::Echo => {
-                if rest.is_empty() {
-                    bail!("line {}: ECHO requires a message", idx + 1);
+                Command::Env => {
+                    let mut parts = rest.splitn(2, '=');
+                    let key = parts
+                        .next()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
+                    let value = parts
+                        .next()
+                        .map(str::to_string)
+                        .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
+                    StepKind::Env {
+                        key: key.to_string(),
+                        value,
+                    }
                 }
-                StepKind::Echo(rest.to_string())
-            }
-            Command::Run => {
-                if rest.is_empty() {
-                    bail!("line {}: RUN requires a command", idx + 1);
+                Command::Echo => {
+                    if rest.is_empty() {
+                        bail!("line {}: ECHO requires a message", idx + 1);
+                    }
+                    StepKind::Echo(rest.to_string())
                 }
-                StepKind::Run(rest.to_string())
-            }
-            Command::RunBg => {
-                if rest.is_empty() {
-                    bail!("line {}: RUN_BG requires a command", idx + 1);
+                Command::Run => {
+                    if rest.is_empty() {
+                        bail!("line {}: RUN requires a command", idx + 1);
+                    }
+                    StepKind::Run(rest.to_string())
                 }
-                StepKind::RunBg(rest.to_string())
-            }
-            Command::Copy => {
-                let mut p = rest.split_whitespace();
-                let from = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
-                })?;
-                let to = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
-                })?;
-                StepKind::Copy {
-                    from: from.to_string(),
-                    to: to.to_string(),
+                Command::RunBg => {
+                    if rest.is_empty() {
+                        bail!("line {}: RUN_BG requires a command", idx + 1);
+                    }
+                    StepKind::RunBg(rest.to_string())
                 }
-            }
-            Command::Symlink => {
-                let mut p = rest.split_whitespace();
-                let from = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
-                })?;
-                let to = p.next().ok_or_else(|| {
-                    anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
-                })?;
-                StepKind::Symlink {
-                    from: from.to_string(),
-                    to: to.to_string(),
+                Command::Copy => {
+                    let mut p = rest.split_whitespace();
+                    let from = p.next().ok_or_else(|| {
+                        anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
+                    })?;
+                    let to = p.next().ok_or_else(|| {
+                        anyhow::anyhow!("line {}: COPY requires <from> <to>", idx + 1)
+                    })?;
+                    StepKind::Copy {
+                        from: from.to_string(),
+                        to: to.to_string(),
+                    }
                 }
-            }
-            Command::Mkdir => {
-                if rest.is_empty() {
-                    bail!("line {}: MKDIR requires a path", idx + 1);
+                Command::Symlink => {
+                    let mut p = rest.split_whitespace();
+                    let from = p.next().ok_or_else(|| {
+                        anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
+                    })?;
+                    let to = p.next().ok_or_else(|| {
+                        anyhow::anyhow!("line {}: SYMLINK requires <from> <to>", idx + 1)
+                    })?;
+                    StepKind::Symlink {
+                        from: from.to_string(),
+                        to: to.to_string(),
+                    }
                 }
-                StepKind::Mkdir(rest.to_string())
-            }
-            Command::Ls => {
-                let path = rest
-                    .split_whitespace()
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string());
-                StepKind::Ls(path)
-            }
-            Command::Write => {
-                let mut p = rest.splitn(2, ' ');
-                let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
-                    anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
-                })?;
-                let contents = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
-                    anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
-                })?;
-                StepKind::Write {
-                    path: path.to_string(),
-                    contents: contents.to_string(),
+                Command::Mkdir => {
+                    if rest.is_empty() {
+                        bail!("line {}: MKDIR requires a path", idx + 1);
+                    }
+                    StepKind::Mkdir(rest.to_string())
                 }
-            }
-            Command::Shell => StepKind::Shell,
-            Command::Exit => {
-                if rest.is_empty() {
-                    bail!("line {}: EXIT requires a code", idx + 1);
+                Command::Ls => {
+                    let path = rest
+                        .split_whitespace()
+                        .next()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    StepKind::Ls(path)
                 }
-                let code: i32 = rest.parse().map_err(|_| {
-                    anyhow::anyhow!("line {}: EXIT code must be an integer", idx + 1)
-                })?;
-                StepKind::Exit(code)
-            }
-        };
+                Command::Write => {
+                    let mut p = rest.splitn(2, ' ');
+                    let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
+                        anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
+                    })?;
+                    let contents = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
+                        anyhow::anyhow!("line {}: WRITE requires <path> <contents>", idx + 1)
+                    })?;
+                    StepKind::Write {
+                        path: path.to_string(),
+                        contents: contents.to_string(),
+                    }
+                }
+                Command::Shell => StepKind::Shell,
+                Command::Exit => {
+                    if rest.is_empty() {
+                        bail!("line {}: EXIT requires a code", idx + 1);
+                    }
+                    let code: i32 = rest.parse().map_err(|_| {
+                        anyhow::anyhow!("line {}: EXIT code must be an integer", idx + 1)
+                    })?;
+                    StepKind::Exit(code)
+                }
+            };
 
-        steps.push(Step {
-            guards: all_groups,
-            kind,
-        });
+            steps.push(Step {
+                guards: all_groups.clone(),
+                kind,
+            });
+        }
     }
     Ok(steps)
 }
