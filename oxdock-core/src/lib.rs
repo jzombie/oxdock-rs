@@ -1,6 +1,8 @@
 pub mod ast;
+pub mod resolver;
 pub mod exec;
 pub use ast::*;
+pub use resolver::PathResolver;
 pub use exec::*;
 
 #[cfg(test)]
