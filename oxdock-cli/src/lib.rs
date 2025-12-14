@@ -68,7 +68,7 @@ pub fn execute(opts: Options) -> Result<()> {
     let temp = tempfile::tempdir().context("failed to create temp dir")?;
     // Keep the workspace alive for interactive shells; otherwise the tempdir cleans up on drop.
     let temp_path = if opts.shell {
-        temp.into_path()
+        temp.keep()
     } else {
         temp.path().to_path_buf()
     };
