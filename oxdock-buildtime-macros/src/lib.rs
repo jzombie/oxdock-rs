@@ -1,4 +1,5 @@
 // TODO: Add non-embedded `prepare` macro.
+// TODO: Add no-stdlib test
 
 use proc_macro::TokenStream;
 use quote::quote;
