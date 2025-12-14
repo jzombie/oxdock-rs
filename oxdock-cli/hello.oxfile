@@ -1,15 +1,15 @@
 # TODO: Show basic examples of "hello world" usage from various OS platforms
 
-[platform=mac] RUN echo "Hello from Mac"
+[platform=mac] ECHO "Hello from Mac"
 
-[platform=linux] RUN echo "Hello from Linux"
+[platform=linux] ECHO "Hello from Linux"
 
-[platform=windows] RUN echo "Hello from Windows"
+[platform=windows] ECHO "Hello from Windows"
 
-[env:FOO] RUN echo "Foo is set?"
+[env:FOO] ECHO "Foo is set?"
 
 ENV FOO=1
 
-[env:FOO] RUN echo "Foo is now set..."
+[env:FOO] ECHO "Foo is now set..."
 
 # RUN env | grep FOO

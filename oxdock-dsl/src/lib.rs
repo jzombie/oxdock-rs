@@ -9,6 +9,7 @@ pub enum Command {
     Workdir,
     Workspace,
     Env,
+    Echo,
     Run,
     RunBg,
     Copy,
@@ -24,6 +25,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Workdir,
     Command::Workspace,
     Command::Env,
+    Command::Echo,
     Command::Run,
     Command::RunBg,
     Command::Copy,
@@ -160,6 +162,7 @@ impl Command {
             Command::Workdir => "WORKDIR",
             Command::Workspace => "WORKSPACE",
             Command::Env => "ENV",
+            Command::Echo => "ECHO",
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
@@ -208,6 +211,7 @@ pub enum StepKind {
     Workspace(WorkspaceTarget),
     Env { key: String, value: String },
     Run(String),
+    Echo(String),
     RunBg(String),
     Copy { from: String, to: String },
     Symlink { link: String, target: String },
@@ -292,6 +296,12 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     key: key.to_string(),
                     value,
                 }
+            }
+            Command::Echo => {
+                if rest.is_empty() {
+                    bail!("line {}: ECHO requires a message", idx + 1);
+                }
+                StepKind::Echo(rest.to_string())
             }
             Command::Run => {
                 if rest.is_empty() {
@@ -479,6 +489,10 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+            }
+            StepKind::Echo(msg) => {
+                // ECHO is a DSL primitive that writes a message to stdout in a cross-platform way.
+                println!("{}", msg);
             }
             StepKind::RunBg(cmd) => {
                 let mut command = shell_cmd(cmd);
@@ -912,6 +926,27 @@ mod tests {
         assert!(
             root.join("always.txt").exists(),
             "unguarded WRITE should run"
+        );
+    }
+
+    #[test]
+    fn echo_runs_and_allows_subsequent_steps() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc!(
+            r#"
+            ECHO Hello, world
+            WRITE always.txt ok
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            root.join("always.txt").exists(),
+            "WRITE after ECHO should run"
         );
     }
 
