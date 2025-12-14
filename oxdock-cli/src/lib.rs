@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -201,18 +201,6 @@ fn discover_workspace_root() -> Result<PathBuf> {
 }
 pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
-}
-
-fn shell_program() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
-    }
-
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-    }
 }
 
 fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {

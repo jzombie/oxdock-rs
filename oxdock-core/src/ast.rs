@@ -1066,7 +1066,7 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
 // No resolve_symlink_source: symlinks use the literal target string, which resolves at access time
 // relative to the link's directory. On unsupported platforms, we fall back to copying.
 
-fn shell_program() -> String {
+pub fn shell_program() -> String {
     #[cfg(windows)]
     {
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
@@ -1088,10 +1088,6 @@ fn shell_cmd(cmd: &str) -> ProcessCommand {
     }
     c
 }
-
-// Note: interactive shell (previously the `SHELL` step) is handled by the CLI
-// with `--shell`. The core library provides `shell_cmd` for running shell
-// commands (used by `RUN`/`RUN_BG`).
 
 #[allow(clippy::while_let_on_iterator)]
 fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
