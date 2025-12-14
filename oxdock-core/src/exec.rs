@@ -300,7 +300,6 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-
 fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
     fn helper(path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
         if *left == 0 {

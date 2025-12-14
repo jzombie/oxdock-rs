@@ -40,8 +40,6 @@ fn parse_basic_script() {
     }
 }
 
-
-
 #[test]
 fn parse_mkdir_ls_write() {
     let script = indoc! {

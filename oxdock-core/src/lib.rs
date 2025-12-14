@@ -1,9 +1,9 @@
 pub mod ast;
-pub mod resolver;
 pub mod exec;
+pub mod resolver;
 pub use ast::*;
-pub use resolver::PathResolver;
 pub use exec::*;
+pub use resolver::PathResolver;
 
 #[cfg(test)]
 mod tests {

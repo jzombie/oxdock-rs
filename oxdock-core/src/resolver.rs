@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +18,6 @@ impl AccessMode {
         }
     }
 }
-
 
 pub struct PathResolver {
     root: PathBuf,
@@ -63,8 +62,12 @@ impl PathResolver {
 
         fs::create_dir_all(&resolved)
             .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
-        let final_abs = fs::canonicalize(&resolved)
-            .with_context(|| format!("failed to canonicalize created WORKDIR {}", resolved.display()))?;
+        let final_abs = fs::canonicalize(&resolved).with_context(|| {
+            format!(
+                "failed to canonicalize created WORKDIR {}",
+                resolved.display()
+            )
+        })?;
         Ok(final_abs)
     }
 
@@ -183,4 +186,3 @@ fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathB
 
     Ok(cand_abs)
 }
-
