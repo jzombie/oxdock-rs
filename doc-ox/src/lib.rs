@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use doc_ox_dsl::{Guard, Step, StepKind, parse_script, run_steps};
+pub use doc_ox_dsl::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -52,14 +52,9 @@ impl Options {
 }
 
 pub fn execute(opts: Options) -> Result<()> {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?.as_str());
-    let workspace_root = manifest_dir
-        .parent()
-        .context(format!(
-            "{} manifest dir has no parent",
-            env!("CARGO_PKG_NAME")
-        ))?
-        .to_path_buf();
+    // Prefer the runtime env var when present (e.g., under `cargo run`), but fall back to the
+    // compile-time value so the binary can be invoked directly without CARGO_MANIFEST_DIR set.
+    let workspace_root = discover_workspace_root()?;
 
     let temp = tempfile::tempdir().context("failed to create temp dir")?;
     let temp_path = temp.path().to_path_buf();
@@ -87,13 +82,42 @@ pub fn execute(opts: Options) -> Result<()> {
         }
     };
     let steps = parse_script(&script)?;
-    run_script(&temp_path, &steps)?;
+    // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
+    // can source from the original tree if needed.
+    run_steps_with_context(&temp_path, &workspace_root, &steps)?;
 
     Ok(())
 }
 
+fn discover_workspace_root() -> Result<PathBuf> {
+    if let Ok(root) = std::env::var("DOC_OX_WORKSPACE_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        if let Some(parent) = PathBuf::from(manifest_dir).parent() {
+            return Ok(parent.to_path_buf());
+        }
+    }
+
+    // Prefer the git repository root of the current working directory.
+    if let Ok(output) = Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+
+    std::env::current_dir().context("failed to determine current directory for workspace root")
+}
 pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
-    run_steps(workspace_root, steps)
+    run_steps_with_context(workspace_root, workspace_root, steps)
 }
 fn run_cmd(cmd: &mut Command) -> Result<()> {
     let status = cmd

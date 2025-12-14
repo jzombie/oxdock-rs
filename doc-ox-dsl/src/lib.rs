@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus};
@@ -6,6 +7,8 @@ use std::process::{Child, Command as ProcessCommand, ExitStatus};
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     Workdir,
+    Workspace,
+    Env,
     Run,
     RunBg,
     Copy,
@@ -19,6 +22,8 @@ pub enum Command {
 
 pub const COMMANDS: &[Command] = &[
     Command::Workdir,
+    Command::Workspace,
+    Command::Env,
     Command::Run,
     Command::RunBg,
     Command::Copy,
@@ -140,6 +145,8 @@ impl Command {
     pub const fn as_str(self) -> &'static str {
         match self {
             Command::Workdir => "WORKDIR",
+            Command::Workspace => "WORKSPACE",
+            Command::Env => "ENV",
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
@@ -185,6 +192,8 @@ pub enum Guard {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StepKind {
     Workdir(String),
+    Workspace(WorkspaceTarget),
+    Env { key: String, value: String },
     Run(String),
     RunBg(String),
     Copy { from: String, to: String },
@@ -200,6 +209,12 @@ pub enum StepKind {
 pub struct Step {
     pub guards: Vec<Guard>,
     pub kind: StepKind,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum WorkspaceTarget {
+    Snapshot,
+    Local,
 }
 
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
@@ -240,6 +255,30 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     bail!("line {}: WORKDIR requires a path", idx + 1);
                 }
                 StepKind::Workdir(rest.to_string())
+            }
+            Command::Workspace => {
+                let target = match rest {
+                    "SNAPSHOT" | "snapshot" => WorkspaceTarget::Snapshot,
+                    "LOCAL" | "local" => WorkspaceTarget::Local,
+                    _ => bail!("line {}: WORKSPACE requires LOCAL or SNAPSHOT", idx + 1),
+                };
+                StepKind::Workspace(target)
+            }
+            Command::Env => {
+                let mut parts = rest.splitn(2, '=');
+                let key = parts
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
+                let value = parts
+                    .next()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("line {}: ENV requires KEY=VALUE", idx + 1))?;
+                StepKind::Env {
+                    key: key.to_string(),
+                    value,
+                }
             }
             Command::Run => {
                 if rest.is_empty() {
@@ -371,7 +410,9 @@ pub fn run_steps_with_context_result(
 
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
     let cargo_target_dir = fs_root.join(".cargo-target");
-    let mut cwd = fs_root.to_path_buf();
+    let mut root = fs_root.to_path_buf();
+    let mut cwd = root.clone();
+    let mut envs: HashMap<String, String> = HashMap::new();
     let mut bg_children: Vec<Child> = Vec::new();
 
     let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
@@ -402,12 +443,26 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
         }
         match &step.kind {
             StepKind::Workdir(path) => {
-                cwd = resolve_workdir(fs_root, &cwd, path)
+                cwd = resolve_workdir(&root, &cwd, path)
                     .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
+            }
+            StepKind::Workspace(target) => match target {
+                WorkspaceTarget::Snapshot => {
+                    root = fs_root.to_path_buf();
+                    cwd = root.clone();
+                }
+                WorkspaceTarget::Local => {
+                    root = build_context.to_path_buf();
+                    cwd = root.clone();
+                }
+            },
+            StepKind::Env { key, value } => {
+                envs.insert(key.clone(), value.clone());
             }
             StepKind::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
                 command.current_dir(&cwd);
+                command.envs(envs.iter());
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
@@ -415,6 +470,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             StepKind::RunBg(cmd) => {
                 let mut command = shell_cmd(cmd);
                 command.current_dir(&cwd);
+                command.envs(envs.iter());
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
                 let child = command
                     .spawn()
@@ -624,7 +680,6 @@ fn resolve_workdir(root: &Path, current: &Path, new_dir: &str) -> Result<PathBuf
     }
     bail!("WORKDIR does not exist: {}", candidate.display());
 }
-
 fn resolve_dest(cwd: &Path, rel: &str) -> PathBuf {
     if Path::new(rel).is_absolute() {
         PathBuf::from(rel)
@@ -1033,5 +1088,79 @@ mod tests {
             !root.join("late.txt").exists(),
             "background process should be killed when EXIT is hit"
         );
+    }
+
+    #[test]
+    fn env_applies_to_run_and_background() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc! {
+            r#"
+            ENV FOO=bar
+            RUN sh -c 'printf %s "$FOO" > run.txt'
+            RUN_BG sh -c 'printf %s "$FOO" > bg.txt'
+            "#
+        };
+
+        let steps = parse_script(script).unwrap();
+        run_steps(root, &steps).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("run.txt")).unwrap(),
+            "bar"
+        );
+        assert_eq!(std::fs::read_to_string(root.join("bg.txt")).unwrap(), "bar");
+    }
+
+    #[test]
+    fn workspace_switches_between_snapshot_and_local() {
+        let snapshot = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+
+        let script = indoc! {
+            r#"
+            WRITE snap.txt snap
+            WORKSPACE LOCAL
+            WRITE local.txt local
+            WORKSPACE SNAPSHOT
+            WRITE snap2.txt again
+            "#
+        };
+
+        let steps = parse_script(script).unwrap();
+        run_steps_with_context(snapshot.path(), local.path(), &steps).unwrap();
+
+        assert!(snapshot.path().join("snap.txt").exists());
+        assert!(snapshot.path().join("snap2.txt").exists());
+        assert!(local.path().join("local.txt").exists());
+    }
+
+    #[test]
+    fn workspace_root_changes_where_slash_points() {
+        let snapshot = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let local_client = local.path().join("client");
+        std::fs::create_dir_all(&local_client).unwrap();
+
+        let script = indoc! {
+            r#"
+            WORKSPACE LOCAL
+            WORKDIR /
+            WRITE localroot.txt one
+            WORKDIR client
+            WRITE client.txt two
+            WORKSPACE SNAPSHOT
+            WORKDIR /
+            WRITE snaproot.txt three
+            "#
+        };
+
+        let steps = parse_script(script).unwrap();
+        run_steps_with_context(snapshot.path(), local.path(), &steps).unwrap();
+
+        assert!(local.path().join("localroot.txt").exists());
+        assert!(local_client.join("client.txt").exists());
+        assert!(snapshot.path().join("snaproot.txt").exists());
     }
 }
