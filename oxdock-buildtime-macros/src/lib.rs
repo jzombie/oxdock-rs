@@ -1,3 +1,5 @@
+// TODO: Add non-embedded `prepare` macro.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use std::fs;
