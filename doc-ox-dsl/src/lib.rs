@@ -14,6 +14,7 @@ pub enum Command {
     Ls,
     Write,
     Shell,
+    Exit,
 }
 
 pub const COMMANDS: &[Command] = &[
@@ -26,6 +27,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Ls,
     Command::Write,
     Command::Shell,
+    Command::Exit,
 ];
 
 fn platform_matches(target: PlatformGuard) -> bool {
@@ -146,6 +148,7 @@ impl Command {
             Command::Ls => "LS",
             Command::Write => "WRITE",
             Command::Shell => "SHELL",
+            Command::Exit => "EXIT",
         }
     }
 
@@ -190,6 +193,7 @@ pub enum StepKind {
     Ls(Option<String>),
     Write { path: String, contents: String },
     Shell,
+    Exit(i32),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -303,6 +307,15 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                 }
             }
             Command::Shell => StepKind::Shell,
+            Command::Exit => {
+                if rest.is_empty() {
+                    bail!("line {}: EXIT requires a code", idx + 1);
+                }
+                let code: i32 = rest.parse().map_err(|_| {
+                    anyhow::anyhow!("line {}: EXIT code must be an integer", idx + 1)
+                })?;
+                StepKind::Exit(code)
+            }
         };
 
         steps.push(Step { guards, kind });
@@ -480,6 +493,17 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
             StepKind::Shell => {
                 run_shell(&cwd)?;
+            }
+            StepKind::Exit(code) => {
+                // Tear down backgrounds before exiting.
+                for child in bg_children.iter_mut() {
+                    if child.try_wait()?.is_none() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+                bg_children.clear();
+                bail!("EXIT requested with code {}", code);
             }
         }
 
@@ -985,6 +1009,29 @@ mod tests {
         assert!(
             elapsed.as_secs_f32() < 0.45 && elapsed.as_secs_f32() > 0.15,
             "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_terminates_backgrounds_and_returns_code() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc! {
+            r#"
+            RUN_BG sh -c 'sleep 1; echo late > late.txt'
+            EXIT 5
+            "#
+        };
+
+        let steps = parse_script(script).unwrap();
+        let err = run_steps(root, &steps).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("EXIT requested with code 5"));
+        assert!(
+            !root.join("late.txt").exists(),
+            "background process should be killed when EXIT is hit"
         );
     }
 }
