@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/OxDock-logo.svg" alt="OxDock logo" width="240"/>
+  <img src="assets/OxDock-logo.svg" alt="OxDock logo" width="360"/>
 </div>
 
 <div align="center">
