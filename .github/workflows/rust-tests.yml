@@ -1,0 +1,123 @@
+name: rust-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Ensure only one run per branch/PR at a time. If new commits are pushed,
+# older jobs will be automatically canceled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test_matrix:
+    name: test (OS=${{ matrix.os }}, Features=${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - name: "All Features"
+            flags: "--all-features"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Free disk space on Linux runner
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+
+      - name: Capture rustc commit hash
+        id: rustc
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc -Vv
+          echo "hash=$(rustc -Vv | sed -n 's/^commit-hash: //p')" >> "$GITHUB_OUTPUT"
+
+      # Workaround for macOS error when using `hashFiles`:
+      # "Error: The template is not valid....Fail to hash files under directory"
+      - name: Calculate lockfile hash
+        id: lockfile
+        shell: bash
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH=$(sha256sum Cargo.lock | awk '{print $1}')
+          elif command -v shasum >/dev/null 2>&1; then
+            HASH=$(shasum -a 256 Cargo.lock | awk '{print $1}')
+          else
+            echo "No hashing utility found"
+            exit 1
+          fi
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      # Added caching step to speed up dependency builds.
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ steps.rustc.outputs.hash }}-${{ steps.lockfile.outputs.hash }}-${{ matrix.flags }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc.outputs.hash }}-${{ steps.lockfile.outputs.hash }}-
+
+      - name: Test
+        run: cargo test --workspace --all-features --lib --bins --tests --examples -- --include-ignored
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: test_matrix
+    if: ${{ always() }}
+    steps:
+      - name: Evaluate matrix results
+        run: |
+          result="${{ needs.test_matrix.result }}"
+          echo "Matrix job concluded with: ${result}"
+          if [ "${result}" != "success" ]; then
+            exit 1
+          fi
+          echo "All platform combinations succeeded."
+
+# TODO: Implement
+# Runs the Miri interpreter across all OS targets to detect undefined behavior in unsafe code
+#   miri:
+#     name: Miri (OS=${{ matrix.os }})
+#     runs-on: ${{ matrix.os }}
+#     strategy:
+#       fail-fast: false
+#       matrix:
+#         os: [ubuntu-latest, macos-latest, windows-latest]
+
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v6
+
+#       - name: Install nightly toolchain with Miri
+#         uses: dtolnay/rust-toolchain@nightly
+#         with:
+#           components: miri
+
+# TODO: To effectively use this a custom test-only, Miri-friendly pager may need to be created
+# and feature gated to only use `EntryHandle` (mmap-backed). This should be modified to test
+# integration tests as well, not only `--lib` tests.
+#   - name: Run Miri tests
+#     # Miri cannot emulate the OS-backed mmap calls used by our integration tests, so
+#     # we limit the run to library tests (unit tests) for now.
+#     run: cargo miri test -p llkv-column-map --lib
