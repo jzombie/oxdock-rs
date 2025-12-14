@@ -21,11 +21,13 @@ pub enum ScriptSource {
 #[derive(Debug, Clone)]
 pub struct Options {
     pub script: ScriptSource,
+    pub shell: bool,
 }
 
 impl Options {
     pub fn parse(args: &mut impl Iterator<Item = String>) -> Result<Self> {
         let mut script: Option<ScriptSource> = None;
+        let mut shell = false;
         while let Some(arg) = args.next() {
             if arg.is_empty() {
                 continue;
@@ -41,13 +43,16 @@ impl Options {
                         script = Some(ScriptSource::Path(PathBuf::from(p)));
                     }
                 }
+                "--shell" => {
+                    shell = true;
+                }
                 other => bail!("unexpected flag: {}", other),
             }
         }
 
         let script = script.unwrap_or(ScriptSource::Stdin);
 
-        Ok(Self { script })
+        Ok(Self { script, shell })
     }
 }
 
@@ -61,6 +66,15 @@ pub fn execute(opts: Options) -> Result<()> {
 
     // Materialize source tree without .git
     archive_head(&workspace_root, &temp_path)?;
+
+    // Drop into an interactive shell if requested.
+    if opts.shell {
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            bail!("--shell requires a tty (stdin is piped)");
+        }
+        return run_shell(&temp_path);
+    }
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
@@ -118,6 +132,66 @@ fn discover_workspace_root() -> Result<PathBuf> {
 }
 pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
+}
+
+fn shell_program() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+    }
+}
+
+fn run_shell(cwd: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new(shell_program());
+        cmd.current_dir(cwd);
+
+        // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
+        if let Ok(tty) = fs::File::open("/dev/tty") {
+            cmd.stdin(tty);
+        }
+
+        let status = cmd.status()?;
+        if !status.success() {
+            bail!("shell exited with status {}", status);
+        }
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let mut cmd = Command::new(shell_program());
+        cmd.current_dir(cwd).arg("/K");
+
+        // Reattach stdin to the console if available; CONIN$ is the Windows console input device.
+        if let Ok(con) = fs::File::open("CONIN$") {
+            cmd.stdin(con);
+        }
+
+        // CREATE_NEW_CONSOLE (0x00000010) to ensure we get an interactive console if none is attached.
+        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+
+        let status = cmd.status()?;
+        if !status.success() {
+            bail!("shell exited with status {}", status);
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = cwd;
+        bail!("interactive shell unsupported on this platform");
+    }
 }
 fn run_cmd(cmd: &mut Command) -> Result<()> {
     let status = cmd

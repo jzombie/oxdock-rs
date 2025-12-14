@@ -85,6 +85,7 @@ fn parse_options_accepts_stdin_dash() {
         ScriptSource::Stdin => {}
         _ => panic!("expected stdin source when passing '-'"),
     }
+    assert!(!opts.shell);
 }
 
 #[test]
@@ -94,5 +95,17 @@ fn parse_options_defaults_to_stdin() {
     match opts.script {
         ScriptSource::Stdin => {}
         _ => panic!("expected stdin source by default"),
+    }
+    assert!(!opts.shell);
+}
+
+#[test]
+fn parse_options_accepts_shell_flag() {
+    let mut args = "--shell".split_whitespace().map(String::from);
+    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    assert!(opts.shell);
+    match opts.script {
+        ScriptSource::Stdin => {}
+        _ => panic!("expected stdin default even when shell is requested"),
     }
 }
