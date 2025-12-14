@@ -108,10 +108,10 @@ fn discover_workspace_root() -> Result<PathBuf> {
         return Ok(PathBuf::from(root));
     }
 
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        if let Some(parent) = PathBuf::from(manifest_dir).parent() {
-            return Ok(parent.to_path_buf());
-        }
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
+        && let Some(parent) = PathBuf::from(manifest_dir).parent()
+    {
+        return Ok(parent.to_path_buf());
     }
 
     // Prefer the git repository root of the current working directory.
@@ -119,12 +119,11 @@ fn discover_workspace_root() -> Result<PathBuf> {
         .arg("rev-parse")
         .arg("--show-toplevel")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
-            }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -161,7 +160,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
         if !status.success() {
             bail!("shell exited with status {}", status);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -184,7 +183,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
         if !status.success() {
             bail!("shell exited with status {}", status);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(unix, windows)))]

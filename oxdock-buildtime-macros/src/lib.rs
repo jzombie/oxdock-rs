@@ -128,12 +128,10 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
             return;
         }
         let next_char = frag.chars().next().unwrap_or(' ');
-        if let Some(prev) = buf.chars().rev().find(|c| !c.is_whitespace()) {
-            if force_space && !prev.is_whitespace() {
-                buf.push(' ');
-            } else if needs_space(prev, next_char) {
-                buf.push(' ');
-            }
+        if let Some(prev) = buf.chars().rev().find(|c| !c.is_whitespace())
+            && ((force_space && !prev.is_whitespace()) || needs_space(prev, next_char))
+        {
+            buf.push(' ');
         }
         buf.push_str(frag);
     }
@@ -737,16 +735,11 @@ mod tests {
             .iter()
             .find(|a| a.path().is_ident("folder"))
             .expect("folder attribute present");
-        match attr.meta {
-            syn::Meta::NameValue(ref nv) => match &nv.value {
-                syn::Expr::Lit(expr_lit) => {
-                    if let syn::Lit::Str(ref litstr) = expr_lit.lit {
-                        return litstr.value();
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        if let syn::Meta::NameValue(ref nv) = attr.meta
+            && let syn::Expr::Lit(expr_lit) = &nv.value
+            && let syn::Lit::Str(ref litstr) = expr_lit.lit
+        {
+            return litstr.value();
         }
         panic!("folder attribute did not contain a string literal");
     }

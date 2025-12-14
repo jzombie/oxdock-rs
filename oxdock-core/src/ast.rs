@@ -47,7 +47,7 @@ fn platform_matches(target: PlatformGuard) -> bool {
 }
 
 fn guard_allows(guard: &Guard, script_envs: &std::collections::HashMap<String, String>) -> bool {
-    let allowed = match guard {
+    match guard {
         Guard::Platform { target, invert } => {
             let res = platform_matches(*target);
             if *invert { !res } else { res }
@@ -70,8 +70,7 @@ fn guard_allows(guard: &Guard, script_envs: &std::collections::HashMap<String, S
                 .unwrap_or(false);
             if *invert { !res } else { res }
         }
-    };
-    allowed
+    }
 }
 
 fn guard_group_allows(
@@ -625,7 +624,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 let mut entries: Vec<_> = fs::read_dir(&dir)
                     .with_context(|| format!("failed to read dir {}", dir.display()))?
                     .collect::<Result<_, _>>()?;
-                entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+                entries.sort_by_key(|a| a.file_name());
                 println!("{}:", dir.display());
                 for entry in entries {
                     println!("{}", entry.file_name().to_string_lossy());
@@ -817,7 +816,7 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
             Err(_) => return,
         };
         let mut names: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-        names.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        names.sort_by_key(|a| a.file_name());
         for entry in names {
             if *left == 0 {
                 return;
@@ -883,7 +882,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
         if !status.success() {
             bail!("shell exited with status {}", status);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -916,6 +915,7 @@ fn run_shell(cwd: &Path) -> Result<()> {
     }
 }
 
+#[allow(clippy::while_let_on_iterator)]
 fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();
