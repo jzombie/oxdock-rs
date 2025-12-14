@@ -44,26 +44,39 @@ fn platform_matches(target: PlatformGuard) -> bool {
     }
 }
 
-fn guard_allows(guard: &Guard) -> bool {
+fn guard_allows(guard: &Guard, script_envs: &std::collections::HashMap<String, String>) -> bool {
     let allowed = match guard {
         Guard::Platform { target, invert } => {
             let res = platform_matches(*target);
             if *invert { !res } else { res }
         }
         Guard::EnvExists { key, invert } => {
-            let res = std::env::var(key).map(|v| !v.is_empty()).unwrap_or(false);
+            let res = script_envs
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
             if *invert { !res } else { res }
         }
         Guard::EnvEquals { key, value, invert } => {
-            let res = std::env::var(key).map(|v| v == *value).unwrap_or(false);
+            let res = script_envs
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+                .map(|v| v == *value)
+                .unwrap_or(false);
             if *invert { !res } else { res }
         }
     };
     allowed
 }
 
-fn guards_allow_all(guards: &[Guard]) -> bool {
-    guards.iter().all(guard_allows)
+fn guards_allow_all(
+    guards: &[Guard],
+    script_envs: &std::collections::HashMap<String, String>,
+) -> bool {
+    guards.iter().all(|g| guard_allows(g, script_envs))
 }
 
 fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
@@ -438,7 +451,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     };
 
     for (idx, step) in steps.iter().enumerate() {
-        if !guards_allow_all(&step.guards) {
+        if !guards_allow_all(&step.guards, &envs) {
             continue;
         }
         match &step.kind {
@@ -874,6 +887,32 @@ mod tests {
             "guarded WRITE should be skipped"
         );
         assert!(root.join("kept.txt").exists(), "unguarded WRITE should run");
+    }
+
+    #[test]
+    fn guard_sees_env_set_by_env_step() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let script = indoc!(
+            r#"
+            ENV FOO=1
+            [env:FOO] WRITE hit.txt yes
+            WRITE always.txt ok
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(root, &steps).unwrap();
+
+        assert!(
+            root.join("hit.txt").exists(),
+            "guarded WRITE should run after ENV sets variable"
+        );
+        assert!(
+            root.join("always.txt").exists(),
+            "unguarded WRITE should run"
+        );
     }
 
     #[test]
