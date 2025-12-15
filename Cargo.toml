@@ -5,8 +5,9 @@ members = [
     "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
     "oxdock-cli",
     "oxdock-core",
+	"oxdock-fs",
 ]
-default-members = ["oxdock-cli", "oxdock-core", "oxdock-buildtime-macros"]
+default-members = ["oxdock-cli", "oxdock-core", "oxdock-buildtime-macros", "oxdock-fs"]
 resolver = "2"
 
 [workspace.package]
@@ -21,6 +22,7 @@ publish = true
 anyhow = "1.0.100"
 indoc = "2.0.7"
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-alpha" }
+oxdock-fs = { path = "oxdock-fs", version = "0.1.0-alpha" }
 
 # Internal crates
 oxdock-core = { path = "oxdock-core", version = "0.1.0-alpha" }
