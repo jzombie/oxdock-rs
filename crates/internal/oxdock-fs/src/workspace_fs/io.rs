@@ -37,7 +37,8 @@ impl PathResolver {
         let guarded = self
             .check_access(path, AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
-        let data = fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
+        let data =
+            fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
         Ok(data)
     }
 
@@ -114,7 +115,8 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {
-        let f = fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+        let f =
+            fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
         Ok(f)
     }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use std::process::Command;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use super::{AccessMode, PathResolver};
 
@@ -34,7 +34,9 @@ impl PathResolver {
             .arg(format!("{}:{}", rev, from))
             .output();
 
-        if let Ok(tout) = cat_type && tout.status.success() {
+        if let Ok(tout) = cat_type
+            && tout.status.success()
+        {
             let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
             if typ == "blob" {
                 let show = Command::new("git")

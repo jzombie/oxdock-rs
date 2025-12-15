@@ -47,9 +47,9 @@ impl PathResolver {
 }
 
 mod access;
-mod io;
 mod copy;
 mod git;
+mod io;
 mod resolve;
 
 // PathResolver is exported at crate root via `lib.rs` re-export.

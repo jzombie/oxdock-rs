@@ -31,7 +31,10 @@ impl PathResolver {
         fs::create_dir_all(&resolved)
             .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
         let final_abs = fs::canonicalize(&resolved).with_context(|| {
-            format!("failed to canonicalize created WORKDIR {}", resolved.display())
+            format!(
+                "failed to canonicalize created WORKDIR {}",
+                resolved.display()
+            )
         })?;
         Ok(final_abs)
     }

@@ -255,13 +255,14 @@ fn execute_steps(
             }
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
-                    let real = canonical_cwd(state.resolver.as_ref(), &state.cwd).with_context(|| {
-                    format!(
-                        "step {}: CWD failed to canonicalize {}",
-                        idx + 1,
-                        state.cwd.display()
-                    )
-                })?;
+                let real =
+                    canonical_cwd(state.resolver.as_ref(), &state.cwd).with_context(|| {
+                        format!(
+                            "step {}: CWD failed to canonicalize {}",
+                            idx + 1,
+                            state.cwd.display()
+                        )
+                    })?;
                 writeln!(out, "{}", real)?;
             }
             StepKind::Cat(path) => {

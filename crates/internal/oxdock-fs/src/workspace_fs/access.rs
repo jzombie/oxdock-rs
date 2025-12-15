@@ -89,7 +89,11 @@ impl PathResolver {
         Ok(cand_abs)
     }
 
-    pub(crate) fn check_access(&self, candidate: &Path, mode: AccessMode) -> Result<std::path::PathBuf> {
+    pub(crate) fn check_access(
+        &self,
+        candidate: &Path,
+        mode: AccessMode,
+    ) -> Result<std::path::PathBuf> {
         self.check_access_with_root(&self.root, candidate, mode)
     }
 }
