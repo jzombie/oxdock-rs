@@ -1,6 +1,6 @@
 // TODO: Add no-stdlib tests
 
-use oxdock_fs::{GuardedPath, PathResolver, UnguardedPath};
+use oxdock_fs::{GuardedPath, PathResolver};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -451,6 +451,9 @@ fn build_assets(
         oxdock_core::run_steps_with_context_result(&temp_root_guard, &build_context, &steps)
             .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
+    #[allow(clippy::disallowed_types)]
+    let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
+
     eprintln!(
         "embed: final workdir {} (temp root {})",
         final_cwd.display(),
@@ -458,7 +461,7 @@ fn build_assets(
     );
 
     let meta = resolver
-        .metadata_external(&UnguardedPath::new(final_cwd.as_path().to_path_buf()))
+        .metadata_external(&final_cwd_external)
         .map_err(|e| {
             syn::Error::new(
                 span,
@@ -488,10 +491,7 @@ fn build_assets(
     }
 
     resolver
-        .copy_dir_from_external(
-            &UnguardedPath::new(final_cwd.as_path().to_path_buf()),
-            out_dir,
-        )
+        .copy_dir_from_external(&final_cwd_external, out_dir)
         .map_err(|e| {
             syn::Error::new(
                 span,
@@ -569,8 +569,10 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
+    #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
     use std::env;

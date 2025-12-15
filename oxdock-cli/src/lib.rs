@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver, UnguardedPath};
+use oxdock_fs::{GuardedPath, PathResolver};
 use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::process::{Command, Stdio};
@@ -202,8 +202,10 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("temp path unexpectedly missing parent"))?;
     let resolver_temp = PathResolver::new(temp_root_guard.as_path(), temp_root_guard.as_path())?;
     let dest = temp_file;
+    #[allow(clippy::disallowed_types)]
+    let source = oxdock_fs::UnguardedPath::new(self_path);
     resolver_temp
-        .copy_file_from_external(&UnguardedPath::new(self_path), &dest)
+        .copy_file_from_external(&source, &dest)
         .with_context(|| format!("failed to copy shell runner to {}", dest.display()))?;
 
     let mut cmd = Command::new(dest.as_path());
@@ -285,7 +287,8 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
-        let tty_path = UnguardedPath::new("/dev/tty");
+        #[allow(clippy::disallowed_types)]
+        let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
         if let Ok(resolver) = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
             && let Ok(tty) = resolver.open_external_file(&tty_path)
         {
