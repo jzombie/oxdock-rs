@@ -252,11 +252,11 @@ pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
 }
 
-// TODO: Include mention that this is still using the user's filesystem, and can result in destructive actions outside of the workspace
 fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
     format!(
-        "{} shell workspace: {} (materialized from git HEAD at {})",
+        "{} shell workspace: {} (materialized from git HEAD at {})\n\
+WARNING: This shell is still using your filesystem and can result in destructive actions outside of the workspace.",
         pkg,
         cwd.display(),
         workspace_root.display()
