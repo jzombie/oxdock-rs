@@ -1,6 +1,5 @@
 // Workspace-scoped path resolver with guarded file operations.
 // Methods are split across submodules by concern (access checks, IO, copy, git, resolve helpers).
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use anyhow::{Context, Result};
 use std::path::Path;
