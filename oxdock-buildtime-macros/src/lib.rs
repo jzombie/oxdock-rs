@@ -49,13 +49,13 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let manifest_resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let should_build = has_git;
+    let should_build = has_git || is_primary;
 
     let out_dir_str = input.out_dir.value();
     let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
@@ -286,13 +286,14 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
-    // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
+    // Allow building whenever the crate is the primary package or a Git checkout is present.
+    // In a crates.io tarball (no .git) or when compiling as a non-primary package, we
     // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
     // rebuild even if an out_dir already exists via OXDOCK_EMBED_FORCE_REBUILD.
     let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let should_build = has_git || force_rebuild;
+    let should_build = has_git || _is_primary || force_rebuild;
 
     let name = &input.name;
 
