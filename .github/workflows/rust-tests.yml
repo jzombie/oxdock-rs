@@ -155,3 +155,20 @@ jobs:
           # Enable file open operations
           MIRIFLAGS: -Zmiri-disable-isolation
         run: cargo miri test --workspace --all-features --lib --tests
+
+      - name: Report Miri coverage
+        shell: bash
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          set -euo pipefail
+          list_cmd="cargo miri test --workspace --all-features --lib --tests"
+          total=$($list_cmd -- --list --format terse | grep -c ': test' || true)
+          ignored=$($list_cmd -- --ignored --list --format terse | grep -c ': test' || true)
+          run_cnt=$((total - ignored))
+          if [ "$total" -eq 0 ]; then
+            ratio="n/a"
+          else
+            ratio=$(awk -v r="$run_cnt" -v t="$total" 'BEGIN { printf "%.1f%%", (r / t) * 100 }')
+          fi
+          echo "Miri runnable tests: ${run_cnt}/${total} (${ratio})"
