@@ -1,11 +1,10 @@
 #![allow(clippy::disallowed_methods)]
 
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
-use oxdock_fs::PathResolver;
-use std::path::Path;
+use oxdock_fs::{PathResolver, path::Path};
 use tempfile::tempdir;
 
-fn read_trimmed(path: &std::path::Path) -> String {
+fn read_trimmed(path: &Path) -> String {
     let root = path.parent().unwrap_or(path);
     let resolver = PathResolver::new(root, root);
     resolver

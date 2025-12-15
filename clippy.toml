@@ -21,4 +21,11 @@ disallowed-methods = [
   "std::fs::rename",
   "std::fs::write",
   "std::path::Path::canonicalize",
+  "std::path::Path::new",
+]
+
+# Keep std::path usage funneled through the filesystem abstraction.
+disallowed-types = [
+  "std::path::Path",
+  "std::path::PathBuf",
 ]

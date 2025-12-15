@@ -173,7 +173,7 @@ impl PathResolver {
             std::os::unix::fs::symlink(&guarded_src, &guarded_dst).with_context(|| {
                 format!("failed to symlink {} -> {}", guarded_src.display(), guarded_dst.display())
             })?;
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(all(windows, not(unix)))]
@@ -216,7 +216,7 @@ impl PathResolver {
                 }
             }
 
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -242,7 +242,7 @@ impl PathResolver {
                     )
                 })?;
             }
-            return Ok(());
+            Ok(())
         }
     }
 }

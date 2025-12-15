@@ -1,9 +1,10 @@
+#![deny(clippy::disallowed_methods)]
+
 // TODO: Add no-stdlib tests
 
-use oxdock_fs::PathResolver;
+use oxdock_fs::{PathResolver, path::{Path, PathBuf}};
 use proc_macro::TokenStream;
 use quote::quote;
-use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
 
@@ -47,9 +48,9 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
         ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
     };
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let manifest_path = Path::new(&manifest_dir);
+    let manifest_resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let manifest_path = manifest_resolver.root().to_path_buf();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -63,7 +64,7 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
         }
         false
     }
-    let has_git = find_git_root(manifest_path);
+    let has_git = find_git_root(&manifest_path);
     let should_build = has_git;
 
     let out_dir_str = input.out_dir.value();
@@ -281,9 +282,9 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
     };
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let manifest_path = Path::new(&manifest_dir);
+    let manifest_resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let manifest_path = manifest_resolver.root().to_path_buf();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -299,7 +300,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         }
         false
     }
-    let has_git = find_git_root(manifest_path);
+    let has_git = find_git_root(&manifest_path);
     // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
     // require the caller to supply an out_dir instead of trying to rebuild.
     let should_build = has_git;
@@ -384,10 +385,8 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
 
 fn preflight_out_dir_for_build(out_dir: &Path, out_dir_span: proc_macro2::Span) -> syn::Result<()> {
     // Build a resolver rooted at the manifest; ensure out_dir is created
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(out_dir_span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let manifest_path = Path::new(&manifest_dir);
-    let resolver = PathResolver::new(manifest_path, manifest_path);
+    let resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(out_dir_span, e.to_string()))?;
 
     // Ensure out_dir exists
     if out_dir.exists() {
@@ -439,13 +438,11 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
     let steps = oxdock_core::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let build_context = std::path::Path::new(&manifest_dir);
-    let manifest_path = std::path::Path::new(&manifest_dir);
-    let resolver = PathResolver::new(manifest_path, build_context);
+    let resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let build_context = resolver.build_context().to_path_buf();
 
-    let final_cwd = oxdock_core::run_steps_with_context_result(&temp_root, build_context, &steps)
+    let final_cwd = oxdock_core::run_steps_with_context_result(&temp_root, &build_context, &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     eprintln!(
@@ -502,10 +499,8 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
 
 fn clear_dir(dir: &Path, span: proc_macro2::Span) -> syn::Result<()> {
     // Use PathResolver for deletions to keep filesystem access centralized.
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let manifest_path = Path::new(&manifest_dir);
-    let resolver = PathResolver::new(manifest_path, manifest_path);
+    let resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
 
     // Validate dir is a directory (use std as this is already an existing path under manifest)
     if !dir.is_dir() {
@@ -547,10 +542,8 @@ fn clear_dir(dir: &Path, span: proc_macro2::Span) -> syn::Result<()> {
 }
 
 fn count_entries(dir: &Path, span: proc_macro2::Span) -> syn::Result<usize> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
-    let manifest_path = Path::new(&manifest_dir);
-    let resolver = PathResolver::new(manifest_path, manifest_path);
+    let resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
     let entries = resolver
         .read_dir_entries(dir)
         .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
@@ -705,7 +698,7 @@ mod tests {
 
         let folder_path = folder_attr_path(&ts);
         assert_eq!(
-            std::path::Path::new(&folder_path),
+            PathBuf::from(&folder_path),
             assets_abs,
             "should point folder to out_dir abs path"
         );
@@ -772,7 +765,7 @@ mod tests {
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
         let folder_path = folder_attr_path(&ts);
 
-        let copied = std::path::Path::new(&folder_path).join("copied.txt");
+        let copied = PathBuf::from(&folder_path).join("copied.txt");
         let contents = resolver
             .read_to_string(&copied)
             .expect("copied file readable");
@@ -821,13 +814,13 @@ mod tests {
             "folder should be the out_dir path"
         );
 
-        let inside = std::path::Path::new(&folder_path).join("hello.txt");
+        let inside = PathBuf::from(&folder_path).join("hello.txt");
         assert!(
             inside.exists(),
             "file in final WORKDIR should exist in out_dir"
         );
 
-        let outside = std::path::Path::new(&folder_path).join("outside.txt");
+        let outside = PathBuf::from(&folder_path).join("outside.txt");
         assert!(
             !outside.exists(),
             "only final WORKDIR contents should be copied into out_dir"

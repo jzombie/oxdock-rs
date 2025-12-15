@@ -1,6 +1,10 @@
 pub mod workspace_fs;
 pub use workspace_fs::PathResolver;
 
+// Re-export std path types so dependent crates can avoid importing `std::path` directly.
+pub mod path {
+    pub use std::path::{Path, PathBuf};
+}
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 

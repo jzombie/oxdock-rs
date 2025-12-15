@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{AccessMode, PathResolver};
@@ -9,7 +9,7 @@ use super::{AccessMode, PathResolver};
 impl PathResolver {
     #[allow(clippy::disallowed_methods)]
     pub fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
-        if Path::new(from).is_absolute() {
+        if PathBuf::from(from).is_absolute() {
             bail!("COPY_GIT source must be relative to build context");
         }
 

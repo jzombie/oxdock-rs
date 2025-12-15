@@ -1,8 +1,9 @@
+#![deny(clippy::disallowed_methods)]
+
 use anyhow::{Context, Result, bail};
-use oxdock_fs::PathResolver;
+use oxdock_fs::{PathResolver, path::{Path, PathBuf}};
 use std::env;
 use std::io::{self, IsTerminal, Read};
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub use oxdock_core::{
@@ -45,7 +46,7 @@ impl Options {
                     if p == "-" {
                         script = Some(ScriptSource::Stdin);
                     } else {
-                        script = Some(ScriptSource::Path(PathBuf::from(p)));
+                        script = Some(ScriptSource::Path(p.into()));
                     }
                 }
                 "--shell" => {
@@ -196,8 +197,9 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     // outside the temp dir, so use `copy_file_from_external`.
     let temp_root = temp_path
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("/"));
-    let resolver_temp = PathResolver::new(temp_root, temp_root);
+        .ok_or_else(|| anyhow::anyhow!("temp path unexpectedly missing parent"))?
+        .to_path_buf();
+    let resolver_temp = PathResolver::new(&temp_root, &temp_root);
     resolver_temp
         .copy_file_from_external(&self_path, &temp_path)
         .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
@@ -215,11 +217,11 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
 
 fn discover_workspace_root() -> Result<PathBuf> {
     if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
-        return Ok(PathBuf::from(root));
+        return Ok(root.into());
     }
 
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
-        && let Some(parent) = PathBuf::from(manifest_dir).parent()
+    if let Ok(resolver) = PathResolver::from_manifest_env()
+        && let Some(parent) = resolver.root().parent()
     {
         return Ok(parent.to_path_buf());
     }
@@ -233,7 +235,7 @@ fn discover_workspace_root() -> Result<PathBuf> {
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !path.is_empty() {
-            return Ok(PathBuf::from(path));
+            return Ok(path.into());
         }
     }
 
@@ -277,8 +279,9 @@ fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
+        let tty_path: PathBuf = "/dev/tty".into();
         if let Ok(tty) = PathResolver::new(workspace_root, workspace_root)
-            .open_external_file(Path::new("/dev/tty"))
+            .open_external_file(&tty_path)
         {
             cmd.stdin(tty);
         }
@@ -329,33 +332,27 @@ fn run_cmd(cmd: &mut Command) -> Result<()> {
 }
 
 // TODO: Don't hardcode internal config
-// TODO: FS calls should use internal filesystem crate
 fn open_editor_and_read() -> Result<String> {
     // Create a named temp file for editing.
     let tmp = tempfile::NamedTempFile::new().context("create temp file for editor")?;
     let path = tmp.path().to_path_buf();
 
     // Determine a per-user cache path to store the last inline script.
-    fn last_inline_path() -> Option<std::path::PathBuf> {
+    fn last_inline_path() -> Option<PathBuf> {
         if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
-            return Some(
-                std::path::PathBuf::from(x)
-                    .join("oxdock")
-                    .join("last_inline"),
-            );
+            let root: PathBuf = x.into();
+            return Some(root.join("oxdock").join("last_inline"));
         }
-        if cfg!(windows) {
-            if let Ok(app) = std::env::var("APPDATA") {
-                return Some(
-                    std::path::PathBuf::from(app)
-                        .join("oxdock")
-                        .join("last_inline"),
-                );
-            }
+        if cfg!(windows)
+            && let Ok(app) = std::env::var("APPDATA")
+        {
+            let appdata: PathBuf = app.into();
+            return Some(appdata.join("oxdock").join("last_inline"));
         }
         if let Ok(home) = std::env::var("HOME") {
+            let home_dir: PathBuf = home.into();
             return Some(
-                std::path::PathBuf::from(home)
+                home_dir
                     .join(".config")
                     .join("oxdock")
                     .join("last_inline"),
@@ -366,11 +363,20 @@ fn open_editor_and_read() -> Result<String> {
 
     // If a cached inline script exists, preload it into the temp file so the
     // editor opens with the previous content.
-    if let Some(cache) = last_inline_path() {
-        if cache.exists() {
-            if let Ok(prev) = std::fs::read_to_string(&cache) {
-                let _ = std::fs::write(&path, prev);
-            }
+    if let Some(cache) = last_inline_path()
+        && let Some(cache_parent) = cache.parent()
+    {
+        let cache_fs = PathResolver::new(cache_parent, cache_parent);
+        if cache_fs.metadata_abs(&cache).is_ok()
+            && let Ok(prev) = cache_fs.read_to_string(&cache)
+        {
+            // NamedTempFile always has a parent; enforce it instead of
+            // ever falling back to the filesystem root.
+            let tmp_root = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("temp file unexpectedly missing parent"))?;
+            let tmp_fs = PathResolver::new(tmp_root, tmp_root);
+            let _ = tmp_fs.write_file(&path, prev.as_bytes());
         }
     }
 
@@ -399,18 +405,23 @@ fn open_editor_and_read() -> Result<String> {
     }
 
     // Read the file contents back (tmp stays until drop)
-    let mut contents = String::new();
-    std::fs::File::open(&path)
-        .and_then(|mut f| f.read_to_string(&mut contents))
+    let tmp_root = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("temp file unexpectedly missing parent"))?
+        .to_path_buf();
+    let tmp_fs = PathResolver::new(&tmp_root, &tmp_root);
+    let contents = tmp_fs
+        .read_to_string(&path)
         .with_context(|| format!("failed to read edited file {}", path.display()))?;
 
     // Save the edited script back to the cache for next time. Ignore errors
     // so the editor flow remains best-effort.
-    if let Some(cache) = last_inline_path() {
-        if let Some(parent) = cache.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&cache, &contents);
+    if let Some(cache) = last_inline_path()
+        && let Some(parent) = cache.parent()
+    {
+        let cache_fs = PathResolver::new(parent, parent);
+        let _ = cache_fs.create_dir_all_abs(parent);
+        let _ = cache_fs.write_file(&cache, contents.as_bytes());
     }
 
     Ok(contents)

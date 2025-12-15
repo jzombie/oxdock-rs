@@ -10,11 +10,11 @@ pub use exec::*;
 mod tests {
     use super::*;
     use indoc::indoc;
-    use oxdock_fs::PathResolver;
+    use oxdock_fs::{PathResolver, path::Path};
     #[cfg(unix)]
     use std::time::Instant;
 
-    fn read_trimmed(path: &std::path::Path) -> String {
+    fn read_trimmed(path: &Path) -> String {
         let root = path.parent().unwrap_or(path);
         let resolver = PathResolver::new(root, root);
         resolver
@@ -24,7 +24,7 @@ mod tests {
             .to_string()
     }
 
-    fn create_dirs(path: &std::path::Path) {
+    fn create_dirs(path: &Path) {
         let root = path.parent().unwrap_or(path);
         let resolver = PathResolver::new(root, root);
         resolver.create_dir_all_abs(path).unwrap();

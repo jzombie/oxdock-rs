@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use oxdock_fs::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};

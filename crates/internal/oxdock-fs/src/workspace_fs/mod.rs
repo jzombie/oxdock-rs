@@ -1,5 +1,6 @@
 // Workspace-scoped path resolver with guarded file operations.
 // Methods are split across submodules by concern (access checks, IO, copy, git, resolve helpers).
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +27,16 @@ pub struct PathResolver {
 }
 
 impl PathResolver {
+    /// Build a resolver rooted at `CARGO_MANIFEST_DIR`, using that same
+    /// directory as the build context. This centralizes env lookup and path
+    /// creation so callers avoid ad-hoc path construction.
+    pub fn from_manifest_env() -> Result<Self> {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .context("CARGO_MANIFEST_DIR missing")?;
+        let path = PathBuf::from(manifest_dir);
+        Ok(Self::new(&path, &path))
+    }
+
     pub fn new(root: &Path, build_context: &Path) -> Self {
         Self {
             root: root.to_path_buf(),

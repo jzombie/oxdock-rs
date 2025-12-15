@@ -11,7 +11,7 @@ impl PathResolver {
         if new_dir == "/" {
             return fs::canonicalize(self.root()).or_else(|_| Ok(self.root.clone()));
         }
-        let candidate = if Path::new(new_dir).is_absolute() {
+        let candidate = if PathBuf::from(new_dir).is_absolute() {
             PathBuf::from(new_dir)
         } else {
             current.join(new_dir)
@@ -49,7 +49,7 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn resolve_copy_source(&self, from: &str) -> Result<PathBuf> {
-        if Path::new(from).is_absolute() {
+        if PathBuf::from(from).is_absolute() {
             bail!("COPY source must be relative to build context");
         }
         let candidate = self.build_context.join(from);
@@ -70,7 +70,7 @@ impl PathResolver {
     }
 
     fn resolve(&self, cwd: &Path, rel: &str, mode: AccessMode) -> Result<PathBuf> {
-        let candidate = if Path::new(rel).is_absolute() {
+        let candidate = if PathBuf::from(rel).is_absolute() {
             PathBuf::from(rel)
         } else {
             cwd.join(rel)
