@@ -3,6 +3,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use super::{AccessMode, guard_path};
+use crate::PathLike;
 
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
@@ -71,25 +72,6 @@ impl GuardedPath {
 
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
         Self { root, path }
-    }
-}
-
-/// Trait implemented by both `GuardedPath` and `UnguardedPath` so callers can
-/// rely on a consistent set of path helper methods. This includes a small set
-/// of constructors and a `root` accessor so code that needs to treat either
-/// type homogenously can do so without ad-hoc helper functions.
-pub trait PathLike: Sized + std::fmt::Display {
-    fn as_path(&self) -> &Path;
-    fn root(&self) -> &Path;
-    fn to_path_buf(&self) -> PathBuf;
-    fn join(&self, rel: &str) -> Result<Self>;
-    fn parent(&self) -> Option<Self>;
-
-    // Constructors analogous to those on `GuardedPath`.
-    fn new_from_str(root: &str, candidate: &str) -> Result<Self>;
-    fn new_root(root: &Path) -> Result<Self>;
-    fn new_root_from_str(root: &str) -> Result<Self> {
-        Self::new_root(Path::new(root))
     }
 }
 
