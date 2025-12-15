@@ -485,8 +485,13 @@ impl PathResolver {
         let guarded = self
             .check_access(path, AccessMode::Write)
             .with_context(|| format!("remove_file denied for {}", path.display()))?;
-        fs::remove_file(&guarded)
-            .with_context(|| format!("failed to remove file {}", guarded.display()))?;
+        match fs::remove_file(&guarded) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("failed to remove file {}", guarded.display()))
+            }
+        }
         Ok(())
     }
 

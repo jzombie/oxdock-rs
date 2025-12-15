@@ -251,10 +251,23 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             span,
         );
 
+        // Wrap the generated struct in a private module annotated with an
+        // allow, then re-export it. This keeps the lint suppression scoped to
+        // the generated item while avoiding call-site attributes. Tests that
+        // inspect the output are updated to look through this wrapper.
+        let mod_ident = syn::Ident::new(
+            &format!("__oxdock_embed_{}", name),
+            proc_macro2::Span::call_site(),
+        );
+
         return Ok(quote! {
-            #[derive(::rust_embed::RustEmbed)]
-            #[folder = #folder_lit]
-            pub struct #name;
+            #[allow(clippy::disallowed_methods)]
+            mod #mod_ident {
+                #[derive(::rust_embed::RustEmbed)]
+                #[folder = #folder_lit]
+                pub struct #name;
+            }
+            pub use #mod_ident::#name;
         });
     }
 
@@ -275,10 +288,19 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             })?,
             input.out_dir.span(),
         );
+        let mod_ident = syn::Ident::new(
+            &format!("__oxdock_embed_{}", name),
+            proc_macro2::Span::call_site(),
+        );
+
         return Ok(quote! {
-            #[derive(::rust_embed::RustEmbed)]
-            #[folder = #out_dir_lit]
-            pub struct #name;
+            #[allow(clippy::disallowed_methods)]
+            mod #mod_ident {
+                #[derive(::rust_embed::RustEmbed)]
+                #[folder = #out_dir_lit]
+                pub struct #name;
+            }
+            pub use #mod_ident::#name;
         });
     }
 
@@ -717,18 +739,48 @@ mod tests {
     }
 
     fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {
-        let item: syn::DeriveInput = syn::parse2(ts.clone()).expect("parse derive input");
-        let attr = item
-            .attrs
-            .iter()
-            .find(|a| a.path().is_ident("folder"))
-            .expect("folder attribute present");
-        if let syn::Meta::NameValue(ref nv) = attr.meta
-            && let syn::Expr::Lit(expr_lit) = &nv.value
-            && let syn::Lit::Str(ref litstr) = expr_lit.lit
-        {
-            return litstr.value();
+        // The macro now emits a module wrapping the derived struct. Support
+        // both direct structs and module-wrapped structs for robustness.
+        let file: syn::File = syn::parse2(ts.clone()).expect("parse output as file");
+
+        // Helper to extract folder attribute from a struct item
+        fn folder_from_struct(item: &syn::ItemStruct) -> Option<String> {
+            item.attrs.iter().find_map(|a| {
+                if a.path().is_ident("folder")
+                    && let syn::Meta::NameValue(ref nv) = a.meta
+                    && let syn::Expr::Lit(expr_lit) = &nv.value
+                    && let syn::Lit::Str(ref litstr) = expr_lit.lit
+                {
+                    return Some(litstr.value());
+                }
+                None
+            })
         }
-        panic!("folder attribute did not contain a string literal");
+
+        // Search top-level items first
+        for item in &file.items {
+            if let syn::Item::Struct(s) = item
+                && let Some(f) = folder_from_struct(s)
+            {
+                return f;
+            }
+        }
+
+        // Then look for the wrapped module and extract the struct inside
+        for item in &file.items {
+            if let syn::Item::Mod(m) = item
+                && let Some((_, items)) = &m.content
+            {
+                for inner in items {
+                    if let syn::Item::Struct(s) = inner
+                        && let Some(f) = folder_from_struct(s)
+                    {
+                        return f;
+                    }
+                }
+            }
+        }
+
+        panic!("folder attribute not found");
     }
 }
