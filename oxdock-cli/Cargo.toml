@@ -18,3 +18,8 @@ tempfile.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+
+# Use non-cli-suffixed binary name if installing from Cargo
+[[bin]]
+name = "oxdock"
+path = "src/main.rs"
