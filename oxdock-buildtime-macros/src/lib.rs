@@ -52,19 +52,9 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    fn find_git_root(start: &GuardedPath) -> bool {
-        let mut cur = Some(start.clone());
-        while let Some(p) = cur {
-            if let Ok(dot_git) = p.join(".git")
-                && dot_git.as_path().exists()
-            {
-                return true;
-            }
-            cur = p.parent();
-        }
-        false
-    }
-    let has_git = find_git_root(&manifest_root);
+    let has_git = manifest_resolver
+        .has_git_dir()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
     let should_build = has_git;
 
     let out_dir_str = input.out_dir.value();
@@ -293,21 +283,9 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    // Detect a Git repository by walking up from the consuming crate's manifest dir.
-    // This supports workspace layouts where .git is at the root rather than per-crate.
-    fn find_git_root(start: &GuardedPath) -> bool {
-        let mut cur = Some(start.clone());
-        while let Some(p) = cur {
-            if let Ok(dot_git) = p.join(".git")
-                && dot_git.as_path().exists()
-            {
-                return true;
-            }
-            cur = p.parent();
-        }
-        false
-    }
-    let has_git = find_git_root(&manifest_root);
+    let has_git = manifest_resolver
+        .has_git_dir()
+        .map_err(|e| syn::Error::new(span, e.to_string()))?;
     // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
     // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
     // rebuild even if an out_dir already exists via OXDOCK_EMBED_FORCE_REBUILD.

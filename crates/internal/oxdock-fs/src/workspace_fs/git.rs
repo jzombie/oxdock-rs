@@ -7,8 +7,21 @@ use std::process::Command;
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
-// COPY_GIT support using git plumbing commands.
 impl PathResolver {
+    /// Detect whether a .git directory exists at or above the resolver root.
+    pub fn has_git_dir(&self) -> Result<bool> {
+        let mut cur = Some(self.root.clone());
+        while let Some(p) = cur {
+            if let Ok(dot_git) = p.join(".git") {
+                if dot_git.as_path().exists() {
+                    return Ok(true);
+                }
+            }
+            cur = p.parent();
+        }
+        Ok(false)
+    }
+
     pub fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
         if PathBuf::from(from).is_absolute() {
             bail!("COPY_GIT source must be relative to build context");
