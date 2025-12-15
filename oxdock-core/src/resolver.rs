@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use tempfile::tempdir;
 
 #[derive(Clone, Copy, Debug)]
 enum AccessMode {
@@ -108,7 +110,136 @@ impl PathResolver {
 
         check_access(&self.root, &candidate, mode)
     }
+
+    /// Copy from a git revision/path into the provided destination path.
+    /// This method extracts blobs/trees using `git` plumbing (`git show` or `git archive`)
+    /// and copies the material into `to`. `to` should be an absolute path already
+    /// validated by the caller.
+    pub fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
+        if Path::new(from).is_absolute() {
+            bail!("COPY_GIT source must be relative to build context");
+        }
+
+        // Ensure destination is within allowed root (don't trust caller)
+        let _ = check_access(&self.root, to, AccessMode::Write)
+            .with_context(|| format!("destination {} escapes allowed root", to.display()))?;
+
+        // Ensure build_context is allowed under root
+        let _ = check_access(&self.root, &self.build_context, AccessMode::Read)
+            .with_context(|| format!("build context {} not under root", self.build_context.display()))?;
+
+        // Create a tempdir to hold extracted content if needed
+        let tmp = tempdir().with_context(|| "failed to create tempdir for git extraction")?;
+        let tmp_path = tmp.path().to_path_buf();
+
+        // First try to treat `from` as a file via `git show`.
+        let show = Command::new("git")
+            .arg("-C")
+            .arg(&self.build_context)
+            .arg("show")
+            .arg(format!("{}:{}", rev, from))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        match show {
+            Ok(out) if out.status.success() => {
+                // It's a file/blob; write stdout bytes to destination file (create parent dirs)
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating parent {}", parent.display()))?;
+                }
+                fs::write(to, &out.stdout)
+                    .with_context(|| format!("writing git blob to {}", to.display()))?;
+                return Ok(());
+            }
+            _ => {
+                // Not a blob; fall through to try archive for tree
+            }
+        }
+
+        // Use `git archive` to extract the tree at rev:from into tmp
+        // git -C <build_context> archive --format=tar <rev> <from>
+        let mut git = Command::new("git")
+            .arg("-C")
+            .arg(&self.build_context)
+            .arg("archive")
+            .arg("--format=tar")
+            .arg(rev)
+            .arg(from)
+            .stdout(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to spawn git archive for {}:{}", rev, from))?;
+
+        // Extract with tar -x -C tmp
+        let mut tar = Command::new("tar")
+            .arg("-x")
+            .arg("-C")
+            .arg(&tmp_path)
+            .stdin(git.stdout.take().unwrap())
+            .spawn()
+            .with_context(|| "failed to spawn tar to extract git archive")?;
+
+        let git_status = git.wait().with_context(|| "git archive failed")?;
+        if !git_status.success() {
+            bail!("git archive failed for {}:{}", rev, from);
+        }
+        let tar_status = tar.wait().with_context(|| "tar extraction failed")?;
+        if !tar_status.success() {
+            bail!("tar extraction failed for {}:{}", rev, from);
+        }
+
+        // tmp/<from> should now contain the extracted tree (from may be nested)
+        let extracted = tmp_path.join(from);
+        if !extracted.exists() {
+            bail!("path {} not found in git archive for rev {}", from, rev);
+        }
+
+        // Copy extracted into `to`. If extracted is a dir, copy its contents into `to`.
+        if extracted.is_dir() {
+            // create parent directories for `to`
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating parent {}", parent.display()))?;
+            }
+            copy_dir_recursive(&extracted, to)?;
+        } else if extracted.is_file() {
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating parent {}", parent.display()))?;
+            }
+            fs::copy(&extracted, to)
+                .with_context(|| format!("copying {} to {}", extracted.display(), to.display()))?;
+        } else {
+            bail!("unsupported file type in git archive: {}", extracted.display());
+        }
+
+        // tmp will be dropped and cleaned up here
+        Ok(())
+    }
+
 }
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("creating dir {}", dst.display()))?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!("copying {} to {}", src_path.display(), dst_path.display())
+            })?;
+        } else {
+            bail!("unsupported file type: {}", src_path.display());
+        }
+    }
+    Ok(())
+}
+
 
 fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
     let root_abs = fs::canonicalize(root)

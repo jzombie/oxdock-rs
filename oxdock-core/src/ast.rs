@@ -10,6 +10,7 @@ pub enum Command {
     Run,
     RunBg,
     Copy,
+    CopyGit,
     Symlink,
     Mkdir,
     Ls,
@@ -26,6 +27,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Run,
     Command::RunBg,
     Command::Copy,
+    Command::CopyGit,
     Command::Symlink,
     Command::Mkdir,
     Command::Ls,
@@ -167,6 +169,7 @@ impl Command {
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
+            Command::CopyGit => "COPY_GIT",
             Command::Symlink => "SYMLINK",
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
@@ -220,6 +223,7 @@ pub enum StepKind {
     Ls(Option<String>),
     Cat(String),
     Write { path: String, contents: String },
+    CopyGit { rev: String, from: String, to: String },
     Exit(i32),
 }
 
@@ -411,6 +415,23 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     anyhow::anyhow!("line {}: COPY requires <from> <to>", line_no)
                 })?;
                 StepKind::Copy {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                }
+            }
+            Command::CopyGit => {
+                let mut p = remainder.split_whitespace();
+                let rev = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no)
+                })?;
+                let from = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no)
+                })?;
+                let to = p.next().ok_or_else(|| {
+                    anyhow::anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no)
+                })?;
+                StepKind::CopyGit {
+                    rev: rev.to_string(),
                     from: from.to_string(),
                     to: to.to_string(),
                 }
