@@ -740,6 +740,35 @@ mod tests {
 
     #[test]
     #[serial]
+    fn prepare_errors_without_out_dir_when_not_primary_and_no_git() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
+        let manifest_dir = guard_root(&temp_root);
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
+            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
+        }
+
+        let input = EmbedDslInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
+            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
+        };
+
+        let err =
+            expand_prepare_internal(&input).expect_err("prepare should require existing out_dir");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("prepare: refused to build assets") && msg.contains("missing"),
+            "error should mention missing out_dir and refusal to build"
+        );
+    }
+
+    #[test]
+    #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
