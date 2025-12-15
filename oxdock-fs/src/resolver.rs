@@ -326,6 +326,16 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn create_dir_all_abs(&self, path: &Path) -> Result<()> {
+        // If the resolver root itself does not yet exist (common in tests
+        // where callers create paths under a parent that hasn't been created
+        // yet), create it so canonicalization in `check_access_with_root`
+        // succeeds. This keeps creation logic centralized while allowing
+        // callers to request creation under a non-existent root.
+        if !self.root.exists() {
+            fs::create_dir_all(&self.root)
+                .with_context(|| format!("creating resolver root {}", self.root.display()))?;
+        }
+
         let guarded = self
             .check_access(path, AccessMode::Write)
             .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
@@ -424,6 +434,41 @@ impl PathResolver {
         let m = fs::metadata(&guarded)
             .with_context(|| format!("failed to stat {}", guarded.display()))?;
         Ok(m)
+    }
+
+    /// Retrieve filesystem metadata for an arbitrary path without validating
+    /// it against the resolver roots. This is intended for callers that need
+    /// to inspect temporary or external locations (for example a temporary
+    /// build workspace) before copying them into the guarded `root`.
+    #[allow(clippy::disallowed_methods)]
+    pub fn metadata_external(&self, path: &Path) -> Result<std::fs::Metadata> {
+        let m = fs::metadata(path)
+            .with_context(|| format!("failed to stat external path {}", path.display()))?;
+        Ok(m)
+    }
+
+    /// Set permissions on a path using a platform-specific mode (Unix only).
+    ///
+    /// This helper centralizes `set_permissions` usage so other crates do not
+    /// call `std::fs` directly. On non-Unix platforms this is a no-op.
+    #[allow(clippy::disallowed_methods)]
+    pub fn set_permissions_mode_unix(&self, path: &Path, mode: u32) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let guarded = self
+                .check_access(path, AccessMode::Write)
+                .with_context(|| format!("set_permissions denied for {}", path.display()))?;
+            fs::set_permissions(&guarded, fs::Permissions::from_mode(mode))
+                .with_context(|| format!("failed to set permissions on {}", guarded.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-unix platforms we do not modify permissions in tests.
+            let _ = path;
+            let _ = mode;
+        }
+        Ok(())
     }
 
     #[allow(clippy::disallowed_methods)]

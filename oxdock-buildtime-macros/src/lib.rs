@@ -4,7 +4,6 @@
 use oxdock_fs::PathResolver;
 use proc_macro::TokenStream;
 use quote::quote;
-use std::fs;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
@@ -385,7 +384,7 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
         temp_root.display()
     );
 
-    let meta = fs::metadata(&final_cwd).map_err(|e| {
+    let meta = resolver.metadata_external(&final_cwd).map_err(|e| {
         syn::Error::new(
             span,
             format!(
@@ -494,7 +493,6 @@ mod tests {
     use oxdock_fs::PathResolver;
     use serial_test::serial;
     use std::env;
-    use std::fs;
 
     #[test]
     #[serial]
@@ -541,8 +539,6 @@ mod tests {
     #[test]
     #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest_dir = temp.path();
         let resolver = PathResolver::new(manifest_dir, manifest_dir);
@@ -555,7 +551,8 @@ mod tests {
         resolver
             .create_dir_all_abs(&assets_abs)
             .expect("mkdir out_dir");
-        fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o555))
+        resolver
+            .set_permissions_mode_unix(&assets_abs, 0o555)
             .expect("make out_dir read-only");
 
         unsafe {
@@ -576,7 +573,8 @@ mod tests {
 
         let err = expand_embed_internal(&input).expect_err("should fail when out_dir not writable");
         let msg = err.to_string();
-        fs::set_permissions(&assets_abs, fs::Permissions::from_mode(0o755))
+        resolver
+            .set_permissions_mode_unix(&assets_abs, 0o755)
             .expect("restore permissions for cleanup");
         assert!(
             msg.contains("out_dir not writable"),

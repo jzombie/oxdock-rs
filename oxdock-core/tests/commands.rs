@@ -1,14 +1,36 @@
 #![allow(clippy::disallowed_methods)]
 
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
-use std::fs;
+use oxdock_fs::PathResolver;
+use std::path::Path;
 use tempfile::tempdir;
 
 fn read_trimmed(path: &std::path::Path) -> String {
-    fs::read_to_string(path)
+    let root = path.parent().unwrap_or(path);
+    let resolver = PathResolver::new(root, root);
+    resolver
+        .read_to_string(path)
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn write_text(path: &Path, contents: &str) {
+    let root = path.parent().unwrap_or(path);
+    let resolver = PathResolver::new(root, root);
+    resolver.write_file(path, contents.as_bytes()).unwrap();
+}
+
+fn create_dirs(path: &Path) {
+    let root = path.parent().unwrap_or(path);
+    let resolver = PathResolver::new(root, root);
+    resolver.create_dir_all_abs(path).unwrap();
+}
+
+fn remove_file(path: &Path) {
+    let root = path.parent().unwrap_or(path);
+    let resolver = PathResolver::new(root, root);
+    let _ = resolver.remove_file_abs(path);
 }
 
 #[test]
@@ -18,10 +40,10 @@ fn commands_behave_cross_platform() {
 
     // Build context (local workspace) files for COPY and SYMLINK targets.
     let build_root = local.path();
-    fs::write(build_root.join("source.txt"), "from build").unwrap();
+    write_text(&build_root.join("source.txt"), "from build");
     let target_dir = build_root.join("target_dir");
-    fs::create_dir_all(&target_dir).unwrap();
-    fs::write(target_dir.join("inner.txt"), "symlink target").unwrap();
+    create_dirs(&target_dir);
+    write_text(&target_dir.join("inner.txt"), "symlink target");
 
     let run_cmd = if cfg!(windows) {
         "echo %FOO%> run.txt"
@@ -263,9 +285,9 @@ fn capture_echo_interpolates_env() {
 fn capture_ls_lists_entries_with_header() {
     let root = tempdir().unwrap();
     let dir = root.path().join("items");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("a.txt"), "a").unwrap();
-    fs::write(dir.join("b.txt"), "b").unwrap();
+    create_dirs(&dir);
+    write_text(&dir.join("a.txt"), "a");
+    write_text(&dir.join("b.txt"), "b");
 
     let steps = vec![
         Step {
@@ -283,9 +305,15 @@ fn capture_ls_lists_entries_with_header() {
 
     run_steps(root.path(), &steps).unwrap();
 
-    let content = fs::read_to_string(root.path().join("items/ls.txt")).unwrap();
+    let content = read_trimmed(&root.path().join("items/ls.txt"));
     let mut lines: Vec<_> = content.lines().map(str::to_string).collect();
-    let expected_header = format!("{}:", fs::canonicalize(&dir).unwrap().display());
+    let expected_header = format!(
+        "{}:",
+        PathResolver::new(&dir, &dir)
+            .canonicalize_abs(&dir)
+            .unwrap()
+            .display()
+    );
     assert_eq!(lines.remove(0), expected_header);
     assert_eq!(lines, vec!["a.txt", "b.txt"]);
 }
@@ -293,7 +321,7 @@ fn capture_ls_lists_entries_with_header() {
 #[test]
 fn capture_cat_emits_file_contents() {
     let root = tempdir().unwrap();
-    fs::write(root.path().join("note.txt"), "hello note").unwrap();
+    write_text(&root.path().join("note.txt"), "hello note");
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -326,7 +354,8 @@ fn capture_cwd_canonicalizes_and_writes() {
 
     run_steps(root.path(), &steps).unwrap();
 
-    let expected = std::fs::canonicalize(root.path().join("a/b"))
+    let expected = PathResolver::new(root.path(), root.path())
+        .canonicalize_abs(&root.path().join("a/b"))
         .unwrap()
         .display()
         .to_string();
@@ -339,11 +368,11 @@ fn copy_git_via_script_simple() {
 
     // Create a tiny git repo inside the snapshot so build_context is under root
     let repo = snapshot.path().join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
-    std::fs::write(repo.join("hello.txt"), "git hello").unwrap();
-    std::fs::create_dir_all(repo.join("assets")).unwrap();
-    std::fs::write(repo.join("assets").join("a.txt"), "a").unwrap();
-    std::fs::write(repo.join("assets").join("b.txt"), "b").unwrap();
+    create_dirs(&repo);
+    write_text(&repo.join("hello.txt"), "git hello");
+    create_dirs(&repo.join("assets"));
+    write_text(&repo.join("assets").join("a.txt"), "a");
+    write_text(&repo.join("assets").join("b.txt"), "b");
 
     // init and commit
     std::process::Command::new("git")
@@ -390,7 +419,7 @@ fn copy_git_via_script_simple() {
     run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
 
     assert_eq!(
-        std::fs::read_to_string(snapshot.path().join("out_hello.txt")).unwrap(),
+        read_trimmed(&snapshot.path().join("out_hello.txt")),
         "git hello"
     );
 }
@@ -401,10 +430,10 @@ fn copy_git_directory_via_script() {
 
     // Create a tiny git repo inside the snapshot so build_context is under root
     let repo = snapshot.path().join("repo_dir");
-    std::fs::create_dir_all(&repo).unwrap();
-    std::fs::create_dir_all(repo.join("assets_dir")).unwrap();
-    std::fs::write(repo.join("assets_dir").join("x.txt"), "x").unwrap();
-    std::fs::write(repo.join("assets_dir").join("y.txt"), "y").unwrap();
+    create_dirs(&repo);
+    create_dirs(&repo.join("assets_dir"));
+    write_text(&repo.join("assets_dir").join("x.txt"), "x");
+    write_text(&repo.join("assets_dir").join("y.txt"), "y");
 
     // init, add, commit (use -c to avoid writing config)
     std::process::Command::new("git")
@@ -448,11 +477,11 @@ fn copy_git_directory_via_script() {
     run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
 
     assert_eq!(
-        std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("x.txt")).unwrap(),
+        read_trimmed(&snapshot.path().join("out_assets_dir").join("x.txt")),
         "x"
     );
     assert_eq!(
-        std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("y.txt")).unwrap(),
+        read_trimmed(&snapshot.path().join("out_assets_dir").join("y.txt")),
         "y"
     );
 }
@@ -504,7 +533,7 @@ fn read_cannot_escape_root() {
             .and_then(|n| n.to_str())
             .unwrap_or("escape")
     ));
-    fs::write(&secret, "nope").unwrap();
+    write_text(&secret, "nope");
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -518,7 +547,7 @@ fn read_cannot_escape_root() {
         err
     );
 
-    let _ = fs::remove_file(&secret);
+    remove_file(&secret);
 }
 
 #[test]
@@ -532,7 +561,7 @@ fn read_symlink_escape_is_blocked() {
             .and_then(|n| n.to_str())
             .unwrap_or("escape")
     ));
-    fs::write(&secret, "top secret").unwrap();
+    write_text(&secret, "top secret");
 
     // Inside root, create a link that points to the outside secret.
     let link_path = root.path().join("leak.txt");
@@ -553,13 +582,13 @@ fn read_symlink_escape_is_blocked() {
         err
     );
 
-    let _ = fs::remove_file(&secret);
+    remove_file(&secret);
 }
 
 #[test]
 fn write_missing_path_cannot_escape_root() {
     let root = tempdir().unwrap();
-    fs::create_dir_all(root.path().join("a/b")).unwrap();
+    create_dirs(&root.path().join("a/b"));
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -594,7 +623,7 @@ fn workdir_creates_missing_dirs_within_root() {
 #[test]
 fn cat_reads_file_contents_without_error() {
     let root = tempdir().unwrap();
-    fs::write(root.path().join("file.txt"), "hello cat").unwrap();
+    write_text(&root.path().join("file.txt"), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("file.txt".into()),
