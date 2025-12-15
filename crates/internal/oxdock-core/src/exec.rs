@@ -234,7 +234,9 @@ fn execute_steps(
                         // the content to preserve behavior, but warn the user.
                         eprintln!(
                             "warning: failed to create symlink {} -> {}: {}; falling back to copy",
-                            to_abs.display(), from_abs.display(), e
+                            to_abs.display(),
+                            from_abs.display(),
+                            e
                         );
                         if from_abs.is_dir() {
                             // Copy directory recursively via resolver helper
@@ -245,9 +247,15 @@ fn execute_steps(
                             // PathResolver created from fs_root/build_context is not
                             // available here. Instead, perform a filesystem copy.
                             // Use a simple recursive copy: create target dir and copy entries.
-                            fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-                                std::fs::create_dir_all(dst).with_context(|| format!("creating dir {}", dst.display()))?;
-                                for entry in std::fs::read_dir(src).with_context(|| format!("reading dir {}", src.display()))? {
+                            fn copy_dir_recursive(
+                                src: &std::path::Path,
+                                dst: &std::path::Path,
+                            ) -> Result<()> {
+                                std::fs::create_dir_all(dst)
+                                    .with_context(|| format!("creating dir {}", dst.display()))?;
+                                for entry in std::fs::read_dir(src)
+                                    .with_context(|| format!("reading dir {}", src.display()))?
+                                {
                                     let entry = entry?;
                                     let file_type = entry.file_type()?;
                                     let src_path = entry.path();
@@ -263,12 +271,26 @@ fn execute_steps(
                                 }
                                 Ok(())
                             }
-                            copy_dir_recursive(&from_abs, &to_abs).with_context(|| format!("failed to copy dir {} -> {}", from_abs.display(), to_abs.display()))?;
+                            copy_dir_recursive(&from_abs, &to_abs).with_context(|| {
+                                format!(
+                                    "failed to copy dir {} -> {}",
+                                    from_abs.display(),
+                                    to_abs.display()
+                                )
+                            })?;
                         } else {
                             if let Some(parent) = to_abs.parent() {
-                                std::fs::create_dir_all(parent).with_context(|| format!("creating parent {}", parent.display()))?;
+                                std::fs::create_dir_all(parent).with_context(|| {
+                                    format!("creating parent {}", parent.display())
+                                })?;
                             }
-                            std::fs::copy(&from_abs, &to_abs).with_context(|| format!("failed to copy file {} -> {}", from_abs.display(), to_abs.display()))?;
+                            std::fs::copy(&from_abs, &to_abs).with_context(|| {
+                                format!(
+                                    "failed to copy file {} -> {}",
+                                    from_abs.display(),
+                                    to_abs.display()
+                                )
+                            })?;
                         }
                     }
                 }
@@ -446,12 +468,7 @@ fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &Path) -> Result<String> {
     Ok(fs.canonicalize_abs(cwd)?.display().to_string())
 }
 
-fn describe_dir(
-    fs: &dyn WorkspaceFs,
-    root: &Path,
-    max_depth: usize,
-    max_entries: usize,
-) -> String {
+fn describe_dir(fs: &dyn WorkspaceFs, root: &Path, max_depth: usize, max_entries: usize) -> String {
     fn helper(
         fs: &dyn WorkspaceFs,
         path: &Path,

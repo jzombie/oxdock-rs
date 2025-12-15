@@ -62,7 +62,11 @@ impl Options {
 
         let script = script.unwrap_or(ScriptSource::Stdin);
 
-        Ok(Self { script, shell, inline })
+        Ok(Self {
+            script,
+            shell,
+            inline,
+        })
     }
 }
 
@@ -333,15 +337,28 @@ fn open_editor_and_read() -> Result<String> {
     // Determine a per-user cache path to store the last inline script.
     fn last_inline_path() -> Option<std::path::PathBuf> {
         if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
-            return Some(std::path::PathBuf::from(x).join("oxdock").join("last_inline"));
+            return Some(
+                std::path::PathBuf::from(x)
+                    .join("oxdock")
+                    .join("last_inline"),
+            );
         }
         if cfg!(windows) {
             if let Ok(app) = std::env::var("APPDATA") {
-                return Some(std::path::PathBuf::from(app).join("oxdock").join("last_inline"));
+                return Some(
+                    std::path::PathBuf::from(app)
+                        .join("oxdock")
+                        .join("last_inline"),
+                );
             }
         }
         if let Ok(home) = std::env::var("HOME") {
-            return Some(std::path::PathBuf::from(home).join(".config").join("oxdock").join("last_inline"));
+            return Some(
+                std::path::PathBuf::from(home)
+                    .join(".config")
+                    .join("oxdock")
+                    .join("last_inline"),
+            );
         }
         None
     }
