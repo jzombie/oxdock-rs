@@ -577,12 +577,12 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxdock_fs::GuardedPath;
+    use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
     use std::env;
 
-    fn guard_root(path: &str) -> GuardedPath {
-        GuardedPath::new_root_from_str(path).unwrap()
+    fn guard_root(path: &UnguardedPath) -> GuardedPath {
+        GuardedPath::new_root(path.as_path()).unwrap()
     }
 
     fn resolver_for(root: &GuardedPath) -> PathResolver {
@@ -593,7 +593,8 @@ mod tests {
     #[serial]
     fn errors_when_out_dir_is_file_before_build() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
         // Create .git dir via PathResolver to centralize filesystem access.
         let resolver = resolver_for(&manifest_dir);
         resolver
@@ -635,7 +636,8 @@ mod tests {
     #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -702,7 +704,8 @@ mod tests {
     #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         let resolver = resolver_for(&manifest_dir);
@@ -729,18 +732,17 @@ mod tests {
         assert!(out.contains("DemoAssets"), "should define struct name");
 
         let folder_path = folder_attr_path(&ts);
-        assert_eq!(
-            folder_path,
-            assets_abs.as_path().to_string_lossy().into_owned(),
-            "should point folder to out_dir abs path"
-        );
+        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
+            .expect("guard folder path");
+        assert_eq!(folder_guard.as_path(), assets_abs.as_path(), "should point folder to out_dir abs path");
     }
 
     #[test]
     #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
 
         unsafe {
             env::remove_var("CARGO_PRIMARY_PACKAGE");
@@ -767,7 +769,8 @@ mod tests {
     #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -796,7 +799,7 @@ mod tests {
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
         let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new_root_from_str(&folder_path)
+        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
             .expect("guard folder path");
         let copied = folder_guard.join("copied.txt").expect("join copied.txt");
         let contents = resolver
@@ -812,7 +815,8 @@ mod tests {
     #[serial]
     fn uses_final_workdir_for_folder() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
+        let temp_root = UnguardedPath::new(temp.path());
+        let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -847,7 +851,7 @@ mod tests {
             "folder should be the out_dir path"
         );
 
-        let folder_guard = GuardedPath::new_root_from_str(&folder_path)
+        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
             .expect("guard folder path");
         let inside = folder_guard.join("hello.txt").expect("join hello.txt");
         assert!(
