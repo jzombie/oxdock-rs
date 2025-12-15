@@ -254,13 +254,11 @@ pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
 
 fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
-    format!(
-        "{} shell workspace: {} (materialized from git HEAD at {})\n\
-WARNING: This shell is still using your filesystem and can result in destructive actions outside of the workspace.",
-        pkg,
-        cwd.display(),
-        workspace_root.display()
-    )
+    indoc::formatdoc! {"
+        {pkg} shell workspace: {} (materialized from git HEAD at {})
+
+        WARNING: This shell is still using your filesystem and does not provide isolation guarantees.
+    ", cwd.display(), workspace_root.display()}
 }
 
 #[cfg(windows)]
