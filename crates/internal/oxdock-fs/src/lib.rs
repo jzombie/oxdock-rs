@@ -1,5 +1,5 @@
-pub mod resolver;
-pub use resolver::PathResolver;
+pub mod workspace_fs;
+pub use workspace_fs::PathResolver;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -43,98 +43,98 @@ pub trait WorkspaceFs {
 
 impl WorkspaceFs for PathResolver {
 	fn canonicalize_abs(&self, path: &Path) -> Result<PathBuf> {
-		self.canonicalize_abs(path)
+		PathResolver::canonicalize_abs(self, path)
 	}
 
 	fn metadata_abs(&self, path: &Path) -> Result<std::fs::Metadata> {
-		self.metadata_abs(path)
+		PathResolver::metadata_abs(self, path)
 	}
 
 	fn metadata_external(&self, path: &Path) -> Result<std::fs::Metadata> {
-		self.metadata_external(path)
+		PathResolver::metadata_external(self, path)
 	}
 
 	fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
-		self.read_file(path)
+		PathResolver::read_file(self, path)
 	}
 
 	fn read_to_string(&self, path: &Path) -> Result<String> {
-		self.read_to_string(path)
+		PathResolver::read_to_string(self, path)
 	}
 
 	fn read_dir_entries(&self, path: &Path) -> Result<Vec<std::fs::DirEntry>> {
-		self.read_dir_entries(path)
+		PathResolver::read_dir_entries(self, path)
 	}
 
 	fn write_file(&self, path: &Path, contents: &[u8]) -> Result<()> {
-		self.write_file(path, contents)
+		PathResolver::write_file(self, path, contents)
 	}
 
 	fn create_dir_all_abs(&self, path: &Path) -> Result<()> {
-		self.create_dir_all_abs(path)
+		PathResolver::create_dir_all_abs(self, path)
 	}
 
 	fn remove_file_abs(&self, path: &Path) -> Result<()> {
-		self.remove_file_abs(path)
+		PathResolver::remove_file_abs(self, path)
 	}
 
 	fn remove_dir_all_abs(&self, path: &Path) -> Result<()> {
-		self.remove_dir_all_abs(path)
+		PathResolver::remove_dir_all_abs(self, path)
 	}
 
 	fn copy_file(&self, src: &Path, dst: &Path) -> Result<u64> {
-		self.copy_file(src, dst)
+		PathResolver::copy_file(self, src, dst)
 	}
 
 	fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<()> {
-		self.copy_dir_recursive(src, dst)
+		PathResolver::copy_dir_recursive(self, src, dst)
 	}
 
 	fn copy_dir_from_external(&self, src: &Path, dst: &Path) -> Result<()> {
-		self.copy_dir_from_external(src, dst)
+		PathResolver::copy_dir_from_external(self, src, dst)
 	}
 
 	fn copy_file_from_external(&self, src: &Path, dst: &Path) -> Result<u64> {
-		self.copy_file_from_external(src, dst)
+		PathResolver::copy_file_from_external(self, src, dst)
 	}
 
 	fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {
-		self.open_external_file(path)
+		PathResolver::open_external_file(self, path)
 	}
 
 	fn set_permissions_mode_unix(&self, path: &Path, mode: u32) -> Result<()> {
-		self.set_permissions_mode_unix(path, mode)
+		PathResolver::set_permissions_mode_unix(self, path, mode)
 	}
 
 	fn resolve_workdir(&self, current: &Path, new_dir: &str) -> Result<PathBuf> {
-		self.resolve_workdir(current, new_dir)
+		PathResolver::resolve_workdir(self, current, new_dir)
 	}
 
 	fn resolve_read(&self, cwd: &Path, rel: &str) -> Result<PathBuf> {
-		self.resolve_read(cwd, rel)
+		PathResolver::resolve_read(self, cwd, rel)
 	}
 
 	fn resolve_write(&self, cwd: &Path, rel: &str) -> Result<PathBuf> {
-		self.resolve_write(cwd, rel)
+		PathResolver::resolve_write(self, cwd, rel)
 	}
 
 	fn resolve_copy_source(&self, from: &str) -> Result<PathBuf> {
-		self.resolve_copy_source(from)
+		PathResolver::resolve_copy_source(self, from)
 	}
 
 	fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
-		self.copy_from_git(rev, from, to)
+		PathResolver::copy_from_git(self, rev, from, to)
 	}
 
 	fn root(&self) -> &Path {
-		self.root()
+		PathResolver::root(self)
 	}
 
 	fn build_context(&self) -> &Path {
-		self.build_context()
+		PathResolver::build_context(self)
 	}
 
 	fn set_root(&mut self, root: &Path) {
-		self.set_root(root)
+		PathResolver::set_root(self, root)
 	}
 }

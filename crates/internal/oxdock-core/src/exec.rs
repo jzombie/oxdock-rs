@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
-use oxdock_fs::{resolver::PathResolver, WorkspaceFs};
+use oxdock_fs::{PathResolver, WorkspaceFs};
 
 struct ExecState {
     resolver: Box<dyn WorkspaceFs>,
