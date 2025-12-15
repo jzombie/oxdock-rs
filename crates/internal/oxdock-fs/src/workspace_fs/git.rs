@@ -128,6 +128,13 @@ impl PathResolver {
                             bail!("git show failed for {}:{}", rev, path_str);
                         }
 
+                        // Git uses filemode `120000` to represent symbolic links.
+                        // Handle symlink entries by using the blob contents as the
+                        // link target: on Unix create an actual symlink from the
+                        // target text; on Windows write a textual placeholder file
+                        // containing the link target (trimmed). The placeholder is
+                        // not an OS-level symlink and may lossy-convert non-UTF8
+                        // bytes because `from_utf8_lossy` is used above.
                         if mode == "120000" {
                             let target = String::from_utf8_lossy(&blob.stdout).into_owned();
                             #[cfg(unix)]
@@ -139,9 +146,18 @@ impl PathResolver {
                             }
                             #[cfg(windows)]
                             {
-                                fs::write(&dest, &blob.stdout).with_context(|| {
-                                    format!("writing symlink placeholder {}", dest.display())
-                                })?;
+                                // On Windows create a textual placeholder file containing the
+                                // symlink target (trimmed). This does NOT create an OS-level
+                                // symlink and may lose or alter non-UTF8 bytes (from_utf8_lossy
+                                // is used above).
+                                fs::write(&dest, target.trim_end_matches('\n').as_bytes())
+                                    .with_context(|| {
+                                        format!(
+                                            "writing symlink placeholder {} -> {}",
+                                            dest.display(),
+                                            target
+                                        )
+                                    })?;
                             }
                         } else {
                             fs::write(&dest, &blob.stdout)
