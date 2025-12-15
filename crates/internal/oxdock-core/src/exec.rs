@@ -184,12 +184,9 @@ fn execute_steps(
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
-                let to_abs = state
-                    .fs
-                    .resolve_write(&state.cwd, to)
-                    .with_context(|| {
-                        format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
-                    })?;
+                let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
+                    format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
+                })?;
                 state
                     .fs
                     .copy_from_git(rev, from, &to_abs)
@@ -255,14 +252,13 @@ fn execute_steps(
             }
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
-                let real =
-                    canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
-                        format!(
-                            "step {}: CWD failed to canonicalize {}",
-                            idx + 1,
-                            state.cwd.display()
-                        )
-                    })?;
+                let real = canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
+                    format!(
+                        "step {}: CWD failed to canonicalize {}",
+                        idx + 1,
+                        state.cwd.display()
+                    )
+                })?;
                 writeln!(out, "{}", real)?;
             }
             StepKind::Cat(path) => {
@@ -310,10 +306,7 @@ fn execute_steps(
                     bail!("CAPTURE expects exactly one instruction");
                 }
                 let mut sub_state = ExecState {
-                    fs: Box::new(PathResolver::new(
-                        state.fs.root(),
-                        state.fs.build_context(),
-                    )),
+                    fs: Box::new(PathResolver::new(state.fs.root(), state.fs.build_context())),
                     cargo_target_dir: state.cargo_target_dir.clone(),
                     cwd: state.cwd.clone(),
                     envs: state.envs.clone(),
