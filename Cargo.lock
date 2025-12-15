@@ -266,6 +266,7 @@ name = "oxdock-buildtime-macros"
 version = "0.1.0-alpha"
 dependencies = [
  "oxdock-core",
+ "oxdock-fs",
  "proc-macro2",
  "quote",
  "serial_test",

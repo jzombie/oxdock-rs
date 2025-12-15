@@ -400,8 +400,20 @@ fn canonical_cwd(resolver: &PathResolver, cwd: &Path) -> Result<String> {
     Ok(resolver.canonicalize_abs(cwd)?.display().to_string())
 }
 
-fn describe_dir(resolver: &PathResolver, root: &Path, max_depth: usize, max_entries: usize) -> String {
-    fn helper(resolver: &PathResolver, path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
+fn describe_dir(
+    resolver: &PathResolver,
+    root: &Path,
+    max_depth: usize,
+    max_entries: usize,
+) -> String {
+    fn helper(
+        resolver: &PathResolver,
+        path: &Path,
+        depth: usize,
+        max_depth: usize,
+        left: &mut usize,
+        out: &mut String,
+    ) {
         if *left == 0 {
             return;
         }

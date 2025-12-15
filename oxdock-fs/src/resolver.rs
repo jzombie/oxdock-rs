@@ -20,8 +20,24 @@ impl AccessMode {
     }
 }
 
+/// Resolves and validates filesystem paths within a confined workspace.
+///
+/// `PathResolver` centralizes logic for resolving paths used by the system
+/// while ensuring they do not escape configured roots. It provides safe
+/// helpers for reading, writing, copying, and canonicalizing paths that are
+/// constrained to live under the configured `root` (and, when appropriate,
+/// the `build_context`). The resolver also offers helpers that allow looking
+/// up sources from the build context (for example, `COPY`/`COPY_GIT`).
 pub struct PathResolver {
+    /// The allowed filesystem root for resolved paths. Most operations are
+    /// validated against this path to prevent directory traversal or
+    /// accidental access outside the workspace.
     root: PathBuf,
+
+    /// The build context directory (typically the project or repository
+    /// directory) used as an alternate source root for operations such as
+    /// `COPY` and `COPY_GIT`. Some operations validate paths against the
+    /// build context instead of the general `root`.
     build_context: PathBuf,
 }
 
@@ -56,7 +72,8 @@ impl PathResolver {
             current.join(new_dir)
         };
 
-        let resolved = check_access(&self.root, &candidate, AccessMode::Passthru)
+        let resolved = self
+            .check_access(&candidate, AccessMode::Passthru)
             .with_context(|| format!("WORKDIR {} escapes root", candidate.display()))?;
 
         if let Ok(meta) = fs::metadata(&resolved) {
@@ -91,7 +108,8 @@ impl PathResolver {
             bail!("COPY source must be relative to build context");
         }
         let candidate = self.build_context.join(from);
-        let guarded = check_access(&self.build_context, &candidate, AccessMode::Read)
+        let guarded = self
+            .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
             .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
 
         if !guarded.exists() {
@@ -113,7 +131,7 @@ impl PathResolver {
             cwd.join(rel)
         };
 
-        check_access(&self.root, &candidate, mode)
+        self.check_access(&candidate, mode)
     }
 
     /// Copy from a git revision/path into the provided destination path.
@@ -127,12 +145,14 @@ impl PathResolver {
         }
 
         // Ensure destination is within allowed root (don't trust caller)
-        let _ = check_access(&self.root, to, AccessMode::Write)
+        let _ = self
+            .check_access_with_root(&self.root, to, AccessMode::Write)
             .with_context(|| format!("destination {} escapes allowed root", to.display()))?;
 
         // Ensure build_context is allowed under root
-        let _ =
-            check_access(&self.root, &self.build_context, AccessMode::Read).with_context(|| {
+        let _ = self
+            .check_access(&self.build_context, AccessMode::Read)
+            .with_context(|| {
                 format!(
                     "build context {} not under root",
                     self.build_context.display()
@@ -306,7 +326,8 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn create_dir_all_abs(&self, path: &Path) -> Result<()> {
-        let guarded = check_access(&self.root, path, AccessMode::Write)
+        let guarded = self
+            .check_access(path, AccessMode::Write)
             .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
         fs::create_dir_all(&guarded)
             .with_context(|| format!("creating dir {}", guarded.display()))?;
@@ -315,7 +336,8 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn read_dir_entries(&self, path: &Path) -> Result<Vec<std::fs::DirEntry>> {
-        let guarded = check_access(&self.root, path, AccessMode::Read)
+        let guarded = self
+            .check_access(path, AccessMode::Read)
             .with_context(|| format!("read_dir denied for {}", path.display()))?;
         let entries = fs::read_dir(&guarded)
             .with_context(|| format!("failed to read dir {}", guarded.display()))?;
@@ -325,15 +347,18 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
-        let guarded = check_access(&self.root, path, AccessMode::Read)
+        let guarded = self
+            .check_access(path, AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
-        let data = fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
+        let data =
+            fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
         Ok(data)
     }
 
     #[allow(clippy::disallowed_methods)]
     pub fn read_to_string(&self, path: &Path) -> Result<String> {
-        let guarded = check_access(&self.root, path, AccessMode::Read)
+        let guarded = self
+            .check_access(path, AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
         let s = fs::read_to_string(&guarded)
             .with_context(|| format!("failed to read {}", guarded.display()))?;
@@ -342,50 +367,62 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn write_file(&self, path: &Path, contents: &[u8]) -> Result<()> {
-        let guarded = check_access(&self.root, path, AccessMode::Write)
+        let guarded = self
+            .check_access(path, AccessMode::Write)
             .with_context(|| format!("write denied for {}", path.display()))?;
         if let Some(parent) = guarded.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
-        fs::write(&guarded, contents)
-            .with_context(|| format!("writing {}", guarded.display()))?;
+        fs::write(&guarded, contents).with_context(|| format!("writing {}", guarded.display()))?;
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods)]
     pub fn copy_file(&self, src: &Path, dst: &Path) -> Result<u64> {
         // Ensure destination is allowed for write
-        let guarded_dst = check_access(&self.root, dst, AccessMode::Write)
+        let guarded_dst = self
+            .check_access(dst, AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
         // Source may be under root or under build_context; allow either for read
-        let guarded_src = check_access(&self.root, src, AccessMode::Read)
-            .or_else(|_| check_access(&self.build_context, src, AccessMode::Read))
+        let guarded_src = self
+            .check_access(src, AccessMode::Read)
+            .or_else(|_| self.check_access_with_root(&self.build_context, src, AccessMode::Read))
             .with_context(|| format!("copy source denied for {}", src.display()))?;
         if let Some(parent) = guarded_dst.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
-        let n = fs::copy(&guarded_src, &guarded_dst)
-            .with_context(|| format!("copying {} to {}", guarded_src.display(), guarded_dst.display()))?;
+        let n = fs::copy(&guarded_src, &guarded_dst).with_context(|| {
+            format!(
+                "copying {} to {}",
+                guarded_src.display(),
+                guarded_dst.display()
+            )
+        })?;
         Ok(n)
     }
 
     #[allow(clippy::disallowed_methods)]
     pub fn canonicalize_abs(&self, path: &Path) -> Result<PathBuf> {
         // Use check_access to validate and return an absolute path that is within allowed roots
-        let cand = check_access(&self.root, path, AccessMode::Passthru)
-            .or_else(|_| check_access(&self.build_context, path, AccessMode::Passthru))
+        let cand = self
+            .check_access(path, AccessMode::Passthru)
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, path, AccessMode::Passthru)
+            })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
         Ok(cand)
     }
 
     #[allow(clippy::disallowed_methods)]
     pub fn metadata_abs(&self, path: &Path) -> Result<std::fs::Metadata> {
-        let guarded = check_access(&self.root, path, AccessMode::Read)
-            .or_else(|_| check_access(&self.build_context, path, AccessMode::Read))
+        let guarded = self
+            .check_access(path, AccessMode::Read)
+            .or_else(|_| self.check_access_with_root(&self.build_context, path, AccessMode::Read))
             .with_context(|| format!("metadata denied for {}", path.display()))?;
-        let m = fs::metadata(&guarded).with_context(|| format!("failed to stat {}", guarded.display()))?;
+        let m = fs::metadata(&guarded)
+            .with_context(|| format!("failed to stat {}", guarded.display()))?;
         Ok(m)
     }
 
@@ -393,7 +430,8 @@ impl PathResolver {
     #[allow(clippy::only_used_in_recursion)]
     pub fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<()> {
         // Validate the destination root for write access, then create it.
-        let guarded_dst_root = check_access(&self.root, dst, AccessMode::Write)
+        let guarded_dst_root = self
+            .check_access(dst, AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
         fs::create_dir_all(&guarded_dst_root)
             .with_context(|| format!("creating dir {}", guarded_dst_root.display()))?;
@@ -405,12 +443,16 @@ impl PathResolver {
             let dst_path = guarded_dst_root.join(entry.file_name());
 
             // Guard source: allow it under root OR build_context for reads.
-            let guarded_src = check_access(&self.root, &src_path, AccessMode::Read)
-                .or_else(|_| check_access(&self.build_context, &src_path, AccessMode::Read))
+            let guarded_src = self
+                .check_access(&src_path, AccessMode::Read)
+                .or_else(|_| {
+                    self.check_access_with_root(&self.build_context, &src_path, AccessMode::Read)
+                })
                 .with_context(|| format!("copy source denied for {}", src_path.display()))?;
 
             // Guard destination path (each file/dir) for writes.
-            let guarded_dst = check_access(&self.root, &dst_path, AccessMode::Write)
+            let guarded_dst = self
+                .check_access(&dst_path, AccessMode::Write)
                 .with_context(|| format!("copy destination denied for {}", dst_path.display()))?;
 
             if file_type.is_dir() {
@@ -424,7 +466,11 @@ impl PathResolver {
                         .with_context(|| format!("creating dir {}", parent.display()))?;
                 }
                 fs::copy(&guarded_src, &guarded_dst).with_context(|| {
-                    format!("copying {} to {}", guarded_src.display(), guarded_dst.display())
+                    format!(
+                        "copying {} to {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
                 })?;
             } else {
                 bail!("unsupported file type: {}", src_path.display());
@@ -434,12 +480,101 @@ impl PathResolver {
     }
 }
 
-#[allow(clippy::disallowed_methods)]
-fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
-    let root_abs = fs::canonicalize(root)
-        .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
+impl PathResolver {
+    #[allow(clippy::disallowed_methods)]
+    /// Validate that `candidate` resolves to a path located under `root`.
+    ///
+    /// This method performs the same semantics as the previous free
+    /// function `check_access` but as a private helper on `PathResolver`.
+    /// It returns an absolute, canonicalized path to the candidate (if
+    /// possible) that is guaranteed to start with the canonicalized
+    /// `root`. If the candidate does not yet exist, the function
+    /// canonicalizes the nearest existing ancestor and then reconstructs
+    /// the remainder of the candidate path, while ensuring the resulting
+    /// path does not escape `root` (via `..` components, symlinks, or
+    /// absolute paths).
+    ///
+    /// Parameters:
+    /// - `root`: the allowed root directory under which `candidate` must
+    ///   reside.
+    /// - `candidate`: the path to validate (may be absolute or relative,
+    ///   and may point to a not-yet-existing location).
+    /// - `mode`: an `AccessMode` value used only for error messages.
+    ///
+    /// Returns: a `Result<PathBuf>` containing the absolute path that is
+    /// safe to use (and lives under `root`), or an error if the candidate
+    /// would escape `root` or some canonicalization step fails.
+    #[allow(clippy::disallowed_methods)]
+    fn check_access_with_root(
+        &self,
+        root: &Path,
+        candidate: &Path,
+        mode: AccessMode,
+    ) -> Result<PathBuf> {
+        let root_abs = fs::canonicalize(root)
+            .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
 
-    if let Ok(cand_abs) = fs::canonicalize(candidate) {
+        if let Ok(cand_abs) = fs::canonicalize(candidate) {
+            if !cand_abs.starts_with(&root_abs) {
+                bail!(
+                    "{} access to {} escapes allowed root {}",
+                    mode.name(),
+                    cand_abs.display(),
+                    root_abs.display()
+                );
+            }
+            return Ok(cand_abs);
+        }
+
+        let mut ancestor = candidate;
+        while !ancestor.exists() {
+            if let Some(parent) = ancestor.parent() {
+                ancestor = parent;
+            } else {
+                ancestor = root;
+                break;
+            }
+        }
+
+        let ancestor_abs = fs::canonicalize(ancestor)
+            .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
+
+        let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
+        {
+            let mut skip = ancestor.components();
+            let mut full = candidate.components();
+            loop {
+                match (skip.next(), full.next()) {
+                    (Some(s), Some(f)) if s == f => continue,
+                    (_opt_s, opt_f) => {
+                        if let Some(f) = opt_f {
+                            rem_components.push(f.as_os_str().to_os_string());
+                            for comp in full {
+                                rem_components.push(comp.as_os_str().to_os_string());
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut cand_abs = ancestor_abs.clone();
+        for c in rem_components.iter() {
+            let s = std::ffi::OsStr::new(&c);
+            if s == "." {
+                continue;
+            }
+            if s == ".." {
+                cand_abs = cand_abs
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or(cand_abs);
+                continue;
+            }
+            cand_abs.push(s);
+        }
+
         if !cand_abs.starts_with(&root_abs) {
             bail!(
                 "{} access to {} escapes allowed root {}",
@@ -448,66 +583,17 @@ fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathB
                 root_abs.display()
             );
         }
-        return Ok(cand_abs);
+
+        Ok(cand_abs)
     }
 
-    let mut ancestor = candidate;
-    while !ancestor.exists() {
-        if let Some(parent) = ancestor.parent() {
-            ancestor = parent;
-        } else {
-            ancestor = root;
-            break;
-        }
+    /// Convenience wrapper that validates `candidate` against the resolver's
+    /// configured `root`.
+    ///
+    /// Equivalent to calling `check_access_with_root(&self.root, ...)`.
+    /// Kept private to ensure callers go through `PathResolver` and cannot
+    /// accidentally validate against the wrong root.
+    fn check_access(&self, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
+        self.check_access_with_root(&self.root, candidate, mode)
     }
-
-    let ancestor_abs = fs::canonicalize(ancestor)
-        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
-
-    let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
-    {
-        let mut skip = ancestor.components();
-        let mut full = candidate.components();
-        loop {
-            match (skip.next(), full.next()) {
-                (Some(s), Some(f)) if s == f => continue,
-                (_opt_s, opt_f) => {
-                    if let Some(f) = opt_f {
-                        rem_components.push(f.as_os_str().to_os_string());
-                        for comp in full {
-                            rem_components.push(comp.as_os_str().to_os_string());
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    let mut cand_abs = ancestor_abs.clone();
-    for c in rem_components.iter() {
-        let s = std::ffi::OsStr::new(&c);
-        if s == "." {
-            continue;
-        }
-        if s == ".." {
-            cand_abs = cand_abs
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(cand_abs);
-            continue;
-        }
-        cand_abs.push(s);
-    }
-
-    if !cand_abs.starts_with(&root_abs) {
-        bail!(
-            "{} access to {} escapes allowed root {}",
-            mode.name(),
-            cand_abs.display(),
-            root_abs.display()
-        );
-    }
-
-    Ok(cand_abs)
 }
