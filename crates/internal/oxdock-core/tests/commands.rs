@@ -1,4 +1,4 @@
-use oxdock_core::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
+use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
 use oxdock_fs::{GuardedPath, PathResolver};
 use tempfile::tempdir;
 
@@ -181,12 +181,21 @@ fn commands_behave_cross_platform() {
 
     // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
     let linked_file = snapshot.join("client/dist-link/inner.txt").unwrap();
-    assert!(linked_file.as_path().exists(), "symlink should point at target contents");
+    assert!(
+        linked_file.as_path().exists(),
+        "symlink should point at target contents"
+    );
     assert_eq!(read_trimmed(&linked_file), "symlink target");
 
     // WORKSPACE switches between snapshot and local roots
-    assert_eq!(read_trimmed(&local.join("local_note.txt").unwrap()), "local");
-    assert_eq!(read_trimmed(&snapshot.join("snap_note.txt").unwrap()), "snap");
+    assert_eq!(
+        read_trimmed(&local.join("local_note.txt").unwrap()),
+        "local"
+    );
+    assert_eq!(
+        read_trimmed(&snapshot.join("snap_note.txt").unwrap()),
+        "snap"
+    );
 }
 
 #[test]
@@ -486,11 +495,23 @@ fn copy_git_directory_via_script() {
     run_steps_with_context(&snapshot, &repo, &steps).unwrap();
 
     assert_eq!(
-        read_trimmed(&snapshot.join("out_assets_dir").unwrap().join("x.txt").unwrap()),
+        read_trimmed(
+            &snapshot
+                .join("out_assets_dir")
+                .unwrap()
+                .join("x.txt")
+                .unwrap()
+        ),
         "x"
     );
     assert_eq!(
-        read_trimmed(&snapshot.join("out_assets_dir").unwrap().join("y.txt").unwrap()),
+        read_trimmed(
+            &snapshot
+                .join("out_assets_dir")
+                .unwrap()
+                .join("y.txt")
+                .unwrap()
+        ),
         "y"
     );
 }
@@ -588,9 +609,7 @@ fn read_symlink_escape_is_blocked() {
                 .unwrap_or("escape")
         ))
         .unwrap();
-    parent_fs
-        .write_file(&secret, b"top secret")
-        .unwrap();
+    parent_fs.write_file(&secret, b"top secret").unwrap();
 
     // Inside root, create a link that points to the outside secret.
     let link_path = root.as_path().join("leak.txt");

@@ -31,7 +31,10 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn parse(args: &mut impl Iterator<Item = String>, workspace_root: &GuardedPath) -> Result<Self> {
+    pub fn parse(
+        args: &mut impl Iterator<Item = String>,
+        workspace_root: &GuardedPath,
+    ) -> Result<Self> {
         let mut script: Option<ScriptSource> = None;
         let mut shell = false;
         let mut inline = false;
@@ -181,8 +184,8 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     }
 
     let self_path = std::env::current_exe().context("determine current executable")?;
-    let base_temp = GuardedPath::new_root(std::env::temp_dir().as_path())
-        .context("guard system temp dir")?;
+    let base_temp =
+        GuardedPath::new_root(std::env::temp_dir().as_path()).context("guard system temp dir")?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -349,9 +352,7 @@ fn open_editor_and_read() -> Result<String> {
     fn last_inline_path() -> Option<GuardedPath> {
         if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
             && let Ok(root) = GuardedPath::new_root_from_str(&x)
-            && let Ok(path) = root
-                .join("oxdock")
-                .and_then(|p| p.join("last_inline"))
+            && let Ok(path) = root.join("oxdock").and_then(|p| p.join("last_inline"))
         {
             return Some(path);
         }
@@ -359,9 +360,7 @@ fn open_editor_and_read() -> Result<String> {
         if cfg!(windows)
             && let Ok(app) = std::env::var("APPDATA")
             && let Ok(root) = GuardedPath::new_root_from_str(&app)
-            && let Ok(path) = root
-                .join("oxdock")
-                .and_then(|p| p.join("last_inline"))
+            && let Ok(path) = root.join("oxdock").and_then(|p| p.join("last_inline"))
         {
             return Some(path);
         }
@@ -438,20 +437,18 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
         .join("src.tar")
         .context("failed to create archive path under temp root")?;
     let archive_str = archive_guard.display().to_string();
-    run_cmd(Command::new("git").current_dir(workspace_root.as_path()).args([
-        "archive",
-        "--format=tar",
-        "--output",
-        &archive_str,
-        "HEAD",
-    ]))?;
+    run_cmd(
+        Command::new("git")
+            .current_dir(workspace_root.as_path())
+            .args(["archive", "--format=tar", "--output", &archive_str, "HEAD"]),
+    )?;
 
     run_cmd(
         Command::new("tar")
             .arg("-xf")
             .arg(&archive_str)
             .arg("-C")
-                .arg(temp_root.as_path()),
+            .arg(temp_root.as_path()),
     )?;
 
     // Drop the intermediate archive to keep the temp workspace clean.

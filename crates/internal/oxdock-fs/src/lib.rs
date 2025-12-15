@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 pub mod workspace_fs;
 pub use workspace_fs::PathResolver;
 
-use workspace_fs::access::guard_path;
 use workspace_fs::AccessMode;
+use workspace_fs::access::guard_path;
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new

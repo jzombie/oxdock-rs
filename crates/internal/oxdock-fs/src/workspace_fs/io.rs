@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 
 use super::{AccessMode, PathResolver};
@@ -9,9 +9,8 @@ impl PathResolver {
     #[allow(clippy::disallowed_methods)]
     pub fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
         if !self.root.as_path().exists() {
-            fs::create_dir_all(self.root.as_path()).with_context(|| {
-                format!("creating resolver root {}", self.root.display())
-            })?;
+            fs::create_dir_all(self.root.as_path())
+                .with_context(|| format!("creating resolver root {}", self.root.display()))?;
         }
 
         let guarded = self
@@ -72,7 +71,11 @@ impl PathResolver {
         let cand = self
             .check_access(path.as_path(), AccessMode::Passthru)
             .or_else(|_| {
-                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Passthru)
+                self.check_access_with_root(
+                    &self.build_context,
+                    path.as_path(),
+                    AccessMode::Passthru,
+                )
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
         Ok(cand)
@@ -82,7 +85,9 @@ impl PathResolver {
     pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
-            .or_else(|_| self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read))
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
+            })
             .with_context(|| format!("metadata denied for {}", path.display()))?;
         let m = fs::metadata(guarded.as_path())
             .with_context(|| format!("failed to stat {}", guarded.display()))?;
@@ -91,8 +96,9 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_methods)]
     pub fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
-        let m = fs::metadata(path.as_path())
-            .with_context(|| format!("failed to stat external path {}", path.as_path().display()))?;
+        let m = fs::metadata(path.as_path()).with_context(|| {
+            format!("failed to stat external path {}", path.as_path().display())
+        })?;
         Ok(m)
     }
 
@@ -104,9 +110,8 @@ impl PathResolver {
             let guarded = self
                 .check_access(path.as_path(), AccessMode::Write)
                 .with_context(|| format!("set_permissions denied for {}", path.display()))?;
-            fs::set_permissions(guarded.as_path(), fs::Permissions::from_mode(mode)).with_context(
-                || format!("failed to set permissions on {}", guarded.display()),
-            )?;
+            fs::set_permissions(guarded.as_path(), fs::Permissions::from_mode(mode))
+                .with_context(|| format!("failed to set permissions on {}", guarded.display()))?;
         }
         #[cfg(not(unix))]
         {
@@ -133,7 +138,8 @@ impl PathResolver {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(e).with_context(|| format!("failed to remove file {}", guarded.display()));
+                return Err(e)
+                    .with_context(|| format!("failed to remove file {}", guarded.display()));
             }
         }
         Ok(())
@@ -163,7 +169,10 @@ impl PathResolver {
             .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
 
         if guarded_dst.as_path().exists() {
-            bail!("SYMLINK destination already exists: {}", guarded_dst.display());
+            bail!(
+                "SYMLINK destination already exists: {}",
+                guarded_dst.display()
+            );
         }
         if guarded_src.as_path() == guarded_dst.as_path() {
             bail!(
@@ -174,9 +183,15 @@ impl PathResolver {
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
-                format!("failed to symlink {} -> {}", guarded_src.display(), guarded_dst.display())
-            })?;
+            std::os::unix::fs::symlink(guarded_src.as_path(), guarded_dst.as_path()).with_context(
+                || {
+                    format!(
+                        "failed to symlink {} -> {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
+                },
+            )?;
             Ok(())
         }
 
@@ -202,21 +217,23 @@ impl PathResolver {
                 );
 
                 if meta.is_dir() {
-                    self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
-                        format!(
-                            "failed to copy dir {} -> {}",
-                            guarded_src.display(),
-                            guarded_dst.display()
-                        )
-                    })?;
+                    self.copy_dir_recursive(&guarded_src, &guarded_dst)
+                        .with_context(|| {
+                            format!(
+                                "failed to copy dir {} -> {}",
+                                guarded_src.display(),
+                                guarded_dst.display()
+                            )
+                        })?;
                 } else {
-                    self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
-                        format!(
-                            "failed to copy file {} -> {}",
-                            guarded_src.display(),
-                            guarded_dst.display()
-                        )
-                    })?;
+                    self.copy_file(&guarded_src, &guarded_dst)
+                        .with_context(|| {
+                            format!(
+                                "failed to copy file {} -> {}",
+                                guarded_src.display(),
+                                guarded_dst.display()
+                            )
+                        })?;
                 }
             }
 
@@ -230,21 +247,23 @@ impl PathResolver {
             })?;
             // No native symlinks; fall back to copying to preserve behavior.
             if meta.is_dir() {
-                self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
-                    format!(
-                        "failed to copy dir {} -> {}",
-                        guarded_src.display(),
-                        guarded_dst.display()
-                    )
-                })?;
+                self.copy_dir_recursive(&guarded_src, &guarded_dst)
+                    .with_context(|| {
+                        format!(
+                            "failed to copy dir {} -> {}",
+                            guarded_src.display(),
+                            guarded_dst.display()
+                        )
+                    })?;
             } else {
-                self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
-                    format!(
-                        "failed to copy file {} -> {}",
-                        guarded_src.display(),
-                        guarded_dst.display()
-                    )
-                })?;
+                self.copy_file(&guarded_src, &guarded_dst)
+                    .with_context(|| {
+                        format!(
+                            "failed to copy file {} -> {}",
+                            guarded_src.display(),
+                            guarded_dst.display()
+                        )
+                    })?;
             }
             Ok(())
         }

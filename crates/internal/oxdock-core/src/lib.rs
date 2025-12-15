@@ -106,10 +106,7 @@ mod tests {
             exists(&root, "hit.txt"),
             "guarded WRITE should run after ENV sets variable"
         );
-        assert!(
-            exists(&root, "always.txt"),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
@@ -127,10 +124,7 @@ mod tests {
 
         run_steps(&root, &steps).unwrap();
 
-        assert!(
-            exists(&root, "always.txt"),
-            "WRITE after ECHO should run"
-        );
+        assert!(exists(&root, "always.txt"), "WRITE after ECHO should run");
     }
 
     #[test]
@@ -154,10 +148,7 @@ mod tests {
             exists(&root, "hit.txt"),
             "guarded WRITE on next line should run"
         );
-        assert!(
-            exists(&root, "always.txt"),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
@@ -181,10 +172,7 @@ mod tests {
             !expect_skipped,
             "platform guard should skip on unix and run elsewhere"
         );
-        assert!(
-            exists(&root, "always.txt"),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
@@ -246,10 +234,7 @@ mod tests {
             exists(&root, "hit.txt"),
             "guarded step should run when all guards pass"
         );
-        assert!(
-            exists(&root, "always.txt"),
-            "unguarded step should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded step should run");
     }
 
     #[test]
@@ -278,10 +263,7 @@ mod tests {
             !exists(&root, "miss.txt"),
             "guarded step should skip when any guard fails"
         );
-        assert!(
-            exists(&root, "always.txt"),
-            "unguarded step should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded step should run");
     }
 
     #[cfg(unix)]

@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -12,10 +12,8 @@ impl PathResolver {
     pub fn has_git_dir(&self) -> Result<bool> {
         let mut cur = Some(self.root.clone());
         while let Some(p) = cur {
-            if let Ok(dot_git) = p.join(".git") {
-                if dot_git.as_path().exists() {
-                    return Ok(true);
-                }
+            if let Ok(dot_git) = p.join(".git") && dot_git.as_path().exists() {
+                return Ok(true);
             }
             cur = p.parent();
         }
@@ -33,7 +31,12 @@ impl PathResolver {
 
         let _ = self
             .check_access(self.build_context.as_path(), AccessMode::Read)
-            .with_context(|| format!("build context {} not under root", self.build_context.display()))?;
+            .with_context(|| {
+                format!(
+                    "build context {} not under root",
+                    self.build_context.display()
+                )
+            })?;
 
         let cat_type = Command::new("git")
             .arg("-C")
@@ -151,9 +154,10 @@ impl PathResolver {
                             #[cfg(unix)]
                             {
                                 use std::os::unix::fs::symlink;
-                                symlink(target.trim_end_matches('\n'), dest.as_path()).with_context(
-                                    || format!("creating symlink {} -> {}", dest.display(), target),
-                                )?;
+                                symlink(target.trim_end_matches('\n'), dest.as_path())
+                                    .with_context(|| {
+                                        format!("creating symlink {} -> {}", dest.display(), target)
+                                    })?;
                             }
                             #[cfg(windows)]
                             {

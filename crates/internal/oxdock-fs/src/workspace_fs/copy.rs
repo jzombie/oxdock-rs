@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 
 use super::{AccessMode, PathResolver};
@@ -13,7 +13,9 @@ impl PathResolver {
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
         let guarded_src = self
             .check_access(src.as_path(), AccessMode::Read)
-            .or_else(|_| self.check_access_with_root(&self.build_context, src.as_path(), AccessMode::Read))
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, src.as_path(), AccessMode::Read)
+            })
             .with_context(|| format!("copy source denied for {}", src.display()))?;
         if let Some(parent) = guarded_dst.as_path().parent() {
             fs::create_dir_all(parent)
@@ -46,7 +48,9 @@ impl PathResolver {
 
             let guarded_src = self
                 .check_access(&src_path, AccessMode::Read)
-                .or_else(|_| self.check_access_with_root(&self.build_context, &src_path, AccessMode::Read))
+                .or_else(|_| {
+                    self.check_access_with_root(&self.build_context, &src_path, AccessMode::Read)
+                })
                 .with_context(|| format!("copy source denied for {}", src_path.display()))?;
 
             let guarded_dst = self
@@ -93,7 +97,10 @@ impl PathResolver {
             if file_type.is_dir() {
                 fs::create_dir_all(&dst_path)
                     .with_context(|| format!("creating dir {}", dst_path.display()))?;
-                self.copy_dir_from_external(&UnguardedPath::new(src_path), &GuardedPath::new(guarded_dst_root.root(), &dst_path)?)?;
+                self.copy_dir_from_external(
+                    &UnguardedPath::new(src_path),
+                    &GuardedPath::new(guarded_dst_root.root(), &dst_path)?,
+                )?;
             } else if file_type.is_file() {
                 if let Some(parent) = dst_path.parent() {
                     fs::create_dir_all(parent)
@@ -119,7 +126,11 @@ impl PathResolver {
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
         let n = fs::copy(src.as_path(), guarded_dst.as_path()).with_context(|| {
-            format!("copying {} to {}", src.as_path().display(), guarded_dst.display())
+            format!(
+                "copying {} to {}",
+                src.as_path().display(),
+                guarded_dst.display()
+            )
         })?;
         Ok(n)
     }

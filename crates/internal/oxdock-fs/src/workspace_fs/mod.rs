@@ -35,8 +35,8 @@ impl PathResolver {
     /// directory as the build context. This centralizes env lookup and path
     /// creation so callers avoid ad-hoc path construction.
     pub fn from_manifest_env() -> Result<Self> {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .context("CARGO_MANIFEST_DIR missing")?;
+        let manifest_dir =
+            std::env::var("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR missing")?;
         let path = Path::new(&manifest_dir);
         Self::new(path, path)
     }

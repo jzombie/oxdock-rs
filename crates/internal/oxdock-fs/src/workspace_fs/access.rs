@@ -8,7 +8,11 @@ use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
-pub(crate) fn guard_path(root: &Path, candidate: &Path, mode: AccessMode) -> Result<std::path::PathBuf> {
+pub(crate) fn guard_path(
+    root: &Path,
+    candidate: &Path,
+    mode: AccessMode,
+) -> Result<std::path::PathBuf> {
     if !root.exists() {
         fs::create_dir_all(root)
             .with_context(|| format!("failed to create root {}", root.display()))?;
@@ -98,17 +102,10 @@ impl PathResolver {
         mode: AccessMode,
     ) -> Result<GuardedPath> {
         let guarded = guard_path(root.as_path(), candidate, mode)?;
-        Ok(GuardedPath::from_guarded_parts(
-            root.to_path_buf(),
-            guarded,
-        ))
+        Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
     }
 
-    pub(crate) fn check_access(
-        &self,
-        candidate: &Path,
-        mode: AccessMode,
-    ) -> Result<GuardedPath> {
+    pub(crate) fn check_access(&self, candidate: &Path, mode: AccessMode) -> Result<GuardedPath> {
         self.check_access_with_root(&self.root, candidate, mode)
     }
 }

@@ -1,6 +1,6 @@
 // TODO: Provide ability to pre-check scripts before execution
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
@@ -20,7 +20,11 @@ pub fn run_steps(fs_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(fs_root, fs_root, steps)
 }
 
-pub fn run_steps_with_context(fs_root: &GuardedPath, build_context: &GuardedPath, steps: &[Step]) -> Result<()> {
+pub fn run_steps_with_context(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+) -> Result<()> {
     run_steps_with_context_result(fs_root, build_context, steps).map(|_| ())
 }
 
@@ -388,7 +392,12 @@ fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &GuardedPath) -> Result<String> {
     Ok(fs.canonicalize_abs(cwd)?.display().to_string())
 }
 
-fn describe_dir(fs: &dyn WorkspaceFs, root: &GuardedPath, max_depth: usize, max_entries: usize) -> String {
+fn describe_dir(
+    fs: &dyn WorkspaceFs,
+    root: &GuardedPath,
+    max_depth: usize,
+    max_entries: usize,
+) -> String {
     fn helper(
         fs: &dyn WorkspaceFs,
         guard_root: &GuardedPath,
@@ -432,7 +441,15 @@ fn describe_dir(fs: &dyn WorkspaceFs, root: &GuardedPath, max_depth: usize, max_
                 Err(_) => continue,
             };
             if p.is_dir() {
-                helper(fs, guard_root, &guarded_child, depth + 1, max_depth, left, out);
+                helper(
+                    fs,
+                    guard_root,
+                    &guarded_child,
+                    depth + 1,
+                    max_depth,
+                    left,
+                    out,
+                );
             } else {
                 out.push_str(&format!(
                     "{}  {}\n",

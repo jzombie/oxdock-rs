@@ -46,8 +46,8 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
         ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
     };
 
-    let manifest_resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let manifest_resolver =
+        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
@@ -277,8 +277,8 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
     };
 
-    let manifest_resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let manifest_resolver =
+        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
@@ -302,7 +302,10 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
         if force_rebuild {
-            eprintln!("embed: force rebuilding assets into {}", out_dir_abs.display());
+            eprintln!(
+                "embed: force rebuilding assets into {}",
+                out_dir_abs.display()
+            );
         } else {
             eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
@@ -347,12 +350,9 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         }
         eprintln!("embed: reusing assets at {}", out_dir_abs.display());
         let out_dir_lit = syn::LitStr::new(
-            out_dir_abs
-                .as_path()
-                .to_str()
-                .ok_or_else(|| {
-                    syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
-                })?,
+            out_dir_abs.as_path().to_str().ok_or_else(|| {
+                syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
+            })?,
             input.out_dir.span(),
         );
         let mod_ident = syn::Ident::new(
@@ -380,7 +380,10 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     ))
 }
 
-fn preflight_out_dir_for_build(out_dir: &GuardedPath, out_dir_span: proc_macro2::Span) -> syn::Result<()> {
+fn preflight_out_dir_for_build(
+    out_dir: &GuardedPath,
+    out_dir_span: proc_macro2::Span,
+) -> syn::Result<()> {
     // Build a resolver rooted at the manifest; ensure out_dir is created
     let resolver = PathResolver::from_manifest_env()
         .map_err(|e| syn::Error::new(out_dir_span, e.to_string()))?;
@@ -409,7 +412,9 @@ fn preflight_out_dir_for_build(out_dir: &GuardedPath, out_dir_span: proc_macro2:
     }
 
     // Probe writeability by writing and removing a small file through the resolver.
-    let probe = out_dir.join(".oxdock_write_probe").map_err(|e| syn::Error::new(out_dir_span, e.to_string()))?;
+    let probe = out_dir
+        .join(".oxdock_write_probe")
+        .map_err(|e| syn::Error::new(out_dir_span, e.to_string()))?;
     match resolver.write_file(&probe, b"") {
         Ok(_) => {
             let _ = resolver.remove_file_abs(&probe);
@@ -422,7 +427,11 @@ fn preflight_out_dir_for_build(out_dir: &GuardedPath, out_dir_span: proc_macro2:
     }
 }
 
-fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) -> syn::Result<GuardedPath> {
+fn build_assets(
+    script: &str,
+    span: proc_macro2::Span,
+    out_dir: &GuardedPath,
+) -> syn::Result<GuardedPath> {
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
     let tempdir = tempfile::Builder::new()
         .prefix("oxdock_")
@@ -436,12 +445,13 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) ->
     let steps = oxdock_core::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
-    let resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let resolver =
+        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let build_context = resolver.build_context().clone();
 
-    let final_cwd = oxdock_core::run_steps_with_context_result(&temp_root_guard, &build_context, &steps)
-        .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+    let final_cwd =
+        oxdock_core::run_steps_with_context_result(&temp_root_guard, &build_context, &steps)
+            .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     eprintln!(
         "embed: final workdir {} (temp root {})",
@@ -452,14 +462,14 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) ->
     let meta = resolver
         .metadata_external(&UnguardedPath::new(final_cwd.as_path().to_path_buf()))
         .map_err(|e| {
-        syn::Error::new(
-            span,
-            format!(
-                "final workdir missing after build: {} ({e})",
-                final_cwd.display()
-            ),
-        )
-    })?;
+            syn::Error::new(
+                span,
+                format!(
+                    "final workdir missing after build: {} ({e})",
+                    final_cwd.display()
+                ),
+            )
+        })?;
     if !meta.is_dir() {
         return Err(syn::Error::new(
             span,
@@ -480,7 +490,10 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) ->
     }
 
     resolver
-        .copy_dir_from_external(&UnguardedPath::new(final_cwd.as_path().to_path_buf()), out_dir)
+        .copy_dir_from_external(
+            &UnguardedPath::new(final_cwd.as_path().to_path_buf()),
+            out_dir,
+        )
         .map_err(|e| {
             syn::Error::new(
                 span,
@@ -499,8 +512,8 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) ->
 
 fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
     // Use PathResolver for deletions to keep filesystem access centralized.
-    let resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let resolver =
+        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
 
     // Validate dir is a directory (use std as this is already an existing path under manifest)
     if !dir.as_path().is_dir() {
@@ -519,8 +532,12 @@ fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
 
     for entry in entries {
         let path = entry.path();
-        let guarded = GuardedPath::new(dir.root(), &path)
-            .map_err(|e| syn::Error::new(span, format!("failed to guard entry {}: {e}", path.display())))?;
+        let guarded = GuardedPath::new(dir.root(), &path).map_err(|e| {
+            syn::Error::new(
+                span,
+                format!("failed to guard entry {}: {e}", path.display()),
+            )
+        })?;
         let ft = entry
             .file_type()
             .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
@@ -544,8 +561,8 @@ fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
 }
 
 fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usize> {
-    let resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
+    let resolver =
+        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let entries = resolver
         .read_dir_entries(dir)
         .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
@@ -710,9 +727,16 @@ mod tests {
         assert!(out.contains("DemoAssets"), "should define struct name");
 
         let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
-            .expect("guard folder path");
-        assert_eq!(folder_guard.as_path(), assets_abs.as_path(), "should point folder to out_dir abs path");
+        let folder_guard = GuardedPath::new(
+            manifest_dir.root(),
+            UnguardedPath::new(&folder_path).as_path(),
+        )
+        .expect("guard folder path");
+        assert_eq!(
+            folder_guard.as_path(),
+            assets_abs.as_path(),
+            "should point folder to out_dir abs path"
+        );
     }
 
     #[test]
@@ -756,7 +780,10 @@ mod tests {
 
         // Source file only exists under the provided manifest dir; COPY should succeed from there.
         resolver
-            .write_file(&manifest_dir.join("source.txt").unwrap(), b"hello from manifest")
+            .write_file(
+                &manifest_dir.join("source.txt").unwrap(),
+                b"hello from manifest",
+            )
             .expect("write source");
 
         unsafe {
@@ -777,8 +804,11 @@ mod tests {
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
         let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
-            .expect("guard folder path");
+        let folder_guard = GuardedPath::new(
+            manifest_dir.root(),
+            UnguardedPath::new(&folder_path).as_path(),
+        )
+        .expect("guard folder path");
         let copied = folder_guard.join("copied.txt").expect("join copied.txt");
         let contents = resolver
             .read_to_string(&copied)
@@ -829,8 +859,11 @@ mod tests {
             "folder should be the out_dir path"
         );
 
-        let folder_guard = GuardedPath::new(manifest_dir.root(), UnguardedPath::new(&folder_path).as_path())
-            .expect("guard folder path");
+        let folder_guard = GuardedPath::new(
+            manifest_dir.root(),
+            UnguardedPath::new(&folder_path).as_path(),
+        )
+        .expect("guard folder path");
         let inside = folder_guard.join("hello.txt").expect("join hello.txt");
         assert!(
             inside.as_path().exists(),

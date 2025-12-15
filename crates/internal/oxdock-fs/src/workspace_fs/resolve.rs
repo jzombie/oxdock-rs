@@ -26,7 +26,8 @@ impl PathResolver {
 
         if let Ok(meta) = fs::metadata(resolved.as_path()) {
             if meta.is_dir() {
-                let canon = fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
+                let canon =
+                    fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
                 return GuardedPath::new(resolved.root(), &canon);
             }
             bail!("WORKDIR path is not a directory: {}", resolved.display());
@@ -34,7 +35,8 @@ impl PathResolver {
 
         fs::create_dir_all(resolved.as_path())
             .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
-        let final_abs = fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
+        let final_abs =
+            fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
         GuardedPath::new(resolved.root(), &final_abs)
     }
 
