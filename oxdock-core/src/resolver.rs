@@ -168,7 +168,31 @@ impl PathResolver {
             // if typ is tree/commit/other, fallthrough to tree listing
         }
 
-        // Fallback: list tree entries and stream blobs via git show (no `tar` dependency).
+        // Fallback: When the requested `rev:from` is not a blob (for example,
+        // when it's a tree/directory) we can't extract it with a single
+        // `git show` write. In that case we enumerate the tree entries with
+        // `git ls-tree -r -z <rev> -- <from>` and stream each blob individually
+        // using `git show <rev>:<path>`.
+        //
+        // Triggers:
+        // - `git cat-file -t <rev>:<from>` returns `tree` (directory) or other
+        //   non-`blob` types.
+        //
+        // Behavior & format:
+        // - `git ls-tree -r -z` returns NUL-separated entries of the form
+        //   "<mode> <type> <hash>\t<path>\0". We split on NUL and parse the
+        //   header to obtain the mode and type for each entry.
+        // - For entries with type `blob` we call `git show` to retrieve the
+        //   raw contents and write them to the destination path (creating
+        //   parent directories as needed).
+        // - For entries with mode `120000` (git's symlink blob) we create a
+        //   platform-appropriate symlink on Unix and a placeholder file on
+        //   Windows.
+        // - `commit` entries (submodules) are rejected.
+        //
+        // Rationale: this approach avoids requiring external tools like
+        // `tar`/`unpack` on the host — the implementation relies only on
+        // standard `git` plumbing commands and filesystem operations.
         let ls = Command::new("git")
             .arg("-C")
             .arg(&self.build_context)
