@@ -213,17 +213,33 @@ pub enum Guard {
 pub enum StepKind {
     Workdir(String),
     Workspace(WorkspaceTarget),
-    Env { key: String, value: String },
+    Env {
+        key: String,
+        value: String,
+    },
     Run(String),
     Echo(String),
     RunBg(String),
-    Copy { from: String, to: String },
-    Symlink { from: String, to: String },
+    Copy {
+        from: String,
+        to: String,
+    },
+    Symlink {
+        from: String,
+        to: String,
+    },
     Mkdir(String),
     Ls(Option<String>),
     Cat(String),
-    Write { path: String, contents: String },
-    CopyGit { rev: String, from: String, to: String },
+    Write {
+        path: String,
+        contents: String,
+    },
+    CopyGit {
+        rev: String,
+        from: String,
+        to: String,
+    },
     Exit(i32),
 }
 

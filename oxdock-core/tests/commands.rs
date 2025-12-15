@@ -270,7 +270,10 @@ fn copy_git_via_script_simple() {
     // build_context is `repo` which is under `snapshot` root
     run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
 
-    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_hello.txt")).unwrap(), "git hello");
+    assert_eq!(
+        std::fs::read_to_string(snapshot.path().join("out_hello.txt")).unwrap(),
+        "git hello"
+    );
 }
 
 #[test]
@@ -325,8 +328,14 @@ fn copy_git_directory_via_script() {
     let steps = oxdock_core::parse_script(&script).unwrap();
     run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
 
-    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("x.txt")).unwrap(), "x");
-    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("y.txt")).unwrap(), "y");
+    assert_eq!(
+        std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("x.txt")).unwrap(),
+        "x"
+    );
+    assert_eq!(
+        std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("y.txt")).unwrap(),
+        "y"
+    );
 }
 
 #[test]

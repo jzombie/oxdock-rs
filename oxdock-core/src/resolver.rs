@@ -111,7 +111,7 @@ impl PathResolver {
     }
 
     /// Copy from a git revision/path into the provided destination path.
-    /// This method extracts blobs/trees using `git` plumbing (`git show` or `git archive`)
+    /// This method extracts blobs/trees using `git` plumbing (`git show`)
     /// and copies the material into `to`. `to` should be an absolute path already
     /// validated by the caller.
     pub fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
@@ -124,8 +124,13 @@ impl PathResolver {
             .with_context(|| format!("destination {} escapes allowed root", to.display()))?;
 
         // Ensure build_context is allowed under root
-        let _ = check_access(&self.root, &self.build_context, AccessMode::Read)
-            .with_context(|| format!("build context {} not under root", self.build_context.display()))?;
+        let _ =
+            check_access(&self.root, &self.build_context, AccessMode::Read).with_context(|| {
+                format!(
+                    "build context {} not under root",
+                    self.build_context.display()
+                )
+            })?;
 
         // First check the object type at `rev:from` to avoid treating trees as blobs.
         let cat_type = Command::new("git")
@@ -136,31 +141,31 @@ impl PathResolver {
             .arg(format!("{}:{}", rev, from))
             .output();
 
-        if let Ok(tout) = cat_type {
-            if tout.status.success() {
-                let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
-                if typ == "blob" {
-                    // It's a file/blob; use git show to extract contents and write file
-                    let show = Command::new("git")
-                        .arg("-C")
-                        .arg(&self.build_context)
-                        .arg("show")
-                        .arg(format!("{}:{}", rev, from))
-                        .output()
-                        .with_context(|| format!("failed to run git show for {}:{}", rev, from))?;
+        if let Ok(tout) = cat_type
+            && tout.status.success()
+        {
+            let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
+            if typ == "blob" {
+                // It's a file/blob; use git show to extract contents and write file
+                let show = Command::new("git")
+                    .arg("-C")
+                    .arg(&self.build_context)
+                    .arg("show")
+                    .arg(format!("{}:{}", rev, from))
+                    .output()
+                    .with_context(|| format!("failed to run git show for {}:{}", rev, from))?;
 
-                    if show.status.success() {
-                        if let Some(parent) = to.parent() {
-                            fs::create_dir_all(parent)
-                                .with_context(|| format!("creating parent {}", parent.display()))?;
-                        }
-                        fs::write(to, &show.stdout)
-                            .with_context(|| format!("writing git blob to {}", to.display()))?;
-                        return Ok(());
+                if show.status.success() {
+                    if let Some(parent) = to.parent() {
+                        fs::create_dir_all(parent)
+                            .with_context(|| format!("creating parent {}", parent.display()))?;
                     }
+                    fs::write(to, &show.stdout)
+                        .with_context(|| format!("writing git blob to {}", to.display()))?;
+                    return Ok(());
                 }
-                // if typ is tree/commit/other, fallthrough to tree listing
             }
+            // if typ is tree/commit/other, fallthrough to tree listing
         }
 
         // Fallback: list tree entries and stream blobs via git show (no `tar` dependency).
@@ -208,7 +213,11 @@ impl PathResolver {
                     path_str.clone()
                 };
 
-                let dest = if rel.is_empty() { to.to_path_buf() } else { to.join(&rel) };
+                let dest = if rel.is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(&rel)
+                };
 
                 // Ensure parent directory exists
                 if let Some(parent) = dest.parent() {
@@ -224,7 +233,9 @@ impl PathResolver {
                             .arg("show")
                             .arg(format!("{}:{}", rev, path_str))
                             .output()
-                            .with_context(|| format!("failed to run git show for {}:{}", rev, path_str))?;
+                            .with_context(|| {
+                                format!("failed to run git show for {}:{}", rev, path_str)
+                            })?;
                         if !blob.status.success() {
                             bail!("git show failed for {}:{}", rev, path_str);
                         }
@@ -234,13 +245,15 @@ impl PathResolver {
                             #[cfg(unix)]
                             {
                                 use std::os::unix::fs::symlink;
-                                symlink(target.trim_end_matches('\n'), &dest)
-                                    .with_context(|| format!("creating symlink {} -> {}", dest.display(), target))?;
+                                symlink(target.trim_end_matches('\n'), &dest).with_context(
+                                    || format!("creating symlink {} -> {}", dest.display(), target),
+                                )?;
                             }
                             #[cfg(windows)]
                             {
-                                eprintln!("COPY_GIT: writing symlink placeholder {}", dest.display());
-                                fs::write(&dest, &blob.stdout).with_context(|| format!("writing symlink placeholder {}", dest.display()))?;
+                                fs::write(&dest, &blob.stdout).with_context(|| {
+                                    format!("writing symlink placeholder {}", dest.display())
+                                })?;
                             }
                         } else {
                             fs::write(&dest, &blob.stdout)
@@ -257,32 +270,9 @@ impl PathResolver {
             }
         }
 
-        // tmp will be dropped and cleaned up here
         Ok(())
     }
-
 }
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst).with_context(|| format!("creating dir {}", dst.display()))?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path).with_context(|| {
-                format!("copying {} to {}", src_path.display(), dst_path.display())
-            })?;
-        } else {
-            bail!("unsupported file type: {}", src_path.display());
-        }
-    }
-    Ok(())
-}
-
 
 fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
     let root_abs = fs::canonicalize(root)
