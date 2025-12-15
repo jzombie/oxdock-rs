@@ -32,12 +32,12 @@ jobs:
   #     - name: Install Rust
   #       uses: dtolnay/rust-toolchain@stable
 
-  #     - name: Free disk space on Linux runner
-  #       if: runner.os == 'Linux'
-  #       run: |
-  #         sudo rm -rf /usr/share/dotnet
-  #         sudo rm -rf /usr/local/lib/android
-  #         sudo rm -rf /opt/ghc
+  # #    - name: Free disk space on Linux runner
+  # #      if: runner.os == 'Linux'
+  # #      run: |
+  # #        sudo rm -rf /usr/share/dotnet
+  # #        sudo rm -rf /usr/local/lib/android
+  # #        sudo rm -rf /opt/ghc
 
   #     - name: Capture rustc commit hash
   #       id: rustc
@@ -108,11 +108,11 @@ jobs:
         with:
           components: miri
 
-      - name: Free disk space on Linux runner
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
+      # - name: Free disk space on Linux runner
+      #   run: |
+      #     sudo rm -rf /usr/share/dotnet
+      #     sudo rm -rf /usr/local/lib/android
+      #     sudo rm -rf /opt/ghc
 
       - name: Capture rustc commit hash
         id: rustc-miri
