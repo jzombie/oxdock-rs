@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
 use std::env;
 use std::io::{self, IsTerminal, Read};
-use std::process::{Command};
+use std::process::Command;
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
@@ -64,10 +64,7 @@ impl Options {
 
         let script = script.unwrap_or(ScriptSource::Stdin);
 
-        Ok(Self {
-            script,
-            shell,
-        })
+        Ok(Self { script, shell })
     }
 }
 
@@ -94,7 +91,7 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
-                // No piped script provided. If the caller requested `--shell` 
+                // No piped script provided. If the caller requested `--shell`
                 // allow running with an initially-empty script so we can either
                 // drop into the interactive shell or open the editor later.
                 // Otherwise, require a script on stdin.
