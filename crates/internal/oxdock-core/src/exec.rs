@@ -695,7 +695,8 @@ mod tests {
         let mock = MockProcessManager::default();
         let err = run_steps_with_manager(&root, &root, &[capture], mock).unwrap_err();
         assert!(
-            err.to_string().contains("CAPTURE expects exactly one instruction"),
+            err.to_string()
+                .contains("CAPTURE expects exactly one instruction"),
             "unexpected error: {err}"
         );
     }
