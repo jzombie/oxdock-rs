@@ -1,16 +1,34 @@
+#![deny(clippy::disallowed_methods)]
+
 pub mod ast;
 pub mod exec;
-pub mod resolver;
 pub use ast::*;
 pub use exec::*;
-pub use resolver::PathResolver;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use indoc::indoc;
+    use oxdock_fs::PathResolver;
     #[cfg(unix)]
     use std::time::Instant;
+
+    fn read_trimmed(path: &std::path::Path) -> String {
+        let root = path.parent().unwrap_or(path);
+        let resolver = PathResolver::new(root, root);
+        resolver
+            .read_to_string(path)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    fn create_dirs(path: &std::path::Path) {
+        let root = path.parent().unwrap_or(path);
+        let resolver = PathResolver::new(root, root);
+        resolver.create_dir_all_abs(path).unwrap();
+    }
 
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
@@ -30,7 +48,7 @@ mod tests {
 
         run_steps(root, &steps).unwrap();
 
-        let seen = std::fs::read_to_string(root.join("seen.txt")).unwrap();
+        let seen = read_trimmed(&root.join("seen.txt"));
         let expected = root.join(".cargo-target");
         assert_eq!(
             seen.trim(),
@@ -379,16 +397,8 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps(root, &steps).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(root.join("run.txt"))
-                .unwrap()
-                .trim(),
-            "bar"
-        );
-        assert_eq!(
-            std::fs::read_to_string(root.join("bg.txt")).unwrap().trim(),
-            "bar"
-        );
+        assert_eq!(read_trimmed(&root.join("run.txt")), "bar");
+        assert_eq!(read_trimmed(&root.join("bg.txt")), "bar");
     }
 
     #[test]
@@ -419,7 +429,7 @@ mod tests {
         let snapshot = tempfile::tempdir().unwrap();
         let local = tempfile::tempdir().unwrap();
         let local_client = local.path().join("client");
-        std::fs::create_dir_all(&local_client).unwrap();
+        create_dirs(&local_client);
 
         let script = indoc! {
             r#"

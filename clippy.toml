@@ -1,0 +1,24 @@
+# Disallowed methods to ensure filesystem access in `oxdock-core` goes through PathResolver.
+# Clippy will emit the `disallowed_methods` lint for any exact matches.
+# Note: this configuration works with Clippy (cargo clippy). It will not by itself
+# make `cargo build` fail unless `cargo clippy` is run and the lint is denied.
+
+# The list below was provided by the user; each entry includes a short note.
+disallowed-methods = [
+  "std::fs::read",
+  "std::fs::read_to_string",
+  "std::fs::read_dir",
+  "std::fs::File::open",
+  "std::fs::OpenOptions::open",
+  "std::fs::metadata",
+  "std::fs::symlink_metadata",
+  "std::fs::canonicalize",
+  "std::fs::remove_dir_all",
+  "std::fs::remove_file",
+  "std::fs::create_dir_all",
+  "std::fs::create_dir",
+  "std::fs::copy",
+  "std::fs::rename",
+  "std::fs::write",
+  "std::path::Path::canonicalize",
+]

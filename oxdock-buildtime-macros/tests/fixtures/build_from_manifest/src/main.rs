@@ -1,10 +1,16 @@
 use oxdock_buildtime_macros::embed;
 
-embed! {
-    name: DemoAssets,
-    script: "COPY source.txt copied.txt",
-    out_dir: "prebuilt",
+mod demo_assets {
+    use super::*;
+
+    embed! {
+        name: DemoAssets,
+        script: "COPY source.txt copied.txt",
+        out_dir: "prebuilt",
+    }
 }
+
+use demo_assets::DemoAssets;
 
 fn main() {
     // At runtime just check the embedded file exists.

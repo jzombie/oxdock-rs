@@ -266,6 +266,7 @@ name = "oxdock-buildtime-macros"
 version = "0.1.0-alpha"
 dependencies = [
  "oxdock-core",
+ "oxdock-fs",
  "proc-macro2",
  "quote",
  "serial_test",
@@ -281,6 +282,7 @@ dependencies = [
  "indoc",
  "oxdock-buildtime-macros",
  "oxdock-core",
+ "oxdock-fs",
  "rust-embed",
  "tempfile",
 ]
@@ -291,7 +293,15 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
+ "oxdock-fs",
  "tempfile",
+]
+
+[[package]]
+name = "oxdock-fs"
+version = "0.1.0-alpha"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
