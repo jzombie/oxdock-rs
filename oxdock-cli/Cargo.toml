@@ -1,9 +1,12 @@
 [package]
 name = "oxdock-cli"
-version = "0.1.0-alpha"
-edition = "2024"
-publish = false
-license = "Apache-2.0"
+description = "Placeholder crate"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
