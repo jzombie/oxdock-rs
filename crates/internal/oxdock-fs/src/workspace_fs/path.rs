@@ -100,7 +100,6 @@ impl std::fmt::Display for GuardedPath {
     }
 }
 
-// Replace old impl with PathLike implementation
 impl PathLike for GuardedPath {
     fn as_path(&self) -> &Path {
         self.as_path()
