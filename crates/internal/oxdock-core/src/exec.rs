@@ -83,12 +83,7 @@ fn run_steps_inner(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<GuardedPath> {
-    run_steps_with_manager(
-        fs_root,
-        build_context,
-        steps,
-        ShellProcessManager::default(),
-    )
+    run_steps_with_manager(fs_root, build_context, steps, ShellProcessManager)
 }
 
 fn run_steps_with_manager<P: ProcessManager>(
@@ -547,12 +542,11 @@ mod tests {
     use oxdock_fs::GuardedPath;
     use std::cell::RefCell;
     use std::collections::VecDeque;
-    use std::path::Path;
     use std::rc::Rc;
 
     #[test]
     fn run_records_env_and_cwd() {
-        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
                 guards: Vec::new(),
@@ -566,7 +560,7 @@ mod tests {
                 kind: StepKind::Run("echo hi".into()),
             },
         ];
-        let mock = MockProcessManager::new();
+        let mock = MockProcessManager::default();
         run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
         assert_eq!(
             mock.recorded_runs(),
@@ -576,7 +570,7 @@ mod tests {
 
     #[test]
     fn run_bg_completion_short_circuits_pipeline() {
-        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
                 guards: Vec::new(),
@@ -587,7 +581,7 @@ mod tests {
                 kind: StepKind::Run("echo after".into()),
             },
         ];
-        let mock = MockProcessManager::new();
+        let mock = MockProcessManager::default();
         mock.push_bg_plan(0, success_status());
         run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
         assert!(
@@ -599,7 +593,7 @@ mod tests {
 
     #[test]
     fn exit_kills_background_processes() {
-        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
                 guards: Vec::new(),
@@ -610,7 +604,7 @@ mod tests {
                 kind: StepKind::Exit(5),
             },
         ];
-        let mock = MockProcessManager::new();
+        let mock = MockProcessManager::default();
         mock.push_bg_plan(usize::MAX, success_status());
         let err = run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap_err();
         assert!(
@@ -629,10 +623,6 @@ mod tests {
     }
 
     impl MockProcessManager {
-        fn new() -> Self {
-            Self::default()
-        }
-
         fn recorded_runs(&self) -> Vec<String> {
             self.runs.borrow().clone()
         }
