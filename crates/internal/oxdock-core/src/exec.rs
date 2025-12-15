@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
-use oxdock_fs::resolver::PathResolver;
+use oxdock_fs::{resolver::PathResolver, WorkspaceFs};
 
 struct ExecState {
-    resolver: PathResolver,
+    resolver: Box<dyn WorkspaceFs>,
     cargo_target_dir: PathBuf,
     cwd: PathBuf,
     envs: HashMap<String, String>,
@@ -64,7 +64,7 @@ pub fn run_steps_with_context_result(
 
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
     let mut state = ExecState {
-        resolver: PathResolver::new(fs_root, build_context),
+        resolver: Box::new(PathResolver::new(fs_root, build_context)),
         cargo_target_dir: fs_root.join(".cargo-target"),
         cwd: PathResolver::new(fs_root, build_context)
             .root()
@@ -180,7 +180,7 @@ fn execute_steps(
                     .resolver
                     .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                copy_entry(&state.resolver, &from_abs, &to_abs)
+                copy_entry(state.resolver.as_ref(), &from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
@@ -255,7 +255,7 @@ fn execute_steps(
             }
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
-                let real = canonical_cwd(&state.resolver, &state.cwd).with_context(|| {
+                    let real = canonical_cwd(state.resolver.as_ref(), &state.cwd).with_context(|| {
                     format!(
                         "step {}: CWD failed to canonicalize {}",
                         idx + 1,
@@ -309,10 +309,10 @@ fn execute_steps(
                     bail!("CAPTURE expects exactly one instruction");
                 }
                 let mut sub_state = ExecState {
-                    resolver: PathResolver::new(
+                    resolver: Box::new(PathResolver::new(
                         state.resolver.root(),
                         state.resolver.build_context(),
-                    ),
+                    )),
                     cargo_target_dir: state.cargo_target_dir.clone(),
                     cwd: state.cwd.clone(),
                     envs: state.envs.clone(),
@@ -376,7 +376,7 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     Ok(())
 }
 
-fn copy_entry(resolver: &PathResolver, src: &Path, dst: &Path) -> Result<()> {
+fn copy_entry(resolver: &dyn WorkspaceFs, src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         bail!("source missing: {}", src.display());
     }
@@ -396,18 +396,18 @@ fn copy_entry(resolver: &PathResolver, src: &Path, dst: &Path) -> Result<()> {
 
 // helper removed: resolver handles recursive copying now
 
-fn canonical_cwd(resolver: &PathResolver, cwd: &Path) -> Result<String> {
+fn canonical_cwd(resolver: &dyn WorkspaceFs, cwd: &Path) -> Result<String> {
     Ok(resolver.canonicalize_abs(cwd)?.display().to_string())
 }
 
 fn describe_dir(
-    resolver: &PathResolver,
+    resolver: &dyn WorkspaceFs,
     root: &Path,
     max_depth: usize,
     max_entries: usize,
 ) -> String {
     fn helper(
-        resolver: &PathResolver,
+        resolver: &dyn WorkspaceFs,
         path: &Path,
         depth: usize,
         max_depth: usize,
