@@ -1,12 +1,15 @@
 #![allow(clippy::disallowed_methods)]
 
-use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
-use oxdock_fs::{PathResolver, path::Path};
+use oxdock_core::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
+use oxdock_fs::{GuardedPath, PathResolver};
 use tempfile::tempdir;
 
-fn read_trimmed(path: &Path) -> String {
-    let root = path.parent().unwrap_or(path);
-    let resolver = PathResolver::new(root, root);
+fn guard_root(path: &std::path::Path) -> GuardedPath {
+    GuardedPath::new_root(path).unwrap()
+}
+
+fn read_trimmed(path: &GuardedPath) -> String {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
     resolver
         .read_to_string(path)
         .unwrap_or_default()
@@ -14,35 +17,33 @@ fn read_trimmed(path: &Path) -> String {
         .to_string()
 }
 
-fn write_text(path: &Path, contents: &str) {
-    let root = path.parent().unwrap_or(path);
-    let resolver = PathResolver::new(root, root);
+fn write_text(path: &GuardedPath, contents: &str) {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
     resolver.write_file(path, contents.as_bytes()).unwrap();
 }
 
-fn create_dirs(path: &Path) {
-    let root = path.parent().unwrap_or(path);
-    let resolver = PathResolver::new(root, root);
+fn create_dirs(path: &GuardedPath) {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
     resolver.create_dir_all_abs(path).unwrap();
 }
 
-fn remove_file(path: &Path) {
-    let root = path.parent().unwrap_or(path);
-    let resolver = PathResolver::new(root, root);
-    let _ = resolver.remove_file_abs(path);
+fn exists(root: &GuardedPath, rel: &str) -> bool {
+    root.as_path().join(rel).exists()
 }
 
 #[test]
 fn commands_behave_cross_platform() {
-    let snapshot = tempdir().unwrap();
-    let local = tempdir().unwrap();
+    let snapshot_dir = tempdir().unwrap();
+    let snapshot = guard_root(snapshot_dir.path());
+    let local = snapshot.join("local").unwrap();
+    create_dirs(&local);
 
     // Build context (local workspace) files for COPY and SYMLINK targets.
-    let build_root = local.path();
-    write_text(&build_root.join("source.txt"), "from build");
-    let target_dir = build_root.join("target_dir");
+    let build_root = local.clone();
+    write_text(&build_root.join("source.txt").unwrap(), "from build");
+    let target_dir = build_root.join("target_dir").unwrap();
     create_dirs(&target_dir);
-    write_text(&target_dir.join("inner.txt"), "symlink target");
+    write_text(&target_dir.join("inner.txt").unwrap(), "symlink target");
 
     let run_cmd = if cfg!(windows) {
         "echo %FOO%> run.txt"
@@ -157,45 +158,43 @@ fn commands_behave_cross_platform() {
         },
     ];
 
-    run_steps_with_context(snapshot.path(), local.path(), &steps).unwrap();
+    run_steps_with_context(&snapshot, &local, &steps).unwrap();
 
     // RUN picks up ENV
-    assert_eq!(read_trimmed(&snapshot.path().join("run.txt")), "bar");
+    assert_eq!(read_trimmed(&snapshot.join("run.txt").unwrap()), "bar");
     // RUN_BG picks up ENV
-    assert_eq!(read_trimmed(&snapshot.path().join("bg.txt")), "bar");
+    assert_eq!(read_trimmed(&snapshot.join("bg.txt").unwrap()), "bar");
 
     // WRITE + MKDIR
     assert_eq!(
-        read_trimmed(&snapshot.path().join("client/dist/hello.txt")),
+        read_trimmed(&snapshot.join("client/dist/hello.txt").unwrap()),
         "hi"
     );
     assert_eq!(
-        read_trimmed(&snapshot.path().join("client/dist/nested.txt")),
+        read_trimmed(&snapshot.join("client/dist/nested.txt").unwrap()),
         "nested"
     );
 
     // COPY from build context into snapshot workspace
     assert_eq!(
-        read_trimmed(&snapshot.path().join("client/dist/from_build.txt")),
+        read_trimmed(&snapshot.join("client/dist/from_build.txt").unwrap()),
         "from build"
     );
 
     // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
-    let linked_file = snapshot.path().join("client/dist-link/inner.txt");
-    assert!(
-        linked_file.exists(),
-        "symlink should point at target contents"
-    );
+    let linked_file = snapshot.join("client/dist-link/inner.txt").unwrap();
+    assert!(linked_file.as_path().exists(), "symlink should point at target contents");
     assert_eq!(read_trimmed(&linked_file), "symlink target");
 
     // WORKSPACE switches between snapshot and local roots
-    assert_eq!(read_trimmed(&local.path().join("local_note.txt")), "local");
-    assert_eq!(read_trimmed(&snapshot.path().join("snap_note.txt")), "snap");
+    assert_eq!(read_trimmed(&local.join("local_note.txt").unwrap()), "local");
+    assert_eq!(read_trimmed(&snapshot.join("snap_note.txt").unwrap()), "snap");
 }
 
 #[test]
 fn exit_stops_pipeline_and_reports_code() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -217,29 +216,31 @@ fn exit_stops_pipeline_and_reports_code() {
         },
     ];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("EXIT requested with code 9"),
         "error message should surface EXIT code"
     );
 
-    assert!(root.path().join("before.txt").exists());
-    assert!(!root.path().join("after.txt").exists());
+    assert!(exists(&root, "before.txt"));
+    assert!(!exists(&root, "after.txt"));
 }
 
 #[test]
 fn accepts_semicolon_separated_commands() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let script = "WRITE one.txt 1; WRITE two.txt 2";
     let steps = oxdock_core::parse_script(script).unwrap();
-    run_steps(root.path(), &steps).unwrap();
-    assert_eq!(read_trimmed(&root.path().join("one.txt")), "1");
-    assert_eq!(read_trimmed(&root.path().join("two.txt")), "2");
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("one.txt").unwrap()), "1");
+    assert_eq!(read_trimmed(&root.join("two.txt").unwrap()), "2");
 }
 
 #[test]
 fn write_cmd_captures_output() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let cmd = if cfg!(windows) {
         "RUN echo hello"
     } else {
@@ -252,13 +253,14 @@ fn write_cmd_captures_output() {
             cmd: cmd.into(),
         },
     }];
-    run_steps(root.path(), &steps).unwrap();
-    assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello");
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
 }
 
 #[test]
 fn capture_echo_interpolates_env() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -276,17 +278,18 @@ fn capture_echo_interpolates_env() {
         },
     ];
 
-    run_steps(root.path(), &steps).unwrap();
-    assert_eq!(read_trimmed(&root.path().join("echo.txt")), "value=hi");
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
 }
 
 #[test]
 fn capture_ls_lists_entries_with_header() {
-    let root = tempdir().unwrap();
-    let dir = root.path().join("items");
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    let dir = root.join("items").unwrap();
     create_dirs(&dir);
-    write_text(&dir.join("a.txt"), "a");
-    write_text(&dir.join("b.txt"), "b");
+    write_text(&dir.join("a.txt").unwrap(), "a");
+    write_text(&dir.join("b.txt").unwrap(), "b");
 
     let steps = vec![
         Step {
@@ -302,13 +305,14 @@ fn capture_ls_lists_entries_with_header() {
         },
     ];
 
-    run_steps(root.path(), &steps).unwrap();
+    run_steps(&root, &steps).unwrap();
 
-    let content = read_trimmed(&root.path().join("items/ls.txt"));
+    let content = read_trimmed(&root.join("items/ls.txt").unwrap());
     let mut lines: Vec<_> = content.lines().map(str::to_string).collect();
     let expected_header = format!(
         "{}:",
-        PathResolver::new(&dir, &dir)
+        PathResolver::new(dir.root(), dir.root())
+            .unwrap()
             .canonicalize_abs(&dir)
             .unwrap()
             .display()
@@ -319,8 +323,9 @@ fn capture_ls_lists_entries_with_header() {
 
 #[test]
 fn capture_cat_emits_file_contents() {
-    let root = tempdir().unwrap();
-    write_text(&root.path().join("note.txt"), "hello note");
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    write_text(&root.join("note.txt").unwrap(), "hello note");
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -330,13 +335,14 @@ fn capture_cat_emits_file_contents() {
         },
     }];
 
-    run_steps(root.path(), &steps).unwrap();
-    assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello note");
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
 }
 
 #[test]
 fn capture_cwd_canonicalizes_and_writes() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -351,39 +357,43 @@ fn capture_cwd_canonicalizes_and_writes() {
         },
     ];
 
-    run_steps(root.path(), &steps).unwrap();
+    run_steps(&root, &steps).unwrap();
 
-    let expected = PathResolver::new(root.path(), root.path())
-        .canonicalize_abs(&root.path().join("a/b"))
+    let expected = PathResolver::new(root.root(), root.root())
+        .unwrap()
+        .canonicalize_abs(&root.join("a/b").unwrap())
         .unwrap()
         .display()
         .to_string();
-    assert_eq!(read_trimmed(&root.path().join("a/b/pwd.txt")), expected);
+    assert_eq!(read_trimmed(&root.join("a/b/pwd.txt").unwrap()), expected);
 }
 
 #[test]
 fn copy_git_via_script_simple() {
-    let snapshot = tempdir().unwrap();
+    let snapshot_temp = tempdir().unwrap();
+    let snapshot = guard_root(snapshot_temp.path());
 
     // Create a tiny git repo inside the snapshot so build_context is under root
-    let repo = snapshot.path().join("repo");
+    let repo = snapshot.join("repo").unwrap();
     create_dirs(&repo);
-    write_text(&repo.join("hello.txt"), "git hello");
-    create_dirs(&repo.join("assets"));
-    write_text(&repo.join("assets").join("a.txt"), "a");
-    write_text(&repo.join("assets").join("b.txt"), "b");
+    write_text(&repo.join("hello.txt").unwrap(), "git hello");
+    create_dirs(&repo.join("assets").unwrap());
+    let assets = repo.join("assets").unwrap();
+    create_dirs(&assets);
+    write_text(&assets.join("a.txt").unwrap(), "a");
+    write_text(&assets.join("b.txt").unwrap(), "b");
 
     // init and commit
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("add")
         .arg(".")
         .status()
@@ -391,7 +401,7 @@ fn copy_git_via_script_simple() {
     // Commit using `-c` so we don't write any repo config
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -404,7 +414,7 @@ fn copy_git_via_script_simple() {
 
     let rev_out = std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("rev-parse")
         .arg("HEAD")
         .output()
@@ -415,43 +425,45 @@ fn copy_git_via_script_simple() {
 
     let steps = oxdock_core::parse_script(&script).unwrap();
     // build_context is `repo` which is under `snapshot` root
-    run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
 
     assert_eq!(
-        read_trimmed(&snapshot.path().join("out_hello.txt")),
+        read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
         "git hello"
     );
 }
 
 #[test]
 fn copy_git_directory_via_script() {
-    let snapshot = tempdir().unwrap();
+    let snapshot_temp = tempdir().unwrap();
+    let snapshot = guard_root(snapshot_temp.path());
 
     // Create a tiny git repo inside the snapshot so build_context is under root
-    let repo = snapshot.path().join("repo_dir");
+    let repo = snapshot.join("repo_dir").unwrap();
     create_dirs(&repo);
-    create_dirs(&repo.join("assets_dir"));
-    write_text(&repo.join("assets_dir").join("x.txt"), "x");
-    write_text(&repo.join("assets_dir").join("y.txt"), "y");
+    let assets_dir = repo.join("assets_dir").unwrap();
+    create_dirs(&assets_dir);
+    write_text(&assets_dir.join("x.txt").unwrap(), "x");
+    write_text(&assets_dir.join("y.txt").unwrap(), "y");
 
     // init, add, commit (use -c to avoid writing config)
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("add")
         .arg(".")
         .status()
         .expect("git add failed");
     std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -464,7 +476,7 @@ fn copy_git_directory_via_script() {
 
     let rev_out = std::process::Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo.as_path())
         .arg("rev-parse")
         .arg("HEAD")
         .output()
@@ -473,28 +485,29 @@ fn copy_git_directory_via_script() {
 
     let script = format!("COPY_GIT {} assets_dir out_assets_dir", rev);
     let steps = oxdock_core::parse_script(&script).unwrap();
-    run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
 
     assert_eq!(
-        read_trimmed(&snapshot.path().join("out_assets_dir").join("x.txt")),
+        read_trimmed(&snapshot.join("out_assets_dir").unwrap().join("x.txt").unwrap()),
         "x"
     );
     assert_eq!(
-        read_trimmed(&snapshot.path().join("out_assets_dir").join("y.txt")),
+        read_trimmed(&snapshot.join("out_assets_dir").unwrap().join("y.txt").unwrap()),
         "y"
     );
 }
 
 #[test]
 fn workdir_cannot_escape_root() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     // Attempt to switch to parent of root which should be disallowed
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Workdir("../".into()),
     }];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("WORKDIR") && err.to_string().contains("escapes"),
         "expected WORKDIR escape error, got {}",
@@ -504,7 +517,8 @@ fn workdir_cannot_escape_root() {
 
 #[test]
 fn write_cannot_escape_root() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Write {
@@ -513,7 +527,7 @@ fn write_cannot_escape_root() {
         },
     }];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
         "expected WRITE escape error, got {}",
@@ -523,47 +537,55 @@ fn write_cannot_escape_root() {
 
 #[test]
 fn read_cannot_escape_root() {
-    let root = tempdir().unwrap();
-    let parent = root.path().parent().expect("tempdir should have a parent");
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    let parent = root
+        .as_path()
+        .parent()
+        .expect("tempdir should have a parent");
     let secret = parent.join(format!(
         "{}-secret.txt",
-        root.path()
+        root.as_path()
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("escape")
     ));
-    write_text(&secret, "nope");
+    std::fs::write(&secret, "nope").unwrap();
 
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("../secret.txt".into()),
     }];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("CAT") && err.to_string().contains("escapes"),
         "expected CAT escape error, got {}",
         err
     );
 
-    remove_file(&secret);
+    let _ = std::fs::remove_file(&secret);
 }
 
 #[test]
 fn read_symlink_escape_is_blocked() {
-    let root = tempdir().unwrap();
-    let parent = root.path().parent().expect("tempdir should have a parent");
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    let parent = root
+        .as_path()
+        .parent()
+        .expect("tempdir should have a parent");
     let secret = parent.join(format!(
         "{}-symlink-secret.txt",
-        root.path()
+        root.as_path()
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("escape")
     ));
-    write_text(&secret, "top secret");
+    std::fs::write(&secret, "top secret").unwrap();
 
     // Inside root, create a link that points to the outside secret.
-    let link_path = root.path().join("leak.txt");
+    let link_path = root.as_path().join("leak.txt");
     #[cfg(unix)]
     std::os::unix::fs::symlink(&secret, &link_path).unwrap();
     #[cfg(windows)]
@@ -574,20 +596,21 @@ fn read_symlink_escape_is_blocked() {
         kind: StepKind::Cat("leak.txt".into()),
     }];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("CAT") && err.to_string().contains("escapes"),
         "expected CAT symlink escape error, got {}",
         err
     );
 
-    remove_file(&secret);
+    let _ = std::fs::remove_file(&secret);
 }
 
 #[test]
 fn write_missing_path_cannot_escape_root() {
-    let root = tempdir().unwrap();
-    create_dirs(&root.path().join("a/b"));
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    create_dirs(&root.join("a/b").unwrap());
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -598,7 +621,7 @@ fn write_missing_path_cannot_escape_root() {
         },
     }];
 
-    let err = run_steps(root.path(), &steps).unwrap_err();
+    let err = run_steps(&root, &steps).unwrap_err();
     assert!(
         err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
         "expected WRITE escape error for missing path, got {}",
@@ -608,33 +631,36 @@ fn write_missing_path_cannot_escape_root() {
 
 #[test]
 fn workdir_creates_missing_dirs_within_root() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Workdir("a/b/c".into()),
     }];
 
-    run_steps(root.path(), &steps).unwrap();
+    run_steps(&root, &steps).unwrap();
 
-    assert!(root.path().join("a/b/c").exists());
+    assert!(root.as_path().join("a/b/c").exists());
 }
 
 #[test]
 fn cat_reads_file_contents_without_error() {
-    let root = tempdir().unwrap();
-    write_text(&root.path().join("file.txt"), "hello cat");
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
+    write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("file.txt".into()),
     }];
 
     // This should succeed and emit contents to stdout; we only verify it does not error.
-    run_steps(root.path(), &steps).unwrap();
+    run_steps(&root, &steps).unwrap();
 }
 
 #[test]
 fn cwd_prints_to_stdout() {
-    let root = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let root = guard_root(temp.path());
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -646,5 +672,5 @@ fn cwd_prints_to_stdout() {
         },
     ];
     // Should succeed and print the canonical cwd; we only assert it doesn't error.
-    run_steps(root.path(), &steps).unwrap();
+    run_steps(&root, &steps).unwrap();
 }

@@ -29,3 +29,6 @@ disallowed-types = [
   "std::path::Path",
   "std::path::PathBuf",
 ]
+
+# TODO: Ensure tempdir module is guarded as well, and redirected to fs abstraction
+# TODO: Add UnguardedPath to the list of disallowed types

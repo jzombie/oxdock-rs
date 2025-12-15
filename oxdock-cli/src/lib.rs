@@ -1,9 +1,10 @@
 #![deny(clippy::disallowed_methods)]
 
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{PathResolver, path::{Path, PathBuf}};
+use oxdock_fs::{GuardedPath, PathResolver, UnguardedPath};
 use std::env;
 use std::io::{self, IsTerminal, Read};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub use oxdock_core::{
@@ -77,27 +78,30 @@ pub fn execute(opts: Options) -> Result<()> {
 
     // Prefer the runtime env var when present (e.g., under `cargo run`), but fall back to the
     // compile-time value so the binary can be invoked directly without CARGO_MANIFEST_DIR set.
-    let workspace_root = discover_workspace_root()?;
+    let workspace_root = GuardedPath::new_root(&discover_workspace_root()?)
+        .context("guard workspace root")?;
 
-    let temp = tempfile::tempdir().context("failed to create temp dir")?;
-    // Keep the workspace alive for interactive shells; otherwise the tempdir cleans up on drop.
-    let temp_path = if opts.shell {
-        temp.keep()
-    } else {
-        temp.path().to_path_buf()
-    };
+    let tempdir = tempfile::tempdir().context("failed to create temp dir")?;
+    let temp_path = tempdir.path().to_path_buf();
+    let temp_root = GuardedPath::new_root(&temp_path).context("guard temp dir")?;
 
     // Materialize source tree without .git
-    archive_head(&workspace_root, &temp_path)?;
+    archive_head(&workspace_root, &temp_root)?;
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
         ScriptSource::Path(path) => {
             // Read script path via PathResolver rooted at the workspace so
             // script files are validated to live under the workspace.
-            let resolver = PathResolver::new(&workspace_root, &workspace_root);
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+            let script_rel = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("script path must be valid UTF-8"))?;
+            let script_path = workspace_root
+                .join(script_rel)
+                .with_context(|| format!("failed to join script path {}", path.display()))?;
             resolver
-                .read_to_string(path)
+                .read_to_string(&script_path)
                 .with_context(|| format!("failed to read script at {}", path.display()))?
         }
         ScriptSource::Stdin => {
@@ -139,7 +143,7 @@ pub fn execute(opts: Options) -> Result<()> {
         let steps = parse_script(&script)?;
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
         // can source from the original tree if needed.
-        run_steps_with_context(&temp_path, &workspace_root, &steps)?;
+        run_steps_with_context(&temp_root, &workspace_root, &steps)?;
     }
 
     // If requested, drop into an interactive shell after running the script.
@@ -147,7 +151,7 @@ pub fn execute(opts: Options) -> Result<()> {
         if !has_controlling_tty() {
             bail!("--shell requires a tty (no controlling tty available)");
         }
-        return run_shell(&temp_path, &workspace_root);
+        return run_shell(temp_root.as_path(), workspace_root.as_path());
     }
 
     Ok(())
@@ -199,9 +203,11 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("temp path unexpectedly missing parent"))?
         .to_path_buf();
-    let resolver_temp = PathResolver::new(&temp_root, &temp_root);
+    let temp_root_guard = GuardedPath::new_root(&temp_root)?;
+    let resolver_temp = PathResolver::new(&temp_root, &temp_root)?;
+    let dest = GuardedPath::new(temp_root_guard.root(), &temp_path)?;
     resolver_temp
-        .copy_file_from_external(&self_path, &temp_path)
+        .copy_file_from_external(&UnguardedPath::new(self_path), &dest)
         .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
 
     let mut cmd = Command::new(&temp_path);
@@ -221,7 +227,7 @@ fn discover_workspace_root() -> Result<PathBuf> {
     }
 
     if let Ok(resolver) = PathResolver::from_manifest_env()
-        && let Some(parent) = resolver.root().parent()
+        && let Some(parent) = resolver.root().as_path().parent()
     {
         return Ok(parent.to_path_buf());
     }
@@ -242,7 +248,8 @@ fn discover_workspace_root() -> Result<PathBuf> {
     std::env::current_dir().context("failed to determine current directory for workspace root")
 }
 pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
-    run_steps_with_context(workspace_root, workspace_root, steps)
+    let root = GuardedPath::new_root(workspace_root).context("guard workspace root")?;
+    run_steps_with_context(&root, &root, steps)
 }
 
 fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {
@@ -279,11 +286,11 @@ fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
-        let tty_path: PathBuf = "/dev/tty".into();
-        if let Ok(tty) = PathResolver::new(workspace_root, workspace_root)
-            .open_external_file(&tty_path)
-        {
-            cmd.stdin(tty);
+        let tty_path = UnguardedPath::new(PathBuf::from("/dev/tty"));
+        if let Ok(resolver) = PathResolver::new(workspace_root, workspace_root) {
+            if let Ok(tty) = resolver.open_external_file(&tty_path) {
+                cmd.stdin(tty);
+            }
         }
 
         let status = cmd.status()?;
@@ -366,17 +373,23 @@ fn open_editor_and_read() -> Result<String> {
     if let Some(cache) = last_inline_path()
         && let Some(cache_parent) = cache.parent()
     {
-        let cache_fs = PathResolver::new(cache_parent, cache_parent);
-        if cache_fs.metadata_abs(&cache).is_ok()
-            && let Ok(prev) = cache_fs.read_to_string(&cache)
+        if let Ok(cache_root) = GuardedPath::new_root(cache_parent)
+            && let Ok(cache_fs) = PathResolver::new(cache_parent, cache_parent)
+            && let Ok(cache_guard) = GuardedPath::new(cache_root.root(), &cache)
         {
-            // NamedTempFile always has a parent; enforce it instead of
-            // ever falling back to the filesystem root.
-            let tmp_root = path
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("temp file unexpectedly missing parent"))?;
-            let tmp_fs = PathResolver::new(tmp_root, tmp_root);
-            let _ = tmp_fs.write_file(&path, prev.as_bytes());
+            if cache_fs.metadata_abs(&cache_guard).is_ok()
+                && let Ok(prev) = cache_fs.read_to_string(&cache_guard)
+            {
+                // NamedTempFile always has a parent; enforce it instead of
+                // ever falling back to the filesystem root.
+                let tmp_root = path
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("temp file unexpectedly missing parent"))?;
+                let tmp_root_guard = GuardedPath::new_root(tmp_root)?;
+                let tmp_file = GuardedPath::new(tmp_root_guard.root(), &path)?;
+                let tmp_fs = PathResolver::new(tmp_root, tmp_root)?;
+                let _ = tmp_fs.write_file(&tmp_file, prev.as_bytes());
+            }
         }
     }
 
@@ -409,9 +422,11 @@ fn open_editor_and_read() -> Result<String> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("temp file unexpectedly missing parent"))?
         .to_path_buf();
-    let tmp_fs = PathResolver::new(&tmp_root, &tmp_root);
+    let tmp_root_guard = GuardedPath::new_root(&tmp_root)?;
+    let tmp_file = GuardedPath::new(tmp_root_guard.root(), &path)?;
+    let tmp_fs = PathResolver::new(&tmp_root, &tmp_root)?;
     let contents = tmp_fs
-        .read_to_string(&path)
+        .read_to_string(&tmp_file)
         .with_context(|| format!("failed to read edited file {}", path.display()))?;
 
     // Save the edited script back to the cache for next time. Ignore errors
@@ -419,18 +434,22 @@ fn open_editor_and_read() -> Result<String> {
     if let Some(cache) = last_inline_path()
         && let Some(parent) = cache.parent()
     {
-        let cache_fs = PathResolver::new(parent, parent);
-        let _ = cache_fs.create_dir_all_abs(parent);
-        let _ = cache_fs.write_file(&cache, contents.as_bytes());
+        if let Ok(cache_root) = GuardedPath::new_root(parent)
+            && let Ok(cache_fs) = PathResolver::new(parent, parent)
+            && let Ok(cache_guard) = GuardedPath::new(cache_root.root(), &cache)
+        {
+            let _ = cache_fs.create_dir_all_abs(&cache_root);
+            let _ = cache_fs.write_file(&cache_guard, contents.as_bytes());
+        }
     }
 
     Ok(contents)
 }
 
-fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
-    let archive_path = temp_root.join("src.tar");
+fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result<()> {
+    let archive_path = temp_root.as_path().join("src.tar");
     let archive_str = archive_path.to_string_lossy().to_string();
-    run_cmd(Command::new("git").current_dir(workspace_root).args([
+    run_cmd(Command::new("git").current_dir(workspace_root.as_path()).args([
         "archive",
         "--format=tar",
         "--output",
@@ -443,14 +462,15 @@ fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
             .arg("-xf")
             .arg(&archive_str)
             .arg("-C")
-            .arg(temp_root),
+                .arg(temp_root.as_path()),
     )?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
     // Remove intermediate archive via a resolver rooted at the temp root.
-    let resolver_temp = PathResolver::new(temp_root, temp_root);
+    let resolver_temp = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
+    let archive_guard = GuardedPath::new(temp_root.root(), &archive_path)?;
     resolver_temp
-        .remove_file_abs(&archive_path)
+        .remove_file_abs(&archive_guard)
         .with_context(|| format!("failed to remove {}", archive_path.display()))?;
     Ok(())
 }

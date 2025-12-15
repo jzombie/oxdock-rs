@@ -1,109 +1,112 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use super::{AccessMode, PathResolver};
+use crate::{GuardedPath, UnguardedPath};
 
 // Guarded filesystem IO helpers (read/write/metadata etc.).
 impl PathResolver {
     #[allow(clippy::disallowed_methods)]
-    pub fn create_dir_all_abs(&self, path: &Path) -> Result<()> {
-        if !self.root.exists() {
-            fs::create_dir_all(&self.root)
-                .with_context(|| format!("creating resolver root {}", self.root.display()))?;
+    pub fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+        if !self.root.as_path().exists() {
+            fs::create_dir_all(self.root.as_path()).with_context(|| {
+                format!("creating resolver root {}", self.root.display())
+            })?;
         }
 
         let guarded = self
-            .check_access(path, AccessMode::Write)
+            .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
-        fs::create_dir_all(&guarded)
+        fs::create_dir_all(guarded.as_path())
             .with_context(|| format!("creating dir {}", guarded.display()))?;
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn read_dir_entries(&self, path: &Path) -> Result<Vec<std::fs::DirEntry>> {
+    pub fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>> {
         let guarded = self
-            .check_access(path, AccessMode::Read)
+            .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read_dir denied for {}", path.display()))?;
-        let entries = fs::read_dir(&guarded)
+        let entries = fs::read_dir(guarded.as_path())
             .with_context(|| format!("failed to read dir {}", guarded.display()))?;
         let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
         Ok(vec)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+    pub fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
         let guarded = self
-            .check_access(path, AccessMode::Read)
+            .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
-        let data =
-            fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
+        let data = fs::read(guarded.as_path())
+            .with_context(|| format!("failed to read {}", guarded.display()))?;
         Ok(data)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn read_to_string(&self, path: &Path) -> Result<String> {
+    pub fn read_to_string(&self, path: &GuardedPath) -> Result<String> {
         let guarded = self
-            .check_access(path, AccessMode::Read)
+            .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
-        let s = fs::read_to_string(&guarded)
+        let s = fs::read_to_string(guarded.as_path())
             .with_context(|| format!("failed to read {}", guarded.display()))?;
         Ok(s)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn write_file(&self, path: &Path, contents: &[u8]) -> Result<()> {
+    pub fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
         let guarded = self
-            .check_access(path, AccessMode::Write)
+            .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("write denied for {}", path.display()))?;
-        if let Some(parent) = guarded.parent() {
+        if let Some(parent) = guarded.as_path().parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
-        fs::write(&guarded, contents).with_context(|| format!("writing {}", guarded.display()))?;
+        fs::write(guarded.as_path(), contents)
+            .with_context(|| format!("writing {}", guarded.display()))?;
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn canonicalize_abs(&self, path: &Path) -> Result<PathBuf> {
+    pub fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self
-            .check_access(path, AccessMode::Passthru)
+            .check_access(path.as_path(), AccessMode::Passthru)
             .or_else(|_| {
-                self.check_access_with_root(&self.build_context, path, AccessMode::Passthru)
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Passthru)
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
         Ok(cand)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn metadata_abs(&self, path: &Path) -> Result<std::fs::Metadata> {
+    pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
         let guarded = self
-            .check_access(path, AccessMode::Read)
-            .or_else(|_| self.check_access_with_root(&self.build_context, path, AccessMode::Read))
+            .check_access(path.as_path(), AccessMode::Read)
+            .or_else(|_| self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read))
             .with_context(|| format!("metadata denied for {}", path.display()))?;
-        let m = fs::metadata(&guarded)
+        let m = fs::metadata(guarded.as_path())
             .with_context(|| format!("failed to stat {}", guarded.display()))?;
         Ok(m)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn metadata_external(&self, path: &Path) -> Result<std::fs::Metadata> {
-        let m = fs::metadata(path)
-            .with_context(|| format!("failed to stat external path {}", path.display()))?;
+    pub fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
+        let m = fs::metadata(path.as_path())
+            .with_context(|| format!("failed to stat external path {}", path.as_path().display()))?;
         Ok(m)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn set_permissions_mode_unix(&self, path: &Path, mode: u32) -> Result<()> {
+    pub fn set_permissions_mode_unix(&self, path: &GuardedPath, mode: u32) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let guarded = self
-                .check_access(path, AccessMode::Write)
+                .check_access(path.as_path(), AccessMode::Write)
                 .with_context(|| format!("set_permissions denied for {}", path.display()))?;
-            fs::set_permissions(&guarded, fs::Permissions::from_mode(mode))
-                .with_context(|| format!("failed to set permissions on {}", guarded.display()))?;
+            fs::set_permissions(guarded.as_path(), fs::Permissions::from_mode(mode)).with_context(
+                || format!("failed to set permissions on {}", guarded.display()),
+            )?;
         }
         #[cfg(not(unix))]
         {
@@ -114,24 +117,23 @@ impl PathResolver {
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {
-        let f =
-            fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    pub fn open_external_file(&self, path: &UnguardedPath) -> Result<std::fs::File> {
+        let f = fs::File::open(path.as_path())
+            .with_context(|| format!("failed to open {}", path.as_path().display()))?;
         Ok(f)
     }
 
     /// Remove a file after validating it is within allowed roots.
     #[allow(clippy::disallowed_methods)]
-    pub fn remove_file_abs(&self, path: &Path) -> Result<()> {
+    pub fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
-            .check_access(path, AccessMode::Write)
+            .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_file denied for {}", path.display()))?;
-        match std::fs::remove_file(&guarded) {
+        match std::fs::remove_file(guarded.as_path()) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("failed to remove file {}", guarded.display()));
+                return Err(e).with_context(|| format!("failed to remove file {}", guarded.display()));
             }
         }
         Ok(())
@@ -139,29 +141,31 @@ impl PathResolver {
 
     /// Remove a directory and its contents after validating it is within allowed roots.
     #[allow(clippy::disallowed_methods)]
-    pub fn remove_dir_all_abs(&self, path: &Path) -> Result<()> {
+    pub fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
-            .check_access(path, AccessMode::Write)
+            .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_dir_all denied for {}", path.display()))?;
-        std::fs::remove_dir_all(&guarded)
+        std::fs::remove_dir_all(guarded.as_path())
             .with_context(|| format!("failed to remove dir {}", guarded.display()))?;
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+    pub fn symlink(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()> {
         let guarded_src = self
-            .check_access(src, AccessMode::Read)
-            .or_else(|_| self.check_access_with_root(&self.build_context, src, AccessMode::Read))
+            .check_access(src.as_path(), AccessMode::Read)
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, src.as_path(), AccessMode::Read)
+            })
             .with_context(|| format!("symlink source denied for {}", src.display()))?;
         let guarded_dst = self
-            .check_access(dst, AccessMode::Write)
+            .check_access(dst.as_path(), AccessMode::Write)
             .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
 
-        if guarded_dst.exists() {
+        if guarded_dst.as_path().exists() {
             bail!("SYMLINK destination already exists: {}", guarded_dst.display());
         }
-        if guarded_src == guarded_dst {
+        if guarded_src.as_path() == guarded_dst.as_path() {
             bail!(
                 "SYMLINK source resolves to the destination itself: {}",
                 guarded_src.display()
@@ -170,7 +174,7 @@ impl PathResolver {
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&guarded_src, &guarded_dst).with_context(|| {
+            std::os::unix::fs::symlink(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
                 format!("failed to symlink {} -> {}", guarded_src.display(), guarded_dst.display())
             })?;
             Ok(())
@@ -179,14 +183,14 @@ impl PathResolver {
         #[cfg(all(windows, not(unix)))]
         {
             use std::os::windows::fs::{symlink_dir, symlink_file};
-            let meta = fs::metadata(&guarded_src).with_context(|| {
+            let meta = fs::metadata(guarded_src.as_path()).with_context(|| {
                 format!("failed to stat symlink source {}", guarded_src.display())
             })?;
 
             let try_link = if meta.is_dir() {
-                symlink_dir(&guarded_src, &guarded_dst)
+                symlink_dir(guarded_src.as_path(), guarded_dst.as_path())
             } else {
-                symlink_file(&guarded_src, &guarded_dst)
+                symlink_file(guarded_src.as_path(), guarded_dst.as_path())
             };
 
             if let Err(e) = try_link {

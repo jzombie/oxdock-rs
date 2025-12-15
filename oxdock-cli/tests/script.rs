@@ -1,21 +1,23 @@
 use oxdock_cli::{Step, StepKind, run_script};
-use oxdock_fs::PathResolver;
+use oxdock_fs::{GuardedPath, PathResolver};
 
 #[test]
 fn script_runs_copy_and_symlink() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let root = GuardedPath::new_root(temp.path()).unwrap();
 
     // Prepare minimal workspace structure using the PathResolver to avoid
     // calling `std::fs` directly from non-fs crates.
-    let resolver = PathResolver::new(root, root);
+    let resolver = PathResolver::new(root.as_path(), root.as_path()).unwrap();
     resolver
-        .create_dir_all_abs(&root.join("client/dist"))
+        .create_dir_all_abs(&root.join("client/dist").unwrap())
         .unwrap();
-    resolver.create_dir_all_abs(&root.join("server")).unwrap();
+    resolver
+        .create_dir_all_abs(&root.join("server").unwrap())
+        .unwrap();
     // Seed dist with a file
     resolver
-        .write_file(&root.join("client/dist/test.txt"), b"hello\n")
+        .write_file(&root.join("client/dist/test.txt").unwrap(), b"hello\n")
         .unwrap();
 
     let steps = vec![
@@ -51,24 +53,24 @@ fn script_runs_copy_and_symlink() {
         },
     ];
 
-    run_script(root, &steps).unwrap();
+    run_script(root.as_path(), &steps).unwrap();
 
     // Copy should exist and contain the file
-    let copied = root.join("client/dist-copy/test.txt");
-    assert!(copied.exists());
+    let copied = root.join("client/dist-copy/test.txt").unwrap();
+    assert!(copied.as_path().exists());
     let contents = resolver.read_to_string(&copied).unwrap();
     assert!(contents.contains("hello"));
 
     // Symlink should resolve to dist (on Unix); on non-Unix we copied.
     #[cfg(unix)]
     {
-        let linked = root.join("server/dist/test.txt");
-        assert!(linked.exists());
+        let linked = root.join("server/dist/test.txt").unwrap();
+        assert!(linked.as_path().exists());
     }
     #[cfg(not(unix))]
     {
         // On non-Unix, symlink_dir may not be available; ensure copy fallback works.
-        let linked_copy = root.join("server/dist/test.txt");
-        assert!(linked_copy.exists());
+        let linked_copy = root.join("server/dist/test.txt").unwrap();
+        assert!(linked_copy.as_path().exists());
     }
 }

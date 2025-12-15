@@ -1,36 +1,35 @@
 // TODO: Provide ability to pre-check scripts before execution
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::io::{self, Write};
-use oxdock_fs::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
-use oxdock_fs::{PathResolver, WorkspaceFs};
+use oxdock_fs::{GuardedPath, PathResolver, WorkspaceFs};
 
 struct ExecState {
     fs: Box<dyn WorkspaceFs>,
-    cargo_target_dir: PathBuf,
-    cwd: PathBuf,
+    cargo_target_dir: GuardedPath,
+    cwd: GuardedPath,
     envs: HashMap<String, String>,
     bg_children: Vec<Child>,
 }
 
-pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
+pub fn run_steps(fs_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(fs_root, fs_root, steps)
 }
 
-pub fn run_steps_with_context(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<()> {
+pub fn run_steps_with_context(fs_root: &GuardedPath, build_context: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context_result(fs_root, build_context, steps).map(|_| ())
 }
 
 /// Execute the DSL and return the final working directory after all steps.
 pub fn run_steps_with_context_result(
-    fs_root: &Path,
-    build_context: &Path,
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
     steps: &[Step],
-) -> Result<PathBuf> {
+) -> Result<GuardedPath> {
     match run_steps_inner(fs_root, build_context, steps) {
         Ok(final_cwd) => Ok(final_cwd),
         Err(err) => {
@@ -51,7 +50,7 @@ pub fn run_steps_with_context_result(
             } else {
                 String::new()
             };
-            let fs = PathResolver::new(fs_root, build_context);
+            let fs = PathResolver::new(fs_root.as_path(), build_context.as_path())?;
             let tree = describe_dir(&fs, fs_root, 2, 24);
             let snapshot = format!(
                 "filesystem snapshot (root {}):\n{}",
@@ -64,13 +63,17 @@ pub fn run_steps_with_context_result(
     }
 }
 
-fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
+fn run_steps_inner(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+) -> Result<GuardedPath> {
+    let resolver = PathResolver::new(fs_root.as_path(), build_context.as_path())?;
+    let cwd = resolver.root().clone();
     let mut state = ExecState {
-        fs: Box::new(PathResolver::new(fs_root, build_context)),
-        cargo_target_dir: fs_root.join(".cargo-target"),
-        cwd: PathResolver::new(fs_root, build_context)
-            .root()
-            .to_path_buf(),
+        fs: Box::new(resolver),
+        cargo_target_dir: fs_root.join(".cargo-target")?,
+        cwd,
         envs: HashMap::new(),
         bg_children: Vec::new(),
     };
@@ -87,8 +90,8 @@ fn execute_steps(
     capture_output: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let fs_root = state.fs.root().to_path_buf();
-    let build_context = state.fs.build_context().to_path_buf();
+    let fs_root = state.fs.root().clone();
+    let build_context = state.fs.build_context().clone();
 
     let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
@@ -125,12 +128,12 @@ fn execute_steps(
             }
             StepKind::Workspace(target) => match target {
                 WorkspaceTarget::Snapshot => {
-                    state.fs.set_root(&fs_root);
-                    state.cwd = state.fs.root().to_path_buf();
+                    state.fs.set_root(fs_root.clone());
+                    state.cwd = state.fs.root().clone();
                 }
                 WorkspaceTarget::Local => {
-                    state.fs.set_root(&build_context);
-                    state.cwd = state.fs.root().to_path_buf();
+                    state.fs.set_root(build_context.clone());
+                    state.cwd = state.fs.root().clone();
                 }
             },
             StepKind::Env { key, value } => {
@@ -138,7 +141,7 @@ fn execute_steps(
             }
             StepKind::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&state.cwd);
+                command.current_dir(state.cwd.as_path());
                 command.envs(state.envs.iter());
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
@@ -165,7 +168,7 @@ fn execute_steps(
                     bail!("RUN_BG is not supported inside CAPTURE");
                 }
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&state.cwd);
+                command.current_dir(state.cwd.as_path());
                 command.envs(state.envs.iter());
                 command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
                 let child = command
@@ -268,10 +271,11 @@ fn execute_steps(
                     .fs
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
-                if let Some(parent) = target.parent() {
+                if let Some(parent) = target.as_path().parent() {
+                    let parent_guard = GuardedPath::new(target.root(), parent)?;
                     state
                         .fs
-                        .create_dir_all_abs(parent)
+                        .create_dir_all_abs(&parent_guard)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 state
@@ -284,10 +288,11 @@ fn execute_steps(
                     .fs
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
-                if let Some(parent) = target.parent() {
+                if let Some(parent) = target.as_path().parent() {
+                    let parent_guard = GuardedPath::new(target.root(), parent)?;
                     state
                         .fs
-                        .create_dir_all_abs(parent)
+                        .create_dir_all_abs(&parent_guard)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 let steps = ast::parse_script(cmd)
@@ -296,7 +301,10 @@ fn execute_steps(
                     bail!("CAPTURE expects exactly one instruction");
                 }
                 let mut sub_state = ExecState {
-                    fs: Box::new(PathResolver::new(state.fs.root(), state.fs.build_context())),
+                    fs: Box::new(PathResolver::new(
+                        state.fs.root().as_path(),
+                        state.fs.build_context().as_path(),
+                    )?),
                     cargo_target_dir: state.cargo_target_dir.clone(),
                     cwd: state.cwd.clone(),
                     envs: state.envs.clone(),
@@ -360,16 +368,14 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     Ok(())
 }
 
-fn copy_entry(fs: &dyn WorkspaceFs, src: &Path, dst: &Path) -> Result<()> {
-    if !src.exists() {
-        bail!("source missing: {}", src.display());
-    }
+fn copy_entry(fs: &dyn WorkspaceFs, src: &GuardedPath, dst: &GuardedPath) -> Result<()> {
     let meta = fs.metadata_abs(src)?;
     if meta.is_dir() {
         fs.copy_dir_recursive(src, dst)?;
     } else if meta.is_file() {
-        if let Some(parent) = dst.parent() {
-            fs.create_dir_all_abs(parent)?;
+        if let Some(parent) = dst.as_path().parent() {
+            let parent_guard = GuardedPath::new(dst.root(), parent)?;
+            fs.create_dir_all_abs(&parent_guard)?;
         }
         fs.copy_file(src, dst)?;
     } else {
@@ -378,14 +384,15 @@ fn copy_entry(fs: &dyn WorkspaceFs, src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &Path) -> Result<String> {
+fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &GuardedPath) -> Result<String> {
     Ok(fs.canonicalize_abs(cwd)?.display().to_string())
 }
 
-fn describe_dir(fs: &dyn WorkspaceFs, root: &Path, max_depth: usize, max_entries: usize) -> String {
+fn describe_dir(fs: &dyn WorkspaceFs, root: &GuardedPath, max_depth: usize, max_entries: usize) -> String {
     fn helper(
         fs: &dyn WorkspaceFs,
-        path: &Path,
+        guard_root: &GuardedPath,
+        path: &GuardedPath,
         depth: usize,
         max_depth: usize,
         left: &mut usize,
@@ -399,7 +406,10 @@ fn describe_dir(fs: &dyn WorkspaceFs, root: &Path, max_depth: usize, max_entries
             out.push_str(&format!(
                 "{}{}\n",
                 indent,
-                path.file_name().unwrap_or_default().to_string_lossy()
+                path.as_path()
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
             ));
         }
         if depth >= max_depth {
@@ -417,8 +427,12 @@ fn describe_dir(fs: &dyn WorkspaceFs, root: &Path, max_depth: usize, max_entries
             }
             *left -= 1;
             let p = entry.path();
+            let guarded_child = match GuardedPath::new(guard_root.root(), &p) {
+                Ok(child) => child,
+                Err(_) => continue,
+            };
             if p.is_dir() {
-                helper(fs, &p, depth + 1, max_depth, left, out);
+                helper(fs, guard_root, &guarded_child, depth + 1, max_depth, left, out);
             } else {
                 out.push_str(&format!(
                     "{}  {}\n",
@@ -431,7 +445,7 @@ fn describe_dir(fs: &dyn WorkspaceFs, root: &Path, max_depth: usize, max_entries
 
     let mut out = String::new();
     let mut left = max_entries;
-    helper(fs, root, 0, max_depth, &mut left, &mut out);
+    helper(fs, root, root, 0, max_depth, &mut left, &mut out);
     out
 }
 
