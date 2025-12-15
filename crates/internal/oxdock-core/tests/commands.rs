@@ -28,6 +28,10 @@ fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.as_path().join(rel).exists()
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "uses RUN and RUN_BG to spawn subprocess; Miri does not support process spawning"
+)]
 #[test]
 fn commands_behave_cross_platform() {
     let snapshot_dir = GuardedPath::tempdir().unwrap();
@@ -197,6 +201,10 @@ fn commands_behave_cross_platform() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn exit_stops_pipeline_and_reports_code() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -232,6 +240,10 @@ fn exit_stops_pipeline_and_reports_code() {
     assert!(!exists(&root, "after.txt"));
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn accepts_semicolon_separated_commands() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -243,6 +255,10 @@ fn accepts_semicolon_separated_commands() {
     assert_eq!(read_trimmed(&root.join("two.txt").unwrap()), "2");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "uses RUN to spawn subprocess; Miri does not support process spawning"
+)]
 #[test]
 fn write_cmd_captures_output() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -263,6 +279,10 @@ fn write_cmd_captures_output() {
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn capture_echo_interpolates_env() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -288,6 +308,10 @@ fn capture_echo_interpolates_env() {
     assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn capture_ls_lists_entries_with_header() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -327,6 +351,10 @@ fn capture_ls_lists_entries_with_header() {
     assert_eq!(lines, vec!["a.txt", "b.txt"]);
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn capture_cat_emits_file_contents() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -345,6 +373,10 @@ fn capture_cat_emits_file_contents() {
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn capture_cwd_canonicalizes_and_writes() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -374,6 +406,10 @@ fn capture_cwd_canonicalizes_and_writes() {
     assert_eq!(read_trimmed(&root.join("a/b/pwd.txt").unwrap()), expected);
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "uses std::process::Command to run git; Miri does not support process spawning"
+)]
 #[test]
 fn copy_git_via_script_simple() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
@@ -439,6 +475,10 @@ fn copy_git_via_script_simple() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "uses std::process::Command to run git; Miri does not support process spawning"
+)]
 #[test]
 fn copy_git_directory_via_script() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
@@ -515,6 +555,10 @@ fn copy_git_directory_via_script() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn workdir_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -533,6 +577,10 @@ fn workdir_cannot_escape_root() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn write_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -553,6 +601,10 @@ fn write_cannot_escape_root() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn read_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -589,6 +641,10 @@ fn read_cannot_escape_root() {
     let _ = parent_fs.remove_file_abs(&secret);
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn read_symlink_escape_is_blocked() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -632,6 +688,10 @@ fn read_symlink_escape_is_blocked() {
     let _ = parent_fs.remove_file_abs(&secret);
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn write_missing_path_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -655,6 +715,10 @@ fn write_missing_path_cannot_escape_root() {
     );
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn workdir_creates_missing_dirs_within_root() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -669,6 +733,10 @@ fn workdir_creates_missing_dirs_within_root() {
     assert!(root.as_path().join("a/b/c").exists());
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn cat_reads_file_contents_without_error() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -683,6 +751,10 @@ fn cat_reads_file_contents_without_error() {
     run_steps(&root, &steps).unwrap();
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
 #[test]
 fn cwd_prints_to_stdout() {
     let temp = GuardedPath::tempdir().unwrap();
