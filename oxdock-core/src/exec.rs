@@ -8,6 +8,14 @@ use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use crate::resolver::PathResolver;
 
+struct ExecState {
+    resolver: PathResolver,
+    cargo_target_dir: PathBuf,
+    cwd: PathBuf,
+    envs: HashMap<String, String>,
+    bg_children: Vec<Child>,
+}
+
 pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
     run_steps_with_context(fs_root, fs_root, steps)
 }
@@ -55,39 +63,30 @@ pub fn run_steps_with_context_result(
 }
 
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
-    let cargo_target_dir = fs_root.join(".cargo-target");
-    let mut resolver = PathResolver::new(fs_root, build_context);
-    let mut cwd = resolver.root().to_path_buf();
-    let mut envs: HashMap<String, String> = HashMap::new();
-    let mut bg_children: Vec<Child> = Vec::new();
+    let mut state = ExecState {
+        resolver: PathResolver::new(fs_root, build_context),
+        cargo_target_dir: fs_root.join(".cargo-target"),
+        cwd: PathResolver::new(fs_root, build_context)
+            .root()
+            .to_path_buf(),
+        envs: HashMap::new(),
+        bg_children: Vec::new(),
+    };
+
     let mut stdout = io::stdout();
+    execute_steps(&mut state, steps, false, &mut stdout)?;
 
-    execute_steps(
-        &mut resolver,
-        &cargo_target_dir,
-        &mut cwd,
-        &mut envs,
-        &mut bg_children,
-        steps,
-        false,
-        &mut stdout,
-    )?;
-
-    Ok(cwd)
+    Ok(state.cwd)
 }
 
 fn execute_steps(
-    resolver: &mut PathResolver,
-    cargo_target_dir: &Path,
-    cwd: &mut PathBuf,
-    envs: &mut HashMap<String, String>,
-    bg_children: &mut Vec<Child>,
+    state: &mut ExecState,
     steps: &[Step],
     capture_output: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let fs_root = resolver.root().to_path_buf();
-    let build_context = resolver.build_context().to_path_buf();
+    let fs_root = state.resolver.root().to_path_buf();
+    let build_context = state.resolver.build_context().to_path_buf();
 
     let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
@@ -112,34 +111,35 @@ fn execute_steps(
     };
 
     for (idx, step) in steps.iter().enumerate() {
-        if !crate::ast::guards_allow_any(&step.guards, envs) {
+        if !crate::ast::guards_allow_any(&step.guards, &state.envs) {
             continue;
         }
         match &step.kind {
             StepKind::Workdir(path) => {
-                *cwd = resolver
-                    .resolve_workdir(cwd, path)
+                state.cwd = state
+                    .resolver
+                    .resolve_workdir(&state.cwd, path)
                     .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
             }
             StepKind::Workspace(target) => match target {
                 WorkspaceTarget::Snapshot => {
-                    resolver.set_root(&fs_root);
-                    *cwd = resolver.root().to_path_buf();
+                    state.resolver.set_root(&fs_root);
+                    state.cwd = state.resolver.root().to_path_buf();
                 }
                 WorkspaceTarget::Local => {
-                    resolver.set_root(&build_context);
-                    *cwd = resolver.root().to_path_buf();
+                    state.resolver.set_root(&build_context);
+                    state.cwd = state.resolver.root().to_path_buf();
                 }
             },
             StepKind::Env { key, value } => {
-                envs.insert(key.clone(), value.clone());
+                state.envs.insert(key.clone(), value.clone());
             }
             StepKind::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&*cwd);
-                command.envs(envs.iter());
+                command.current_dir(&state.cwd);
+                command.envs(state.envs.iter());
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
-                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
+                command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
                 if capture_output {
                     command.stdout(Stdio::piped());
                     let output = command
@@ -155,7 +155,7 @@ fn execute_steps(
                 }
             }
             StepKind::Echo(msg) => {
-                let rendered = interpolate(msg, envs);
+                let rendered = interpolate(msg, &state.envs);
                 writeln!(out, "{}", rendered)?;
             }
             StepKind::RunBg(cmd) => {
@@ -163,42 +163,50 @@ fn execute_steps(
                     bail!("RUN_BG is not supported inside CAPTURE");
                 }
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&*cwd);
-                command.envs(envs.iter());
-                command.env("CARGO_TARGET_DIR", cargo_target_dir);
+                command.current_dir(&state.cwd);
+                command.envs(state.envs.iter());
+                command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
                 let child = command
                     .spawn()
                     .with_context(|| format!("step {}: RUN_BG {}", idx + 1, cmd))?;
-                bg_children.push(child);
+                state.bg_children.push(child);
             }
             StepKind::Copy { from, to } => {
-                let from_abs = resolver
+                let from_abs = state
+                    .resolver
                     .resolve_copy_source(from)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                let to_abs = resolver
-                    .resolve_write(cwd, to)
+                let to_abs = state
+                    .resolver
+                    .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
-                let to_abs = resolver.resolve_write(cwd, to).with_context(|| {
-                    format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
-                })?;
-                resolver
+                let to_abs = state
+                    .resolver
+                    .resolve_write(&state.cwd, to)
+                    .with_context(|| {
+                        format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
+                    })?;
+                state
+                    .resolver
                     .copy_from_git(rev, from, &to_abs)
                     .with_context(|| {
                         format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                     })?;
             }
             StepKind::Symlink { from, to } => {
-                let to_abs = resolver
-                    .resolve_write(cwd, to)
+                let to_abs = state
+                    .resolver
+                    .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if to_abs.exists() {
                     bail!("SYMLINK destination already exists: {}", to_abs.display());
                 }
-                let from_abs = resolver
+                let from_abs = state
+                    .resolver
                     .resolve_copy_source(from)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if from_abs == to_abs {
@@ -217,19 +225,21 @@ fn execute_steps(
                 copy_dir(&from_abs, &to_abs)?;
             }
             StepKind::Mkdir(path) => {
-                let target = resolver
-                    .resolve_write(cwd, path)
+                let target = state
+                    .resolver
+                    .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 fs::create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
                 let dir = if let Some(p) = path_opt.as_deref() {
-                    resolver
-                        .resolve_read(cwd, p)
+                    state
+                        .resolver
+                        .resolve_read(&state.cwd, p)
                         .with_context(|| format!("step {}: LS {}", idx + 1, p))?
                 } else {
-                    cwd.clone()
+                    state.cwd.clone()
                 };
                 let mut entries: Vec<_> = fs::read_dir(&dir)
                     .with_context(|| format!("failed to read dir {}", dir.display()))?
@@ -242,14 +252,19 @@ fn execute_steps(
             }
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
-                let real = canonical_cwd(cwd).with_context(|| {
-                    format!("step {}: CWD failed to canonicalize {}", idx + 1, cwd.display())
+                let real = canonical_cwd(&state.cwd).with_context(|| {
+                    format!(
+                        "step {}: CWD failed to canonicalize {}",
+                        idx + 1,
+                        state.cwd.display()
+                    )
                 })?;
                 writeln!(out, "{}", real)?;
             }
             StepKind::Cat(path) => {
-                let target = resolver
-                    .resolve_read(cwd, path)
+                let target = state
+                    .resolver
+                    .resolve_read(&state.cwd, path)
                     .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
                 let data = fs::read(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
@@ -257,8 +272,9 @@ fn execute_steps(
                     .with_context(|| format!("failed to write {} to stdout", target.display()))?;
             }
             StepKind::Write { path, contents } => {
-                let target = resolver
-                    .resolve_write(cwd, path)
+                let target = state
+                    .resolver
+                    .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
@@ -268,8 +284,9 @@ fn execute_steps(
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Capture { path, cmd } => {
-                let target = resolver
-                    .resolve_write(cwd, path)
+                let target = state
+                    .resolver
+                    .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
@@ -280,37 +297,34 @@ fn execute_steps(
                 if steps.len() != 1 {
                     bail!("CAPTURE expects exactly one instruction");
                 }
-                let mut sub_resolver = PathResolver::new(resolver.root(), resolver.build_context());
-                let mut sub_cwd = cwd.clone();
-                let mut sub_envs = envs.clone();
-                let mut sub_bg: Vec<Child> = Vec::new();
+                let mut sub_state = ExecState {
+                    resolver: PathResolver::new(
+                        state.resolver.root(),
+                        state.resolver.build_context(),
+                    ),
+                    cargo_target_dir: state.cargo_target_dir.clone(),
+                    cwd: state.cwd.clone(),
+                    envs: state.envs.clone(),
+                    bg_children: Vec::new(),
+                };
                 let mut buf: Vec<u8> = Vec::new();
-                execute_steps(
-                    &mut sub_resolver,
-                    cargo_target_dir,
-                    &mut sub_cwd,
-                    &mut sub_envs,
-                    &mut sub_bg,
-                    &steps,
-                    true,
-                    &mut buf,
-                )?;
+                execute_steps(&mut sub_state, &steps, true, &mut buf)?;
                 fs::write(&target, &buf)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Exit(code) => {
-                for child in bg_children.iter_mut() {
+                for child in state.bg_children.iter_mut() {
                     if child.try_wait()?.is_none() {
                         let _ = child.kill();
                         let _ = child.wait();
                     }
                 }
-                bg_children.clear();
+                state.bg_children.clear();
                 bail!("EXIT requested with code {}", code);
             }
         }
 
-        if let Some(status) = check_bg(bg_children)? {
+        if let Some(status) = check_bg(&mut state.bg_children)? {
             if status.success() {
                 return Ok(());
             } else {
@@ -319,16 +333,16 @@ fn execute_steps(
         }
     }
 
-    if !bg_children.is_empty() {
-        let mut first = bg_children.remove(0);
+    if !state.bg_children.is_empty() {
+        let mut first = state.bg_children.remove(0);
         let status = first.wait()?;
-        for child in bg_children.iter_mut() {
+        for child in state.bg_children.iter_mut() {
             if child.try_wait()?.is_none() {
                 let _ = child.kill();
                 let _ = child.wait();
             }
         }
-        bg_children.clear();
+        state.bg_children.clear();
         if status.success() {
             return Ok(());
         } else {
@@ -438,7 +452,6 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
     helper(root, 0, max_depth, &mut left, &mut out);
     out
 }
-
 
 pub fn shell_program() -> String {
     #[cfg(windows)]

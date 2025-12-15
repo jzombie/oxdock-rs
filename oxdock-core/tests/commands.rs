@@ -222,15 +222,13 @@ fn write_cmd_captures_output() {
     } else {
         "RUN printf %s \"hello\""
     };
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Capture {
-                path: "out.txt".into(),
-                cmd: cmd.into(),
-            },
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Capture {
+            path: "out.txt".into(),
+            cmd: cmd.into(),
         },
-    ];
+    }];
     run_steps(root.path(), &steps).unwrap();
     assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello");
 }
@@ -295,15 +293,13 @@ fn capture_cat_emits_file_contents() {
     let root = tempdir().unwrap();
     fs::write(root.path().join("note.txt"), "hello note").unwrap();
 
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Capture {
-                path: "out.txt".into(),
-                cmd: "CAT note.txt".into(),
-            },
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Capture {
+            path: "out.txt".into(),
+            cmd: "CAT note.txt".into(),
         },
-    ];
+    }];
 
     run_steps(root.path(), &steps).unwrap();
     assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello note");

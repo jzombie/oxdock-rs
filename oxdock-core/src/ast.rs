@@ -446,22 +446,23 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     to: to.to_string(),
                 }
             }
-                    Command::Capture => {
-                        let mut p = remainder.splitn(2, ' ');
-                        let path = p
-                            .next()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .ok_or_else(|| anyhow::anyhow!("line {}: CAPTURE requires <path> <command>", line_no))?;
-                        let cmd = p
-                            .next()
-                            .map(str::to_string)
-                            .ok_or_else(|| anyhow::anyhow!("line {}: CAPTURE requires <path> <command>", line_no))?;
-                        StepKind::Capture {
-                            path: path.to_string(),
-                            cmd,
-                        }
-                    }
+            Command::Capture => {
+                let mut p = remainder.splitn(2, ' ');
+                let path = p
+                    .next()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("line {}: CAPTURE requires <path> <command>", line_no)
+                    })?;
+                let cmd = p.next().map(str::to_string).ok_or_else(|| {
+                    anyhow::anyhow!("line {}: CAPTURE requires <path> <command>", line_no)
+                })?;
+                StepKind::Capture {
+                    path: path.to_string(),
+                    cmd,
+                }
+            }
             Command::CopyGit => {
                 let mut p = remainder.split_whitespace();
                 let rev = p.next().ok_or_else(|| {
@@ -506,9 +507,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     .map(|s| s.to_string());
                 StepKind::Ls(path)
             }
-            Command::Cwd => {
-                StepKind::Cwd
-            }
+            Command::Cwd => StepKind::Cwd,
             Command::Write => {
                 let mut p = remainder.splitn(2, ' ');
                 let path = p.next().filter(|s| !s.is_empty()).ok_or_else(|| {
