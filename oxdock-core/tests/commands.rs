@@ -215,6 +215,121 @@ fn accepts_semicolon_separated_commands() {
 }
 
 #[test]
+fn copy_git_via_script_simple() {
+    let snapshot = tempdir().unwrap();
+
+    // Create a tiny git repo inside the snapshot so build_context is under root
+    let repo = snapshot.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("hello.txt"), "git hello").unwrap();
+    std::fs::create_dir_all(repo.join("assets")).unwrap();
+    std::fs::write(repo.join("assets").join("a.txt"), "a").unwrap();
+    std::fs::write(repo.join("assets").join("b.txt"), "b").unwrap();
+
+    // init and commit
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    // Commit using `-c` so we don't write any repo config
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("-c")
+        .arg("user.email=test@example.com")
+        .arg("-c")
+        .arg("user.name=Test User")
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let script = format!("COPY_GIT {} hello.txt out_hello.txt", rev);
+
+    let steps = oxdock_core::parse_script(&script).unwrap();
+    // build_context is `repo` which is under `snapshot` root
+    run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
+
+    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_hello.txt")).unwrap(), "git hello");
+}
+
+#[test]
+fn copy_git_directory_via_script() {
+    let snapshot = tempdir().unwrap();
+
+    // Create a tiny git repo inside the snapshot so build_context is under root
+    let repo = snapshot.path().join("repo_dir");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(repo.join("assets_dir")).unwrap();
+    std::fs::write(repo.join("assets_dir").join("x.txt"), "x").unwrap();
+    std::fs::write(repo.join("assets_dir").join("y.txt"), "y").unwrap();
+
+    // init, add, commit (use -c to avoid writing config)
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("-c")
+        .arg("user.email=test@example.com")
+        .arg("-c")
+        .arg("user.name=Test User")
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let script = format!("COPY_GIT {} assets_dir out_assets_dir", rev);
+    let steps = oxdock_core::parse_script(&script).unwrap();
+    run_steps_with_context(snapshot.path(), &repo, &steps).unwrap();
+
+    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("x.txt")).unwrap(), "x");
+    assert_eq!(std::fs::read_to_string(snapshot.path().join("out_assets_dir").join("y.txt")).unwrap(), "y");
+}
+
+#[test]
 fn workdir_cannot_escape_root() {
     let root = tempdir().unwrap();
     // Attempt to switch to parent of root which should be disallowed
