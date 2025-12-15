@@ -7,12 +7,12 @@ pub use exec::*;
 mod tests {
     use super::*;
     use indoc::indoc;
-    use oxdock_fs::{GuardedPath, PathResolver};
+    use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
     #[cfg(unix)]
     use std::time::Instant;
 
-    fn guard_root(temp: &tempfile::TempDir) -> GuardedPath {
-        GuardedPath::new_root(temp.path()).unwrap()
+    fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
+        temp.as_guarded_path().clone()
     }
 
     fn read_trimmed(path: &GuardedPath) -> String {
@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let cmd = if cfg!(windows) {
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn guard_skips_when_env_missing() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let guard_var = "OXDOCK_GUARD_TEST_TOKEN_UNSET";
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn guard_sees_env_set_by_env_step() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc!(
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn echo_runs_and_allows_subsequent_steps() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc!(
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn guard_on_previous_line_applies_to_next_command() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc!(
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn guard_respects_platform_negation() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc!(
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn guard_matches_profile_env() {
         // Cargo sets PROFILE during builds/tests; verify guards see it.
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn multiple_guards_all_must_pass() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_PASS";
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn multiple_guards_skip_when_one_fails() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_FAIL";
@@ -269,7 +269,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_bg_exits_success_and_stops_pipeline() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         // Background succeeds quickly; pipeline should complete without error.
@@ -282,7 +282,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_bg_failure_bubbles_status() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = "RUN_BG sh -c 'sleep 0.05; exit 7'";
@@ -298,7 +298,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc! {
@@ -336,7 +336,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exit_terminates_backgrounds_and_returns_code() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc! {
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn env_applies_to_run_and_background() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = if cfg!(windows) {
@@ -388,8 +388,8 @@ mod tests {
 
     #[test]
     fn workspace_switches_between_snapshot_and_local() {
-        let snapshot = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
         let snapshot_root = guard_root(&snapshot);
         let local_root = guard_root(&local);
 
@@ -413,8 +413,8 @@ mod tests {
 
     #[test]
     fn workspace_root_changes_where_slash_points() {
-        let snapshot = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
         let snapshot_root = guard_root(&snapshot);
         let local_root = guard_root(&local);
         let local_client = local_root.join("client").unwrap();

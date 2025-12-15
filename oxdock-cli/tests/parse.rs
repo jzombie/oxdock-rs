@@ -1,11 +1,9 @@
 use indoc::indoc;
 use oxdock_cli::{Options, ScriptSource, Step, StepKind, parse_script};
 use oxdock_fs::GuardedPath;
-use tempfile::tempdir;
 
 fn workspace_root() -> GuardedPath {
-    let tmp = tempdir().expect("tmpdir");
-    GuardedPath::new_root(tmp.path()).expect("guarded root")
+    GuardedPath::tempdir().expect("tmpdir").persist()
 }
 
 #[test]

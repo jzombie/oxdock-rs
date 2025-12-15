@@ -12,7 +12,9 @@ impl PathResolver {
     pub fn has_git_dir(&self) -> Result<bool> {
         let mut cur = Some(self.root.clone());
         while let Some(p) = cur {
-            if let Ok(dot_git) = p.join(".git") && dot_git.as_path().exists() {
+            if let Ok(dot_git) = p.join(".git")
+                && dot_git.as_path().exists()
+            {
                 return Ok(true);
             }
             cur = p.parent();

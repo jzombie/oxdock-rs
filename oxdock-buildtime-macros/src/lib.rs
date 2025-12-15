@@ -434,14 +434,11 @@ fn build_assets(
     out_dir: &GuardedPath,
 ) -> syn::Result<GuardedPath> {
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
-    let tempdir = tempfile::Builder::new()
-        .prefix("oxdock_")
-        .tempdir()
-        .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
-    #[allow(deprecated)]
-    let temp_root = tempdir.into_path();
-    let temp_root_guard = GuardedPath::new_root(&temp_root)
-        .map_err(|e| syn::Error::new(span, format!("failed to guard temp dir: {e}")))?;
+    let tempdir = GuardedPath::tempdir_with(|builder| {
+        builder.prefix("oxdock_");
+    })
+    .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
+    let temp_root_guard = tempdir.as_guarded_path().clone();
 
     let steps = oxdock_core::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
@@ -506,6 +503,7 @@ fn build_assets(
         count_entries(out_dir, span)?
     );
 
+    let _ = tempdir.persist();
     Ok(final_cwd)
 }
 
@@ -588,8 +586,8 @@ mod tests {
     #[test]
     #[serial]
     fn errors_when_out_dir_is_file_before_build() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
         // Create .git dir via PathResolver to centralize filesystem access.
         let resolver = resolver_for(&manifest_dir);
@@ -631,8 +629,8 @@ mod tests {
     #[test]
     #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
@@ -699,8 +697,8 @@ mod tests {
     #[test]
     #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
@@ -743,8 +741,8 @@ mod tests {
     #[test]
     #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
         unsafe {
@@ -771,8 +769,8 @@ mod tests {
     #[test]
     #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
@@ -823,8 +821,8 @@ mod tests {
     #[test]
     #[serial]
     fn uses_final_workdir_for_folder() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.path());
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver

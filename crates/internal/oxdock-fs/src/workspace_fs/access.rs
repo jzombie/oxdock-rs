@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 
-use super::{AccessMode, PathResolver, GuardedPath};
+use super::{AccessMode, GuardedPath, PathResolver};
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
 pub(crate) fn guard_path(

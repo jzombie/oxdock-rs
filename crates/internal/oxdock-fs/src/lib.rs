@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 pub mod workspace_fs;
-pub use workspace_fs::{PathResolver, GuardedPath, UnguardedPath};
+pub use workspace_fs::{GuardedPath, GuardedTempDir, PathResolver, UnguardedPath};
 
 /// Trait implemented by both `GuardedPath` and `UnguardedPath` so callers can
 /// rely on a consistent set of path helper methods. This includes a small set

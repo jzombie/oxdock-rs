@@ -3,8 +3,8 @@ use oxdock_fs::{GuardedPath, PathResolver};
 
 #[test]
 fn script_runs_copy_and_symlink() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = GuardedPath::new_root(temp.path()).unwrap();
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = temp.as_guarded_path().clone();
 
     // Prepare minimal workspace structure using the PathResolver to avoid
     // calling `std::fs` directly from non-fs crates.

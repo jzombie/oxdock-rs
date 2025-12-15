@@ -83,8 +83,8 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     #[cfg(windows)]
     maybe_reexec_shell_to_temp(&opts)?;
 
-    let tempdir = tempfile::tempdir().context("failed to create temp dir")?;
-    let temp_root = GuardedPath::new_root(tempdir.path()).context("guard temp dir")?;
+    let tempdir = GuardedPath::tempdir().context("failed to create temp dir")?;
+    let temp_root = tempdir.as_guarded_path().clone();
 
     // Materialize source tree without .git
     archive_head(&workspace_root, &temp_root)?;

@@ -175,7 +175,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "tempfile",
 ]
 
 [[package]]
@@ -184,7 +183,6 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
- "tempfile",
 ]
 
 [[package]]
@@ -192,6 +190,7 @@ name = "oxdock-fs"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "tempfile",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 pub mod path;
-pub use path::{GuardedPath, UnguardedPath};
+pub use path::{GuardedPath, GuardedTempDir, UnguardedPath};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AccessMode {

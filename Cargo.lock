@@ -271,7 +271,6 @@ dependencies = [
  "quote",
  "serial_test",
  "syn",
- "tempfile",
 ]
 
 [[package]]
@@ -294,7 +293,6 @@ dependencies = [
  "anyhow",
  "indoc",
  "oxdock-fs",
- "tempfile",
 ]
 
 [[package]]
@@ -302,6 +300,7 @@ name = "oxdock-fs"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "tempfile",
 ]
 
 [[package]]

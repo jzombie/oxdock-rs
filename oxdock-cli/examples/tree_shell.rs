@@ -15,10 +15,10 @@ WORKDIR demo
 "#;
 
 fn main() -> anyhow::Result<()> {
-    let temp = tempfile::tempdir()?;
-    let root = GuardedPath::new_root(temp.path())?;
+    let temp = GuardedPath::tempdir()?;
+    let root = temp.as_guarded_path().clone();
 
-    println!("temp workspace: {}", temp.path().display());
+    println!("temp workspace: {}", temp.display());
     println!("script:\n{SCRIPT}");
     println!(
         "You'll be dropped into 'demo' inside the temp workspace. Exit the shell to finish the example.\n"
