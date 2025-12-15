@@ -539,6 +539,7 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Guard;
     use oxdock_fs::GuardedPath;
     use std::cell::RefCell;
     use std::collections::VecDeque;
@@ -612,6 +613,91 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(mock.killed(), vec!["bg-task"]);
+    }
+
+    #[test]
+    fn guarded_run_waits_for_env_to_be_set() {
+        let root = GuardedPath::new_root_from_str(".").unwrap();
+        let guard = Guard::EnvEquals {
+            key: "READY".into(),
+            value: "1".into(),
+            invert: false,
+        };
+        let steps = vec![
+            Step {
+                guards: vec![vec![guard.clone()]],
+                kind: StepKind::Run("echo first".into()),
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "READY".into(),
+                    value: "1".into(),
+                },
+            },
+            Step {
+                guards: vec![vec![guard]],
+                kind: StepKind::Run("echo second".into()),
+            },
+        ];
+        let mock = MockProcessManager::default();
+        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        let runs = mock.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0].starts_with("echo second"),
+            "unexpected runs: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn guard_groups_allow_any_matching_branch() {
+        let root = GuardedPath::new_root_from_str(".").unwrap();
+        let guard_alpha = Guard::EnvEquals {
+            key: "MODE".into(),
+            value: "alpha".into(),
+            invert: false,
+        };
+        let guard_beta = Guard::EnvEquals {
+            key: "MODE".into(),
+            value: "beta".into(),
+            invert: false,
+        };
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "MODE".into(),
+                    value: "beta".into(),
+                },
+            },
+            Step {
+                guards: vec![vec![guard_alpha], vec![guard_beta]],
+                kind: StepKind::Run("echo guarded".into()),
+            },
+        ];
+        let mock = MockProcessManager::default();
+        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        assert_eq!(mock.recorded_runs().len(), 1);
+        assert!(mock.recorded_runs()[0].starts_with("echo guarded"));
+    }
+
+    #[test]
+    fn capture_rejects_multiple_instructions() {
+        let root = GuardedPath::new_root_from_str(".").unwrap();
+        let capture = Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "out.txt".into(),
+                cmd: "WRITE one 1; WRITE two 2".into(),
+            },
+        };
+        let mock = MockProcessManager::default();
+        let err = run_steps_with_manager(&root, &root, &[capture], mock).unwrap_err();
+        assert!(
+            err.to_string().contains("CAPTURE expects exactly one instruction"),
+            "unexpected error: {err}"
+        );
     }
 
     #[derive(Clone, Default)]

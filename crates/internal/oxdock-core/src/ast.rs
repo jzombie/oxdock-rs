@@ -550,7 +550,8 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_script;
+    use super::{guard_allows, guards_allow_any, parse_script, Guard};
+    use std::collections::HashMap;
 
     #[test]
     fn commands_are_case_sensitive() {
@@ -561,5 +562,53 @@ mod tests {
                 "unexpected error for '{bad}': {err}"
             );
         }
+    }
+
+    #[test]
+    fn env_equals_guard_respects_inversion() {
+        let mut envs = HashMap::new();
+        envs.insert("FOO".to_string(), "bar".to_string());
+        let guard = Guard::EnvEquals {
+            key: "FOO".into(),
+            value: "bar".into(),
+            invert: false,
+        };
+        assert!(guard_allows(&guard, &envs));
+
+        let inverted = Guard::EnvEquals {
+            key: "FOO".into(),
+            value: "bar".into(),
+            invert: true,
+        };
+        assert!(!guard_allows(&inverted, &envs));
+    }
+
+    #[test]
+    fn guards_allow_any_act_as_or_of_ands() {
+        let mut envs = HashMap::new();
+        envs.insert("MODE".to_string(), "beta".to_string());
+        let groups = vec![
+            vec![Guard::EnvEquals {
+                key: "MODE".into(),
+                value: "alpha".into(),
+                invert: false,
+            }],
+            vec![Guard::EnvEquals {
+                key: "MODE".into(),
+                value: "beta".into(),
+                invert: false,
+            }],
+        ];
+        assert!(guards_allow_any(&groups, &envs));
+    }
+
+    #[test]
+    fn guards_allow_any_falls_back_to_false_when_all_fail() {
+        let envs = HashMap::new();
+        let groups = vec![vec![Guard::EnvExists {
+            key: "MISSING".into(),
+            invert: false,
+        }]];
+        assert!(!guards_allow_any(&groups, &envs));
     }
 }
