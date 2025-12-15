@@ -1,3 +1,5 @@
+// TODO: Commands that could have duplicate args (e.g., COPY, COPY_GIT, SYMLINK) could be improved to only take the first arg. Making a tiny helper function for that might be cleaner.
+
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
