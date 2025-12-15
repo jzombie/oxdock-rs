@@ -255,9 +255,13 @@ pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
 fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
     indoc::formatdoc! {"
-        {pkg} shell workspace: {} (materialized from git HEAD at {})
+        {pkg} shell workspace
+          cwd: {}
+          source: git HEAD at {}
+          lifetime: temporary directory created for this shell session; it disappears when you exit
+          creation: {pkg} archived the repo at HEAD into this temp workspace before launching the shell
 
-        WARNING: This shell is still using your filesystem and does not provide isolation guarantees.
+          WARNING: This shell still runs on your host filesystem and is **not** isolated!
     ", cwd.display(), workspace_root.display()}
 }
 
