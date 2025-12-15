@@ -14,6 +14,7 @@ oxdock-buildtime-macros.workspace = true
 oxdock-core.workspace = true
 rust-embed.workspace = true
 tempfile.workspace = true
+oxdock-fs.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

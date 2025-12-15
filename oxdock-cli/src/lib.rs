@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use std::env;
-use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use oxdock_fs::PathResolver;
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
@@ -80,8 +80,14 @@ pub fn execute(opts: Options) -> Result<()> {
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
-        ScriptSource::Path(path) => fs::read_to_string(path)
-            .with_context(|| format!("failed to read script at {}", path.display()))?,
+        ScriptSource::Path(path) => {
+            // Read script path via PathResolver rooted at the workspace so
+            // script files are validated to live under the workspace.
+            let resolver = PathResolver::new(&workspace_root, &workspace_root);
+            resolver
+                .read_to_string(path)
+                .with_context(|| format!("failed to read script at {}", path.display()))?
+        }
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
@@ -126,14 +132,17 @@ pub fn execute(opts: Options) -> Result<()> {
 }
 
 fn has_controlling_tty() -> bool {
+    // Prefer checking whether stdin or stderr is a terminal. This avoids
+    // directly opening device files via `std::fs` while still detecting
+    // whether an interactive tty is available in the common cases.
     #[cfg(unix)]
     {
-        std::fs::File::open("/dev/tty").is_ok()
+        io::stdin().is_terminal() || io::stderr().is_terminal()
     }
 
     #[cfg(windows)]
     {
-        std::fs::File::open("CONIN$").is_ok()
+        io::stdin().is_terminal() || io::stderr().is_terminal()
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -161,7 +170,13 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
         .as_millis();
     temp_path.push(format!("oxdock-shell-{ts}-{}.exe", std::process::id()));
 
-    fs::copy(&self_path, &temp_path)
+    // Copy the current executable into the temporary location via a
+    // resolver whose root is the temp directory. The source may live
+    // outside the temp dir, so use `copy_file_from_external`.
+    let temp_root = temp_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+    let resolver_temp = PathResolver::new(temp_root, temp_root);
+    resolver_temp
+        .copy_file_from_external(&self_path, &temp_path)
         .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
 
     let mut cmd = Command::new(&temp_path);
@@ -238,7 +253,10 @@ fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
         cmd.arg("-c").arg(script);
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
-        if let Ok(tty) = fs::File::open("/dev/tty") {
+        // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
+        if let Ok(tty) = PathResolver::new(workspace_root, workspace_root)
+            .open_external_file(Path::new("/dev/tty"))
+        {
             cmd.stdin(tty);
         }
 
@@ -307,7 +325,10 @@ fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
     )?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
-    fs::remove_file(&archive_path)
+    // Remove intermediate archive via a resolver rooted at the temp root.
+    let resolver_temp = PathResolver::new(temp_root, temp_root);
+    resolver_temp
+        .remove_file_abs(&archive_path)
         .with_context(|| format!("failed to remove {}", archive_path.display()))?;
     Ok(())
 }

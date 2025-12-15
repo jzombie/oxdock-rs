@@ -478,6 +478,98 @@ impl PathResolver {
         }
         Ok(())
     }
+
+    /// Remove a file after validating it is within allowed roots.
+    #[allow(clippy::disallowed_methods)]
+    pub fn remove_file_abs(&self, path: &Path) -> Result<()> {
+        let guarded = self
+            .check_access(path, AccessMode::Write)
+            .with_context(|| format!("remove_file denied for {}", path.display()))?;
+        fs::remove_file(&guarded)
+            .with_context(|| format!("failed to remove file {}", guarded.display()))?;
+        Ok(())
+    }
+
+    /// Remove a directory and its contents after validating it is within allowed roots.
+    #[allow(clippy::disallowed_methods)]
+    pub fn remove_dir_all_abs(&self, path: &Path) -> Result<()> {
+        let guarded = self
+            .check_access(path, AccessMode::Write)
+            .with_context(|| format!("remove_dir_all denied for {}", path.display()))?;
+        fs::remove_dir_all(&guarded)
+            .with_context(|| format!("failed to remove dir {}", guarded.display()))?;
+        Ok(())
+    }
+
+    /// Copy a directory tree from an external source (not necessarily under
+    /// the resolver roots) into a destination that must be under the
+    /// resolver's allowed `root`. This is used to move material from a
+    /// temporary build directory into the guarded out_dir.
+    #[allow(clippy::disallowed_methods)]
+    pub fn copy_dir_from_external(&self, src: &Path, dst: &Path) -> Result<()> {
+        // Ensure destination root is allowed
+        let guarded_dst_root = self
+            .check_access(dst, AccessMode::Write)
+            .with_context(|| format!("copy destination denied for {}", dst.display()))?;
+        fs::create_dir_all(&guarded_dst_root)
+            .with_context(|| format!("creating dir {}", guarded_dst_root.display()))?;
+
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let src_path = entry.path();
+            let dst_path = guarded_dst_root.join(entry.file_name());
+
+            if file_type.is_dir() {
+                fs::create_dir_all(&dst_path)
+                    .with_context(|| format!("creating dir {}", dst_path.display()))?;
+                // Recurse from external source
+                self.copy_dir_from_external(&src_path, &dst_path)?;
+            } else if file_type.is_file() {
+                if let Some(parent) = dst_path.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating dir {}", parent.display()))?;
+                }
+                fs::copy(&src_path, &dst_path).with_context(|| {
+                    format!("copying {} to {}", src_path.display(), dst_path.display())
+                })?;
+            } else {
+                bail!("unsupported file type: {}", src_path.display());
+            }
+        }
+        Ok(())
+    }
+
+    /// Copy a single file from an external source into a destination guarded
+    /// by this resolver. The `src` path is not validated against the resolver
+    /// roots (it may live outside them); the `dst` is validated to ensure it
+    /// resides under the allowed `root`.
+    #[allow(clippy::disallowed_methods)]
+    pub fn copy_file_from_external(&self, src: &Path, dst: &Path) -> Result<u64> {
+        let guarded_dst = self
+            .check_access(dst, AccessMode::Write)
+            .with_context(|| format!("copy destination denied for {}", dst.display()))?;
+        if let Some(parent) = guarded_dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        let n = fs::copy(src, &guarded_dst)
+            .with_context(|| format!("copying {} to {}", src.display(), guarded_dst.display()))?;
+        Ok(n)
+    }
+
+    /// Open an external file (potentially outside resolver roots) and return a `File`.
+    ///
+    /// This helper centralizes raw `File::open` usage so other crates do not call
+    /// `std::fs` directly. The resolver does not validate the `path` against its
+    /// configured roots because this operation is explicitly intended for
+    /// external device files or temporary locations.
+    #[allow(clippy::disallowed_methods)]
+    pub fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {
+        let f = fs::File::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        Ok(f)
+    }
 }
 
 impl PathResolver {

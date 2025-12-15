@@ -1,20 +1,20 @@
-use std::fs::{self, File};
-use std::io::Write;
-
 use oxdock_cli::{Step, StepKind, run_script};
+use oxdock_fs::PathResolver;
 
 #[test]
 fn script_runs_copy_and_symlink() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
 
-    // Prepare minimal workspace structure
-    fs::create_dir_all(root.join("client/dist")).unwrap();
-    fs::create_dir_all(root.join("server")).unwrap();
-
+    // Prepare minimal workspace structure using the PathResolver to avoid
+    // calling `std::fs` directly from non-fs crates.
+    let resolver = PathResolver::new(root, root);
+    resolver.create_dir_all_abs(&root.join("client/dist")).unwrap();
+    resolver.create_dir_all_abs(&root.join("server")).unwrap();
     // Seed dist with a file
-    let mut f = File::create(root.join("client/dist/test.txt")).unwrap();
-    writeln!(f, "hello").unwrap();
+    resolver
+        .write_file(&root.join("client/dist/test.txt"), b"hello\n")
+        .unwrap();
 
     let steps = vec![
         Step {
@@ -54,7 +54,7 @@ fn script_runs_copy_and_symlink() {
     // Copy should exist and contain the file
     let copied = root.join("client/dist-copy/test.txt");
     assert!(copied.exists());
-    let contents = fs::read_to_string(copied).unwrap();
+    let contents = resolver.read_to_string(&copied).unwrap();
     assert!(contents.contains("hello"));
 
     // Symlink should resolve to dist (on Unix); on non-Unix we copied.
