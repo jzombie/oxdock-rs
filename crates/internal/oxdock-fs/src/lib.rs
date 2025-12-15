@@ -25,6 +25,11 @@ impl GuardedPath {
         })
     }
 
+    /// Build a guard from string paths without requiring callers to reference `std::path` types.
+    pub fn new_from_str(root: &str, candidate: &str) -> Result<Self> {
+        Self::new(Path::new(root), Path::new(candidate))
+    }
+
     /// Create a guard where the root is the path itself.
     pub fn new_root(root: &Path) -> Result<Self> {
         let guarded = guard_path(root, root, AccessMode::Passthru)?;
@@ -32,6 +37,11 @@ impl GuardedPath {
             root: guarded.clone(),
             path: guarded,
         })
+    }
+
+    /// Build a root guard from a string path without exposing `std::path` types to callers.
+    pub fn new_root_from_str(root: &str) -> Result<Self> {
+        Self::new_root(Path::new(root))
     }
 
     pub fn as_path(&self) -> &Path {
@@ -52,6 +62,13 @@ impl GuardedPath {
 
     pub fn join(&self, rel: &str) -> Result<Self> {
         GuardedPath::new(&self.root, &self.path.join(rel))
+    }
+
+    /// Return the parent directory as a guarded path, if it exists within the same root.
+    pub fn parent(&self) -> Option<Self> {
+        self.path
+            .parent()
+            .and_then(|p| GuardedPath::new(&self.root, p).ok())
     }
 
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {

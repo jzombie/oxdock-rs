@@ -472,7 +472,6 @@ fn shell_cmd(cmd: &str) -> ProcessCommand {
     c
 }
 
-#[allow(clippy::while_let_on_iterator)]
 fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();
@@ -519,7 +518,7 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
             }
         } else if c == '{' {
             let mut name = String::new();
-            while let Some(ch) = chars.next() {
+            for ch in chars.by_ref() {
                 if ch == '}' {
                     break;
                 }

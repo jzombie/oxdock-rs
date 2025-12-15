@@ -1,4 +1,5 @@
 use oxdock_cli::{parse_script, run_script};
+use oxdock_fs::GuardedPath;
 
 // Embedded DSL script: builds a small demo tree and drops you into a shell inside it.
 const SCRIPT: &str = r#"
@@ -15,6 +16,7 @@ WORKDIR demo
 
 fn main() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
+    let root = GuardedPath::new_root(temp.path())?;
 
     println!("temp workspace: {}", temp.path().display());
     println!("script:\n{SCRIPT}");
@@ -23,5 +25,5 @@ fn main() -> anyhow::Result<()> {
     );
 
     let steps = parse_script(SCRIPT)?;
-    run_script(temp.path(), &steps)
+    run_script(&root, &steps)
 }

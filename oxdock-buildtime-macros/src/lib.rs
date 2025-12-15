@@ -1,5 +1,3 @@
-#![deny(clippy::disallowed_methods)]
-
 // TODO: Add no-stdlib tests
 
 use oxdock_fs::{GuardedPath, PathResolver, UnguardedPath};
@@ -437,7 +435,6 @@ fn preflight_out_dir_for_build(out_dir: &GuardedPath, out_dir_span: proc_macro2:
     }
 }
 
-#[allow(clippy::disallowed_methods)]
 fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &GuardedPath) -> syn::Result<GuardedPath> {
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
     let tempdir = tempfile::Builder::new()

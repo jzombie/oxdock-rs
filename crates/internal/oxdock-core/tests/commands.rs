@@ -1,11 +1,9 @@
-#![allow(clippy::disallowed_methods)]
-
 use oxdock_core::{run_steps, run_steps_with_context, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{GuardedPath, PathResolver};
 use tempfile::tempdir;
 
-fn guard_root(path: &std::path::Path) -> GuardedPath {
-    GuardedPath::new_root(path).unwrap()
+fn guard_root(temp: &tempfile::TempDir) -> GuardedPath {
+    GuardedPath::new_root(temp.path()).unwrap()
 }
 
 fn read_trimmed(path: &GuardedPath) -> String {
@@ -34,7 +32,7 @@ fn exists(root: &GuardedPath, rel: &str) -> bool {
 #[test]
 fn commands_behave_cross_platform() {
     let snapshot_dir = tempdir().unwrap();
-    let snapshot = guard_root(snapshot_dir.path());
+    let snapshot = guard_root(&snapshot_dir);
     let local = snapshot.join("local").unwrap();
     create_dirs(&local);
 
@@ -194,7 +192,7 @@ fn commands_behave_cross_platform() {
 #[test]
 fn exit_stops_pipeline_and_reports_code() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -229,7 +227,7 @@ fn exit_stops_pipeline_and_reports_code() {
 #[test]
 fn accepts_semicolon_separated_commands() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let script = "WRITE one.txt 1; WRITE two.txt 2";
     let steps = oxdock_core::parse_script(script).unwrap();
     run_steps(&root, &steps).unwrap();
@@ -240,7 +238,7 @@ fn accepts_semicolon_separated_commands() {
 #[test]
 fn write_cmd_captures_output() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let cmd = if cfg!(windows) {
         "RUN echo hello"
     } else {
@@ -260,7 +258,7 @@ fn write_cmd_captures_output() {
 #[test]
 fn capture_echo_interpolates_env() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -285,7 +283,7 @@ fn capture_echo_interpolates_env() {
 #[test]
 fn capture_ls_lists_entries_with_header() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let dir = root.join("items").unwrap();
     create_dirs(&dir);
     write_text(&dir.join("a.txt").unwrap(), "a");
@@ -324,7 +322,7 @@ fn capture_ls_lists_entries_with_header() {
 #[test]
 fn capture_cat_emits_file_contents() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     write_text(&root.join("note.txt").unwrap(), "hello note");
 
     let steps = vec![Step {
@@ -342,7 +340,7 @@ fn capture_cat_emits_file_contents() {
 #[test]
 fn capture_cwd_canonicalizes_and_writes() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -371,7 +369,7 @@ fn capture_cwd_canonicalizes_and_writes() {
 #[test]
 fn copy_git_via_script_simple() {
     let snapshot_temp = tempdir().unwrap();
-    let snapshot = guard_root(snapshot_temp.path());
+    let snapshot = guard_root(&snapshot_temp);
 
     // Create a tiny git repo inside the snapshot so build_context is under root
     let repo = snapshot.join("repo").unwrap();
@@ -436,7 +434,7 @@ fn copy_git_via_script_simple() {
 #[test]
 fn copy_git_directory_via_script() {
     let snapshot_temp = tempdir().unwrap();
-    let snapshot = guard_root(snapshot_temp.path());
+    let snapshot = guard_root(&snapshot_temp);
 
     // Create a tiny git repo inside the snapshot so build_context is under root
     let repo = snapshot.join("repo_dir").unwrap();
@@ -500,7 +498,7 @@ fn copy_git_directory_via_script() {
 #[test]
 fn workdir_cannot_escape_root() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     // Attempt to switch to parent of root which should be disallowed
     let steps = vec![Step {
         guards: Vec::new(),
@@ -518,7 +516,7 @@ fn workdir_cannot_escape_root() {
 #[test]
 fn write_cannot_escape_root() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Write {
@@ -538,19 +536,23 @@ fn write_cannot_escape_root() {
 #[test]
 fn read_cannot_escape_root() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let parent = root
         .as_path()
         .parent()
         .expect("tempdir should have a parent");
-    let secret = parent.join(format!(
-        "{}-secret.txt",
-        root.as_path()
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("escape")
-    ));
-    std::fs::write(&secret, "nope").unwrap();
+    let parent_guard = GuardedPath::new_root(parent).unwrap();
+    let parent_fs = PathResolver::new(parent_guard.as_path(), parent_guard.as_path()).unwrap();
+    let secret = parent_guard
+        .join(&format!(
+            "{}-secret.txt",
+            root.as_path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("escape")
+        ))
+        .unwrap();
+    parent_fs.write_file(&secret, b"nope").unwrap();
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -564,32 +566,38 @@ fn read_cannot_escape_root() {
         err
     );
 
-    let _ = std::fs::remove_file(&secret);
+    let _ = parent_fs.remove_file_abs(&secret);
 }
 
 #[test]
 fn read_symlink_escape_is_blocked() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let parent = root
         .as_path()
         .parent()
         .expect("tempdir should have a parent");
-    let secret = parent.join(format!(
-        "{}-symlink-secret.txt",
-        root.as_path()
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("escape")
-    ));
-    std::fs::write(&secret, "top secret").unwrap();
+    let parent_guard = GuardedPath::new_root(parent).unwrap();
+    let parent_fs = PathResolver::new(parent_guard.as_path(), parent_guard.as_path()).unwrap();
+    let secret = parent_guard
+        .join(&format!(
+            "{}-symlink-secret.txt",
+            root.as_path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("escape")
+        ))
+        .unwrap();
+    parent_fs
+        .write_file(&secret, b"top secret")
+        .unwrap();
 
     // Inside root, create a link that points to the outside secret.
     let link_path = root.as_path().join("leak.txt");
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&secret, &link_path).unwrap();
+    std::os::unix::fs::symlink(secret.as_path(), &link_path).unwrap();
     #[cfg(windows)]
-    std::os::windows::fs::symlink_file(&secret, &link_path).unwrap();
+    std::os::windows::fs::symlink_file(secret.as_path(), &link_path).unwrap();
 
     let steps = vec![Step {
         guards: Vec::new(),
@@ -603,13 +611,13 @@ fn read_symlink_escape_is_blocked() {
         err
     );
 
-    let _ = std::fs::remove_file(&secret);
+    let _ = parent_fs.remove_file_abs(&secret);
 }
 
 #[test]
 fn write_missing_path_cannot_escape_root() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     create_dirs(&root.join("a/b").unwrap());
 
     let steps = vec![Step {
@@ -632,7 +640,7 @@ fn write_missing_path_cannot_escape_root() {
 #[test]
 fn workdir_creates_missing_dirs_within_root() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Workdir("a/b/c".into()),
@@ -646,7 +654,7 @@ fn workdir_creates_missing_dirs_within_root() {
 #[test]
 fn cat_reads_file_contents_without_error() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
@@ -660,7 +668,7 @@ fn cat_reads_file_contents_without_error() {
 #[test]
 fn cwd_prints_to_stdout() {
     let temp = tempdir().unwrap();
-    let root = guard_root(temp.path());
+    let root = guard_root(&temp);
     let steps = vec![
         Step {
             guards: Vec::new(),

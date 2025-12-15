@@ -1,5 +1,12 @@
 use indoc::indoc;
 use oxdock_cli::{Options, ScriptSource, Step, StepKind, parse_script};
+use oxdock_fs::GuardedPath;
+use tempfile::tempdir;
+
+fn workspace_root() -> GuardedPath {
+    let tmp = tempdir().expect("tmpdir");
+    GuardedPath::new_root(tmp.path()).expect("guarded root")
+}
 
 #[test]
 fn parse_basic_script() {
@@ -81,7 +88,8 @@ fn parse_cat() {
 #[test]
 fn parse_options_accepts_stdin_dash() {
     let mut args = "--script -".split_whitespace().map(String::from);
-    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    let root = workspace_root();
+    let opts = Options::parse(&mut args, &root).expect("options parse should succeed");
     match opts.script {
         ScriptSource::Stdin => {}
         _ => panic!("expected stdin source when passing '-'"),
@@ -92,7 +100,8 @@ fn parse_options_accepts_stdin_dash() {
 #[test]
 fn parse_options_defaults_to_stdin() {
     let mut args = std::iter::empty();
-    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    let root = workspace_root();
+    let opts = Options::parse(&mut args, &root).expect("options parse should succeed");
     match opts.script {
         ScriptSource::Stdin => {}
         _ => panic!("expected stdin source by default"),
@@ -103,7 +112,8 @@ fn parse_options_defaults_to_stdin() {
 #[test]
 fn parse_options_accepts_shell_flag() {
     let mut args = "--shell".split_whitespace().map(String::from);
-    let opts = Options::parse(&mut args).expect("options parse should succeed");
+    let root = workspace_root();
+    let opts = Options::parse(&mut args, &root).expect("options parse should succeed");
     assert!(opts.shell);
     match opts.script {
         ScriptSource::Stdin => {}

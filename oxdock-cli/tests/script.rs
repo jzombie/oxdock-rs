@@ -53,7 +53,7 @@ fn script_runs_copy_and_symlink() {
         },
     ];
 
-    run_script(root.as_path(), &steps).unwrap();
+    run_script(&root, &steps).unwrap();
 
     // Copy should exist and contain the file
     let copied = root.join("client/dist-copy/test.txt").unwrap();
