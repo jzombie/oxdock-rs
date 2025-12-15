@@ -293,6 +293,7 @@ dependencies = [
  "anyhow",
  "indoc",
  "oxdock-fs",
+ "oxdock-process",
 ]
 
 [[package]]
@@ -301,6 +302,13 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "tempfile",
+]
+
+[[package]]
+name = "oxdock-process"
+version = "0.1.0-alpha"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]

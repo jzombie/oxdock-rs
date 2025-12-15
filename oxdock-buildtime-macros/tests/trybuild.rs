@@ -1,4 +1,7 @@
-#[cfg_attr(miri, ignore = "spawns cargo subprocess; process spawning not supported under Miri")]
+#[cfg_attr(
+    miri,
+    ignore = "spawns cargo subprocess; process spawning not supported under Miri"
+)]
 #[test]
 fn trybuild_manifest_dir() {
     use std::process::Command;
@@ -17,7 +20,10 @@ fn trybuild_manifest_dir() {
     );
 }
 
-#[cfg_attr(miri, ignore = "spawns cargo subprocess; process spawning not supported under Miri")]
+#[cfg_attr(
+    miri,
+    ignore = "spawns cargo subprocess; process spawning not supported under Miri"
+)]
 #[test]
 fn trybuild_exit_fail() {
     use std::process::Command;

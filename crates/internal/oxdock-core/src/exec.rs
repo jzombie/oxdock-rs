@@ -1,17 +1,30 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
+use std::process::ExitStatus;
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{GuardedPath, PathResolver, WorkspaceFs};
+use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, ShellProcessManager};
 
-struct ExecState {
+pub use oxdock_process::shell_program;
+
+struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
     cargo_target_dir: GuardedPath,
     cwd: GuardedPath,
     envs: HashMap<String, String>,
-    bg_children: Vec<Child>,
+    bg_children: Vec<P::Handle>,
+}
+
+impl<P: ProcessManager> ExecState<P> {
+    fn command_ctx(&self) -> CommandContext<'_> {
+        CommandContext::new(
+            self.cwd.as_path(),
+            &self.envs,
+            self.cargo_target_dir.as_path(),
+        )
+    }
 }
 
 pub fn run_steps(fs_root: &GuardedPath, steps: &[Step]) -> Result<()> {
@@ -70,6 +83,20 @@ fn run_steps_inner(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<GuardedPath> {
+    run_steps_with_manager(
+        fs_root,
+        build_context,
+        steps,
+        ShellProcessManager::default(),
+    )
+}
+
+fn run_steps_with_manager<P: ProcessManager>(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+    process: P,
+) -> Result<GuardedPath> {
     let resolver = PathResolver::new(fs_root.as_path(), build_context.as_path())?;
     let cwd = resolver.root().clone();
     let mut state = ExecState {
@@ -81,13 +108,15 @@ fn run_steps_inner(
     };
 
     let mut stdout = io::stdout();
-    execute_steps(&mut state, steps, false, &mut stdout)?;
+    let mut proc_mgr = process;
+    execute_steps(&mut state, &mut proc_mgr, steps, false, &mut stdout)?;
 
     Ok(state.cwd)
 }
 
-fn execute_steps(
-    state: &mut ExecState,
+fn execute_steps<P: ProcessManager>(
+    state: &mut ExecState<P>,
+    process: &mut P,
     steps: &[Step],
     capture_output: bool,
     out: &mut dyn Write,
@@ -95,7 +124,7 @@ fn execute_steps(
     let fs_root = state.fs.root().clone();
     let build_context = state.fs.build_context().clone();
 
-    let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
+    let check_bg = |bg: &mut Vec<P::Handle>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
         for child in bg.iter_mut() {
             if let Some(status) = child.try_wait()? {
@@ -142,22 +171,15 @@ fn execute_steps(
                 state.envs.insert(key.clone(), value.clone());
             }
             StepKind::Run(cmd) => {
-                let mut command = shell_cmd(cmd);
-                command.current_dir(state.cwd.as_path());
-                command.envs(state.envs.iter());
-                // Prevent contention with the outer Cargo build by isolating nested cargo targets.
-                command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
+                let ctx = state.command_ctx();
                 if capture_output {
-                    command.stdout(Stdio::piped());
-                    let output = command
-                        .output()
+                    let output = process
+                        .run_capture(&ctx, cmd)
                         .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
-                    if !output.status.success() {
-                        bail!("command {:?} failed with status {}", command, output.status);
-                    }
-                    out.write_all(&output.stdout)?;
+                    out.write_all(&output)?;
                 } else {
-                    run_cmd(&mut command)
+                    process
+                        .run(&ctx, cmd)
                         .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
                 }
             }
@@ -169,12 +191,9 @@ fn execute_steps(
                 if capture_output {
                     bail!("RUN_BG is not supported inside CAPTURE");
                 }
-                let mut command = shell_cmd(cmd);
-                command.current_dir(state.cwd.as_path());
-                command.envs(state.envs.iter());
-                command.env("CARGO_TARGET_DIR", state.cargo_target_dir.as_path());
-                let child = command
-                    .spawn()
+                let ctx = state.command_ctx();
+                let child = process
+                    .spawn_bg(&ctx, cmd)
                     .with_context(|| format!("step {}: RUN_BG {}", idx + 1, cmd))?;
                 state.bg_children.push(child);
             }
@@ -312,8 +331,9 @@ fn execute_steps(
                     envs: state.envs.clone(),
                     bg_children: Vec::new(),
                 };
+                let mut sub_process = process.clone();
                 let mut buf: Vec<u8> = Vec::new();
-                execute_steps(&mut sub_state, &steps, true, &mut buf)?;
+                execute_steps(&mut sub_state, &mut sub_process, &steps, true, &mut buf)?;
                 state
                     .fs
                     .write_file(&target, &buf)
@@ -357,16 +377,6 @@ fn execute_steps(
         }
     }
 
-    Ok(())
-}
-
-fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run {:?}", cmd))?;
-    if !status.success() {
-        bail!("command {:?} failed with status {}", cmd, status);
-    }
     Ok(())
 }
 
@@ -464,29 +474,6 @@ fn describe_dir(
     out
 }
 
-pub fn shell_program() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
-    }
-
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-    }
-}
-
-fn shell_cmd(cmd: &str) -> ProcessCommand {
-    let program = shell_program();
-    let mut c = ProcessCommand::new(program);
-    if cfg!(windows) {
-        c.arg("/C").arg(cmd);
-    } else {
-        c.arg("-c").arg(cmd);
-    }
-    c
-}
-
 fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();
@@ -552,4 +539,197 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxdock_fs::GuardedPath;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::path::Path;
+    use std::rc::Rc;
+
+    #[test]
+    fn run_records_env_and_cwd() {
+        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "FOO".into(),
+                    value: "bar".into(),
+                },
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Run("echo hi".into()),
+            },
+        ];
+        let mock = MockProcessManager::new();
+        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        assert_eq!(
+            mock.recorded_runs(),
+            vec![format!("echo hi|cwd={}|FOO=bar", root.as_path().display())]
+        );
+    }
+
+    #[test]
+    fn run_bg_completion_short_circuits_pipeline() {
+        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::RunBg("sleep".into()),
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Run("echo after".into()),
+            },
+        ];
+        let mock = MockProcessManager::new();
+        mock.push_bg_plan(0, success_status());
+        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        assert!(
+            mock.recorded_runs().is_empty(),
+            "foreground run should not execute when RUN_BG completes early"
+        );
+        assert_eq!(mock.spawn_log(), vec!["sleep"]);
+    }
+
+    #[test]
+    fn exit_kills_background_processes() {
+        let root = GuardedPath::new_root(Path::new(".")).unwrap();
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::RunBg("bg-task".into()),
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Exit(5),
+            },
+        ];
+        let mock = MockProcessManager::new();
+        mock.push_bg_plan(usize::MAX, success_status());
+        let err = run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap_err();
+        assert!(
+            err.to_string().contains("EXIT requested with code 5"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(mock.killed(), vec!["bg-task"]);
+    }
+
+    #[derive(Clone, Default)]
+    struct MockProcessManager {
+        runs: Rc<RefCell<Vec<String>>>,
+        spawns: Rc<RefCell<Vec<String>>>,
+        killed: Rc<RefCell<Vec<String>>>,
+        plans: Rc<RefCell<VecDeque<BgPlan>>>,
+    }
+
+    impl MockProcessManager {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn recorded_runs(&self) -> Vec<String> {
+            self.runs.borrow().clone()
+        }
+
+        fn spawn_log(&self) -> Vec<String> {
+            self.spawns.borrow().clone()
+        }
+
+        fn killed(&self) -> Vec<String> {
+            self.killed.borrow().clone()
+        }
+
+        fn push_bg_plan(&self, ready_after: usize, status: ExitStatus) {
+            self.plans.borrow_mut().push_back(BgPlan {
+                ready_after,
+                status,
+            });
+        }
+    }
+
+    impl ProcessManager for MockProcessManager {
+        type Handle = MockHandle;
+
+        fn run(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<()> {
+            let cwd = ctx.cwd().display().to_string();
+            let foo = ctx.envs().get("FOO").cloned().unwrap_or_default();
+            self.runs
+                .borrow_mut()
+                .push(format!("{script}|cwd={cwd}|FOO={foo}"));
+            Ok(())
+        }
+
+        fn run_capture(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<Vec<u8>> {
+            self.run(ctx, script)?;
+            Ok(Vec::new())
+        }
+
+        fn spawn_bg(&mut self, _ctx: &CommandContext<'_>, script: &str) -> Result<Self::Handle> {
+            self.spawns.borrow_mut().push(script.to_string());
+            let plan = self.plans.borrow_mut().pop_front().unwrap_or(BgPlan {
+                ready_after: 0,
+                status: success_status(),
+            });
+            Ok(MockHandle {
+                script: script.to_string(),
+                remaining: plan.ready_after,
+                status: plan.status,
+                killed: self.killed.clone(),
+            })
+        }
+    }
+
+    struct BgPlan {
+        ready_after: usize,
+        status: ExitStatus,
+    }
+
+    struct MockHandle {
+        script: String,
+        remaining: usize,
+        status: ExitStatus,
+        killed: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl BackgroundHandle for MockHandle {
+        fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+            if self.remaining == 0 {
+                Ok(Some(self.status))
+            } else {
+                self.remaining -= 1;
+                Ok(None)
+            }
+        }
+
+        fn kill(&mut self) -> Result<()> {
+            self.killed.borrow_mut().push(self.script.clone());
+            Ok(())
+        }
+
+        fn wait(&mut self) -> Result<ExitStatus> {
+            Ok(self.status)
+        }
+    }
+
+    fn success_status() -> ExitStatus {
+        exit_status_from_code(0)
+    }
+
+    #[cfg(unix)]
+    fn exit_status_from_code(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatusExt::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn exit_status_from_code(code: i32) -> ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        ExitStatusExt::from_raw(code as u32)
+    }
 }
