@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_methods)]
+
 pub mod ast;
 pub mod exec;
 pub mod resolver;
@@ -6,6 +8,7 @@ pub use exec::*;
 pub use resolver::PathResolver;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use indoc::indoc;

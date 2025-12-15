@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
@@ -50,7 +49,8 @@ pub fn run_steps_with_context_result(
             } else {
                 String::new()
             };
-            let tree = describe_dir(fs_root, 2, 24);
+            let resolver = PathResolver::new(fs_root, build_context);
+            let tree = describe_dir(&resolver, fs_root, 2, 24);
             let snapshot = format!(
                 "filesystem snapshot (root {}):\n{}",
                 fs_root.display(),
@@ -180,7 +180,7 @@ fn execute_steps(
                     .resolver
                     .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                copy_entry(&from_abs, &to_abs)
+                copy_entry(&state.resolver, &from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
@@ -229,7 +229,9 @@ fn execute_steps(
                     .resolver
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
-                fs::create_dir_all(&target)
+                state
+                    .resolver
+                    .create_dir_all_abs(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
@@ -241,9 +243,10 @@ fn execute_steps(
                 } else {
                     state.cwd.clone()
                 };
-                let mut entries: Vec<_> = fs::read_dir(&dir)
-                    .with_context(|| format!("failed to read dir {}", dir.display()))?
-                    .collect::<Result<_, _>>()?;
+                let mut entries = state
+                    .resolver
+                    .read_dir_entries(&dir)
+                    .with_context(|| format!("failed to read dir {}", dir.display()))?;
                 entries.sort_by_key(|a| a.file_name());
                 writeln!(out, "{}:", dir.display())?;
                 for entry in entries {
@@ -252,7 +255,7 @@ fn execute_steps(
             }
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
-                let real = canonical_cwd(&state.cwd).with_context(|| {
+                let real = canonical_cwd(&state.resolver, &state.cwd).with_context(|| {
                     format!(
                         "step {}: CWD failed to canonicalize {}",
                         idx + 1,
@@ -266,7 +269,9 @@ fn execute_steps(
                     .resolver
                     .resolve_read(&state.cwd, path)
                     .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
-                let data = fs::read(&target)
+                let data = state
+                    .resolver
+                    .read_file(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
                 out.write_all(&data)
                     .with_context(|| format!("failed to write {} to stdout", target.display()))?;
@@ -277,10 +282,14 @@ fn execute_steps(
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)
+                    state
+                        .resolver
+                        .create_dir_all_abs(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
-                fs::write(&target, contents)
+                state
+                    .resolver
+                    .write_file(&target, contents.as_bytes())
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Capture { path, cmd } => {
@@ -289,7 +298,9 @@ fn execute_steps(
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)
+                    state
+                        .resolver
+                        .create_dir_all_abs(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 let steps = ast::parse_script(cmd)
@@ -309,7 +320,9 @@ fn execute_steps(
                 };
                 let mut buf: Vec<u8> = Vec::new();
                 execute_steps(&mut sub_state, &steps, true, &mut buf)?;
-                fs::write(&target, &buf)
+                state
+                    .resolver
+                    .write_file(&target, &buf)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Exit(code) => {
@@ -363,52 +376,32 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     Ok(())
 }
 
-fn copy_entry(src: &Path, dst: &Path) -> Result<()> {
+fn copy_entry(resolver: &PathResolver, src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         bail!("source missing: {}", src.display());
     }
-    let meta = src.metadata()?;
+    let meta = resolver.metadata_abs(src)?;
     if meta.is_dir() {
-        copy_dir(src, dst)?;
+        resolver.copy_dir_recursive(src, dst)?;
     } else if meta.is_file() {
         if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating dir {}", parent.display()))?;
+            resolver.create_dir_all_abs(parent)?;
         }
-        fs::copy(src, dst)
-            .with_context(|| format!("copying {} to {}", src.display(), dst.display()))?;
+        resolver.copy_file(src, dst)?;
     } else {
         bail!("unsupported file type: {}", src.display());
     }
     Ok(())
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst).with_context(|| format!("creating dir {}", dst.display()))?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir(&src_path, &dst_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path).with_context(|| {
-                format!("copying {} to {}", src_path.display(), dst_path.display())
-            })?;
-        } else {
-            bail!("unsupported file type: {}", src_path.display());
-        }
-    }
-    Ok(())
+// helper removed: resolver handles recursive copying now
+
+fn canonical_cwd(resolver: &PathResolver, cwd: &Path) -> Result<String> {
+    Ok(resolver.canonicalize_abs(cwd)?.display().to_string())
 }
 
-fn canonical_cwd(cwd: &Path) -> Result<String> {
-    Ok(fs::canonicalize(cwd)?.display().to_string())
-}
-
-fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
-    fn helper(path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
+fn describe_dir(resolver: &PathResolver, root: &Path, max_depth: usize, max_entries: usize) -> String {
+    fn helper(resolver: &PathResolver, path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
         if *left == 0 {
             return;
         }
@@ -423,11 +416,11 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
         if depth >= max_depth {
             return;
         }
-        let entries = match fs::read_dir(path) {
+        let entries = match resolver.read_dir_entries(path) {
             Ok(e) => e,
             Err(_) => return,
         };
-        let mut names: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        let mut names: Vec<_> = entries.into_iter().collect();
         names.sort_by_key(|a| a.file_name());
         for entry in names {
             if *left == 0 {
@@ -436,7 +429,7 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
             *left -= 1;
             let p = entry.path();
             if p.is_dir() {
-                helper(&p, depth + 1, max_depth, left, out);
+                helper(resolver, &p, depth + 1, max_depth, left, out);
             } else {
                 out.push_str(&format!(
                     "{}  {}\n",
@@ -449,7 +442,7 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
 
     let mut out = String::new();
     let mut left = max_entries;
-    helper(root, 0, max_depth, &mut left, &mut out);
+    helper(resolver, root, 0, max_depth, &mut left, &mut out);
     out
 }
 

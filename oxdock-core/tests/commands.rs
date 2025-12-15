@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
 use std::fs;
 use tempfile::tempdir;

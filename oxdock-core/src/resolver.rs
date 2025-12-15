@@ -45,6 +45,7 @@ impl PathResolver {
         self.root = root.to_path_buf();
     }
 
+    #[allow(clippy::disallowed_methods)]
     pub fn resolve_workdir(&self, current: &Path, new_dir: &str) -> Result<PathBuf> {
         if new_dir == "/" {
             return fs::canonicalize(self.root()).or_else(|_| Ok(self.root.clone()));
@@ -84,6 +85,7 @@ impl PathResolver {
         self.resolve(cwd, rel, AccessMode::Write)
     }
 
+    #[allow(clippy::disallowed_methods)]
     pub fn resolve_copy_source(&self, from: &str) -> Result<PathBuf> {
         if Path::new(from).is_absolute() {
             bail!("COPY source must be relative to build context");
@@ -118,6 +120,7 @@ impl PathResolver {
     /// This method extracts blobs/trees using `git` plumbing (`git show`)
     /// and copies the material into `to`. `to` should be an absolute path already
     /// validated by the caller.
+    #[allow(clippy::disallowed_methods)]
     pub fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
         if Path::new(from).is_absolute() {
             bail!("COPY_GIT source must be relative to build context");
@@ -300,8 +303,138 @@ impl PathResolver {
 
         Ok(())
     }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn create_dir_all_abs(&self, path: &Path) -> Result<()> {
+        let guarded = check_access(&self.root, path, AccessMode::Write)
+            .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
+        fs::create_dir_all(&guarded)
+            .with_context(|| format!("creating dir {}", guarded.display()))?;
+        Ok(())
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn read_dir_entries(&self, path: &Path) -> Result<Vec<std::fs::DirEntry>> {
+        let guarded = check_access(&self.root, path, AccessMode::Read)
+            .with_context(|| format!("read_dir denied for {}", path.display()))?;
+        let entries = fs::read_dir(&guarded)
+            .with_context(|| format!("failed to read dir {}", guarded.display()))?;
+        let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
+        Ok(vec)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        let guarded = check_access(&self.root, path, AccessMode::Read)
+            .with_context(|| format!("read denied for {}", path.display()))?;
+        let data = fs::read(&guarded).with_context(|| format!("failed to read {}", guarded.display()))?;
+        Ok(data)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn read_to_string(&self, path: &Path) -> Result<String> {
+        let guarded = check_access(&self.root, path, AccessMode::Read)
+            .with_context(|| format!("read denied for {}", path.display()))?;
+        let s = fs::read_to_string(&guarded)
+            .with_context(|| format!("failed to read {}", guarded.display()))?;
+        Ok(s)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn write_file(&self, path: &Path, contents: &[u8]) -> Result<()> {
+        let guarded = check_access(&self.root, path, AccessMode::Write)
+            .with_context(|| format!("write denied for {}", path.display()))?;
+        if let Some(parent) = guarded.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        fs::write(&guarded, contents)
+            .with_context(|| format!("writing {}", guarded.display()))?;
+        Ok(())
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn copy_file(&self, src: &Path, dst: &Path) -> Result<u64> {
+        // Ensure destination is allowed for write
+        let guarded_dst = check_access(&self.root, dst, AccessMode::Write)
+            .with_context(|| format!("copy destination denied for {}", dst.display()))?;
+        // Source may be under root or under build_context; allow either for read
+        let guarded_src = check_access(&self.root, src, AccessMode::Read)
+            .or_else(|_| check_access(&self.build_context, src, AccessMode::Read))
+            .with_context(|| format!("copy source denied for {}", src.display()))?;
+        if let Some(parent) = guarded_dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        let n = fs::copy(&guarded_src, &guarded_dst)
+            .with_context(|| format!("copying {} to {}", guarded_src.display(), guarded_dst.display()))?;
+        Ok(n)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn canonicalize_abs(&self, path: &Path) -> Result<PathBuf> {
+        // Use check_access to validate and return an absolute path that is within allowed roots
+        let cand = check_access(&self.root, path, AccessMode::Passthru)
+            .or_else(|_| check_access(&self.build_context, path, AccessMode::Passthru))
+            .with_context(|| format!("canonicalize denied for {}", path.display()))?;
+        Ok(cand)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn metadata_abs(&self, path: &Path) -> Result<std::fs::Metadata> {
+        let guarded = check_access(&self.root, path, AccessMode::Read)
+            .or_else(|_| check_access(&self.build_context, path, AccessMode::Read))
+            .with_context(|| format!("metadata denied for {}", path.display()))?;
+        let m = fs::metadata(&guarded).with_context(|| format!("failed to stat {}", guarded.display()))?;
+        Ok(m)
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::only_used_in_recursion)]
+    pub fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<()> {
+        // Validate the destination root for write access, then create it.
+        let guarded_dst_root = check_access(&self.root, dst, AccessMode::Write)
+            .with_context(|| format!("copy destination denied for {}", dst.display()))?;
+        fs::create_dir_all(&guarded_dst_root)
+            .with_context(|| format!("creating dir {}", guarded_dst_root.display()))?;
+
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let src_path = entry.path();
+            let dst_path = guarded_dst_root.join(entry.file_name());
+
+            // Guard source: allow it under root OR build_context for reads.
+            let guarded_src = check_access(&self.root, &src_path, AccessMode::Read)
+                .or_else(|_| check_access(&self.build_context, &src_path, AccessMode::Read))
+                .with_context(|| format!("copy source denied for {}", src_path.display()))?;
+
+            // Guard destination path (each file/dir) for writes.
+            let guarded_dst = check_access(&self.root, &dst_path, AccessMode::Write)
+                .with_context(|| format!("copy destination denied for {}", dst_path.display()))?;
+
+            if file_type.is_dir() {
+                // Create destination dir then recurse.
+                fs::create_dir_all(&guarded_dst)
+                    .with_context(|| format!("creating dir {}", guarded_dst.display()))?;
+                self.copy_dir_recursive(&guarded_src, &guarded_dst)?;
+            } else if file_type.is_file() {
+                if let Some(parent) = guarded_dst.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating dir {}", parent.display()))?;
+                }
+                fs::copy(&guarded_src, &guarded_dst).with_context(|| {
+                    format!("copying {} to {}", guarded_src.display(), guarded_dst.display())
+                })?;
+            } else {
+                bail!("unsupported file type: {}", src_path.display());
+            }
+        }
+        Ok(())
+    }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn check_access(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
     let root_abs = fs::canonicalize(root)
         .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
