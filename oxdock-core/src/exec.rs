@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as ProcessCommand, ExitStatus};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 
-use crate::ast::{Step, StepKind, WorkspaceTarget};
+use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use crate::resolver::PathResolver;
 
 pub fn run_steps(fs_root: &Path, steps: &[Step]) -> Result<()> {
@@ -60,6 +60,34 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     let mut cwd = resolver.root().to_path_buf();
     let mut envs: HashMap<String, String> = HashMap::new();
     let mut bg_children: Vec<Child> = Vec::new();
+    let mut stdout = io::stdout();
+
+    execute_steps(
+        &mut resolver,
+        &cargo_target_dir,
+        &mut cwd,
+        &mut envs,
+        &mut bg_children,
+        steps,
+        false,
+        &mut stdout,
+    )?;
+
+    Ok(cwd)
+}
+
+fn execute_steps(
+    resolver: &mut PathResolver,
+    cargo_target_dir: &Path,
+    cwd: &mut PathBuf,
+    envs: &mut HashMap<String, String>,
+    bg_children: &mut Vec<Child>,
+    steps: &[Step],
+    capture_output: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let fs_root = resolver.root().to_path_buf();
+    let build_context = resolver.build_context().to_path_buf();
 
     let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
@@ -84,23 +112,23 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
     };
 
     for (idx, step) in steps.iter().enumerate() {
-        if !crate::ast::guards_allow_any(&step.guards, &envs) {
+        if !crate::ast::guards_allow_any(&step.guards, envs) {
             continue;
         }
         match &step.kind {
             StepKind::Workdir(path) => {
-                cwd = resolver
-                    .resolve_workdir(&cwd, path)
+                *cwd = resolver
+                    .resolve_workdir(cwd, path)
                     .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
             }
             StepKind::Workspace(target) => match target {
                 WorkspaceTarget::Snapshot => {
-                    resolver.set_root(fs_root);
-                    cwd = resolver.root().to_path_buf();
+                    resolver.set_root(&fs_root);
+                    *cwd = resolver.root().to_path_buf();
                 }
                 WorkspaceTarget::Local => {
-                    resolver.set_root(build_context);
-                    cwd = resolver.root().to_path_buf();
+                    resolver.set_root(&build_context);
+                    *cwd = resolver.root().to_path_buf();
                 }
             },
             StepKind::Env { key, value } => {
@@ -108,21 +136,36 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
             StepKind::Run(cmd) => {
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&cwd);
+                command.current_dir(&*cwd);
                 command.envs(envs.iter());
                 // Prevent contention with the outer Cargo build by isolating nested cargo targets.
                 command.env("CARGO_TARGET_DIR", &cargo_target_dir);
-                run_cmd(&mut command).with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+                if capture_output {
+                    command.stdout(Stdio::piped());
+                    let output = command
+                        .output()
+                        .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+                    if !output.status.success() {
+                        bail!("command {:?} failed with status {}", command, output.status);
+                    }
+                    out.write_all(&output.stdout)?;
+                } else {
+                    run_cmd(&mut command)
+                        .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+                }
             }
             StepKind::Echo(msg) => {
-                let out = interpolate(msg, &envs);
-                println!("{}", out);
+                let rendered = interpolate(msg, envs);
+                writeln!(out, "{}", rendered)?;
             }
             StepKind::RunBg(cmd) => {
+                if capture_output {
+                    bail!("RUN_BG is not supported inside CAPTURE");
+                }
                 let mut command = shell_cmd(cmd);
-                command.current_dir(&cwd);
+                command.current_dir(&*cwd);
                 command.envs(envs.iter());
-                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
+                command.env("CARGO_TARGET_DIR", cargo_target_dir);
                 let child = command
                     .spawn()
                     .with_context(|| format!("step {}: RUN_BG {}", idx + 1, cmd))?;
@@ -133,13 +176,13 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                     .resolve_copy_source(from)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 let to_abs = resolver
-                    .resolve_write(&cwd, to)
+                    .resolve_write(cwd, to)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
-                let to_abs = resolver.resolve_write(&cwd, to).with_context(|| {
+                let to_abs = resolver.resolve_write(cwd, to).with_context(|| {
                     format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                 })?;
                 resolver
@@ -150,7 +193,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
             StepKind::Symlink { from, to } => {
                 let to_abs = resolver
-                    .resolve_write(&cwd, to)
+                    .resolve_write(cwd, to)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if to_abs.exists() {
                     bail!("SYMLINK destination already exists: {}", to_abs.display());
@@ -175,7 +218,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
             StepKind::Mkdir(path) => {
                 let target = resolver
-                    .resolve_write(&cwd, path)
+                    .resolve_write(cwd, path)
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 fs::create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
@@ -183,7 +226,7 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             StepKind::Ls(path_opt) => {
                 let dir = if let Some(p) = path_opt.as_deref() {
                     resolver
-                        .resolve_read(&cwd, p)
+                        .resolve_read(cwd, p)
                         .with_context(|| format!("step {}: LS {}", idx + 1, p))?
                 } else {
                     cwd.clone()
@@ -192,25 +235,30 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                     .with_context(|| format!("failed to read dir {}", dir.display()))?
                     .collect::<Result<_, _>>()?;
                 entries.sort_by_key(|a| a.file_name());
-                println!("{}:", dir.display());
+                writeln!(out, "{}:", dir.display())?;
                 for entry in entries {
-                    println!("{}", entry.file_name().to_string_lossy());
+                    writeln!(out, "{}", entry.file_name().to_string_lossy())?;
                 }
+            }
+            StepKind::Cwd => {
+                // Print the canonical (physical) current working directory to stdout.
+                let real = canonical_cwd(cwd).with_context(|| {
+                    format!("step {}: CWD failed to canonicalize {}", idx + 1, cwd.display())
+                })?;
+                writeln!(out, "{}", real)?;
             }
             StepKind::Cat(path) => {
                 let target = resolver
-                    .resolve_read(&cwd, path)
+                    .resolve_read(cwd, path)
                     .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
                 let data = fs::read(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
-                let mut out = io::stdout();
                 out.write_all(&data)
                     .with_context(|| format!("failed to write {} to stdout", target.display()))?;
-                out.flush().ok();
             }
             StepKind::Write { path, contents } => {
                 let target = resolver
-                    .resolve_write(&cwd, path)
+                    .resolve_write(cwd, path)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
@@ -221,24 +269,33 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
             StepKind::Capture { path, cmd } => {
                 let target = resolver
-                    .resolve_write(&cwd, path)
+                    .resolve_write(cwd, path)
                     .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
-                // Run the command in the current working directory, capture stdout.
-                let mut command = shell_cmd(cmd);
-                command.current_dir(&cwd);
-                command.envs(envs.iter());
-                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
-                let out = command
-                    .output()
-                    .with_context(|| format!("step {}: CAPTURE failed to run {}", idx + 1, cmd))?;
-                if !out.status.success() {
-                    bail!("CAPTURE command failed with status {}", out.status);
+                let steps = ast::parse_script(cmd)
+                    .with_context(|| format!("step {}: CAPTURE parse failed", idx + 1))?;
+                if steps.len() != 1 {
+                    bail!("CAPTURE expects exactly one instruction");
                 }
-                fs::write(&target, &out.stdout)
+                let mut sub_resolver = PathResolver::new(resolver.root(), resolver.build_context());
+                let mut sub_cwd = cwd.clone();
+                let mut sub_envs = envs.clone();
+                let mut sub_bg: Vec<Child> = Vec::new();
+                let mut buf: Vec<u8> = Vec::new();
+                execute_steps(
+                    &mut sub_resolver,
+                    cargo_target_dir,
+                    &mut sub_cwd,
+                    &mut sub_envs,
+                    &mut sub_bg,
+                    &steps,
+                    true,
+                    &mut buf,
+                )?;
+                fs::write(&target, &buf)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Exit(code) => {
@@ -253,9 +310,9 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
             }
         }
 
-        if let Some(status) = check_bg(&mut bg_children)? {
+        if let Some(status) = check_bg(bg_children)? {
             if status.success() {
-                return Ok(cwd);
+                return Ok(());
             } else {
                 bail!("RUN_BG exited with status {}", status);
             }
@@ -273,13 +330,13 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
         }
         bg_children.clear();
         if status.success() {
-            return Ok(cwd);
+            return Ok(());
         } else {
             bail!("RUN_BG exited with status {}", status);
         }
     }
 
-    Ok(cwd)
+    Ok(())
 }
 
 fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
@@ -332,6 +389,10 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+fn canonical_cwd(cwd: &Path) -> Result<String> {
+    Ok(fs::canonicalize(cwd)?.display().to_string())
+}
+
 fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
     fn helper(path: &Path, depth: usize, max_depth: usize, left: &mut usize, out: &mut String) {
         if *left == 0 {
@@ -377,6 +438,7 @@ fn describe_dir(root: &Path, max_depth: usize, max_entries: usize) -> String {
     helper(root, 0, max_depth, &mut left, &mut out);
     out
 }
+
 
 pub fn shell_program() -> String {
     #[cfg(windows)]

@@ -15,6 +15,7 @@ pub enum Command {
     Symlink,
     Mkdir,
     Ls,
+    Cwd,
     Cat,
     Write,
     Exit,
@@ -33,6 +34,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Symlink,
     Command::Mkdir,
     Command::Ls,
+    Command::Cwd,
     Command::Cat,
     Command::Write,
     Command::Exit,
@@ -176,6 +178,7 @@ impl Command {
             Command::Symlink => "SYMLINK",
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
+            Command::Cwd => "CWD",
             Command::Cat => "CAT",
             Command::Write => "WRITE",
             Command::Exit => "EXIT",
@@ -233,6 +236,7 @@ pub enum StepKind {
     },
     Mkdir(String),
     Ls(Option<String>),
+    Cwd,
     Cat(String),
     Write {
         path: String,
@@ -501,6 +505,9 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
                 StepKind::Ls(path)
+            }
+            Command::Cwd => {
+                StepKind::Cwd
             }
             Command::Write => {
                 let mut p = remainder.splitn(2, ' ');

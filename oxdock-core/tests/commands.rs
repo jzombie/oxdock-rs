@@ -217,7 +217,11 @@ fn accepts_semicolon_separated_commands() {
 #[test]
 fn write_cmd_captures_output() {
     let root = tempdir().unwrap();
-    let cmd = if cfg!(windows) { "echo hello" } else { "printf %s \"hello\"" };
+    let cmd = if cfg!(windows) {
+        "RUN echo hello"
+    } else {
+        "RUN printf %s \"hello\""
+    };
     let steps = vec![
         Step {
             guards: Vec::new(),
@@ -229,6 +233,106 @@ fn write_cmd_captures_output() {
     ];
     run_steps(root.path(), &steps).unwrap();
     assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello");
+}
+
+#[test]
+fn capture_echo_interpolates_env() {
+    let root = tempdir().unwrap();
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Env {
+                key: "FOO".into(),
+                value: "hi".into(),
+            },
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "echo.txt".into(),
+                cmd: "ECHO value=${FOO}".into(),
+            },
+        },
+    ];
+
+    run_steps(root.path(), &steps).unwrap();
+    assert_eq!(read_trimmed(&root.path().join("echo.txt")), "value=hi");
+}
+
+#[test]
+fn capture_ls_lists_entries_with_header() {
+    let root = tempdir().unwrap();
+    let dir = root.path().join("items");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "a").unwrap();
+    fs::write(dir.join("b.txt"), "b").unwrap();
+
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("items".into()),
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "ls.txt".into(),
+                cmd: "LS".into(),
+            },
+        },
+    ];
+
+    run_steps(root.path(), &steps).unwrap();
+
+    let content = fs::read_to_string(root.path().join("items/ls.txt")).unwrap();
+    let mut lines: Vec<_> = content.lines().map(str::to_string).collect();
+    let expected_header = format!("{}:", fs::canonicalize(&dir).unwrap().display());
+    assert_eq!(lines.remove(0), expected_header);
+    assert_eq!(lines, vec!["a.txt", "b.txt"]);
+}
+
+#[test]
+fn capture_cat_emits_file_contents() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "hello note").unwrap();
+
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "out.txt".into(),
+                cmd: "CAT note.txt".into(),
+            },
+        },
+    ];
+
+    run_steps(root.path(), &steps).unwrap();
+    assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello note");
+}
+
+#[test]
+fn capture_cwd_canonicalizes_and_writes() {
+    let root = tempdir().unwrap();
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("a/b".into()),
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "pwd.txt".into(),
+                cmd: "CWD".into(),
+            },
+        },
+    ];
+
+    run_steps(root.path(), &steps).unwrap();
+
+    let expected = std::fs::canonicalize(root.path().join("a/b"))
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(read_trimmed(&root.path().join("a/b/pwd.txt")), expected);
 }
 
 #[test]
@@ -499,5 +603,22 @@ fn cat_reads_file_contents_without_error() {
     }];
 
     // This should succeed and emit contents to stdout; we only verify it does not error.
+    run_steps(root.path(), &steps).unwrap();
+}
+
+#[test]
+fn cwd_prints_to_stdout() {
+    let root = tempdir().unwrap();
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("a/b".into()),
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Cwd,
+        },
+    ];
+    // Should succeed and print the canonical cwd; we only assert it doesn't error.
     run_steps(root.path(), &steps).unwrap();
 }

@@ -37,6 +37,10 @@ impl PathResolver {
         &self.root
     }
 
+    pub fn build_context(&self) -> &Path {
+        &self.build_context
+    }
+
     pub fn set_root(&mut self, root: &Path) {
         self.root = root.to_path_buf();
     }
