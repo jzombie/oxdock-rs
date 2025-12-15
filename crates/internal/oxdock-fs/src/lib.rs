@@ -30,6 +30,8 @@ pub trait WorkspaceFs {
     fn copy_dir_from_external(&self, src: &Path, dst: &Path) -> Result<()>;
     fn copy_file_from_external(&self, src: &Path, dst: &Path) -> Result<u64>;
 
+    fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
+
     fn open_external_file(&self, path: &Path) -> Result<std::fs::File>;
     fn set_permissions_mode_unix(&self, path: &Path, mode: u32) -> Result<()>;
 
@@ -96,6 +98,10 @@ impl WorkspaceFs for PathResolver {
 
     fn copy_file_from_external(&self, src: &Path, dst: &Path) -> Result<u64> {
         PathResolver::copy_file_from_external(self, src, dst)
+    }
+
+    fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        PathResolver::symlink(self, src, dst)
     }
 
     fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {

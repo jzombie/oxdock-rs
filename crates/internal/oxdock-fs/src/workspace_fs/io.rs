@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -146,5 +146,103 @@ impl PathResolver {
         std::fs::remove_dir_all(&guarded)
             .with_context(|| format!("failed to remove dir {}", guarded.display()))?;
         Ok(())
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        let guarded_src = self
+            .check_access(src, AccessMode::Read)
+            .or_else(|_| self.check_access_with_root(&self.build_context, src, AccessMode::Read))
+            .with_context(|| format!("symlink source denied for {}", src.display()))?;
+        let guarded_dst = self
+            .check_access(dst, AccessMode::Write)
+            .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
+
+        if guarded_dst.exists() {
+            bail!("SYMLINK destination already exists: {}", guarded_dst.display());
+        }
+        if guarded_src == guarded_dst {
+            bail!(
+                "SYMLINK source resolves to the destination itself: {}",
+                guarded_src.display()
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&guarded_src, &guarded_dst).with_context(|| {
+                format!("failed to symlink {} -> {}", guarded_src.display(), guarded_dst.display())
+            })?;
+            return Ok(());
+        }
+
+        #[cfg(all(windows, not(unix)))]
+        {
+            use std::os::windows::fs::{symlink_dir, symlink_file};
+            let meta = fs::metadata(&guarded_src).with_context(|| {
+                format!("failed to stat symlink source {}", guarded_src.display())
+            })?;
+
+            let try_link = if meta.is_dir() {
+                symlink_dir(&guarded_src, &guarded_dst)
+            } else {
+                symlink_file(&guarded_src, &guarded_dst)
+            };
+
+            if let Err(e) = try_link {
+                eprintln!(
+                    "warning: failed to create symlink {} -> {}: {}; falling back to copy",
+                    guarded_dst.display(),
+                    guarded_src.display(),
+                    e
+                );
+
+                if meta.is_dir() {
+                    self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
+                        format!(
+                            "failed to copy dir {} -> {}",
+                            guarded_src.display(),
+                            guarded_dst.display()
+                        )
+                    })?;
+                } else {
+                    self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
+                        format!(
+                            "failed to copy file {} -> {}",
+                            guarded_src.display(),
+                            guarded_dst.display()
+                        )
+                    })?;
+                }
+            }
+
+            return Ok(());
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let meta = fs::metadata(&guarded_src).with_context(|| {
+                format!("failed to stat symlink source {}", guarded_src.display())
+            })?;
+            // No native symlinks; fall back to copying to preserve behavior.
+            if meta.is_dir() {
+                self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
+                    format!(
+                        "failed to copy dir {} -> {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
+                })?;
+            } else {
+                self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
+                    format!(
+                        "failed to copy file {} -> {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
+                })?;
+            }
+            return Ok(());
+        }
     }
 }
