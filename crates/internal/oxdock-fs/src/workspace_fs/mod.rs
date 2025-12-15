@@ -2,9 +2,12 @@
 // Methods are split across submodules by concern (access checks, IO, copy, git, resolve helpers).
 
 use anyhow::{Context, Result};
+
+#[allow(clippy::disallowed_types)]
 use std::path::Path;
 
-use crate::GuardedPath;
+pub mod path;
+pub use path::{GuardedPath, UnguardedPath};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AccessMode {
@@ -33,6 +36,7 @@ impl PathResolver {
     /// Build a resolver rooted at `CARGO_MANIFEST_DIR`, using that same
     /// directory as the build context. This centralizes env lookup and path
     /// creation so callers avoid ad-hoc path construction.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn from_manifest_env() -> Result<Self> {
         let manifest_dir =
             std::env::var("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR missing")?;
@@ -40,6 +44,7 @@ impl PathResolver {
         Self::new(path, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     pub fn new(root: &Path, build_context: &Path) -> Result<Self> {
         Ok(Self {
             root: GuardedPath::new_root(root)?,
@@ -65,5 +70,6 @@ mod copy;
 mod git;
 mod io;
 mod resolve;
+use access::guard_path;
 
 // PathResolver is exported at crate root via `lib.rs` re-export.
