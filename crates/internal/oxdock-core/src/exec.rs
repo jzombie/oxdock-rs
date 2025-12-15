@@ -1,3 +1,5 @@
+// TODO: Provide ability to pre-check scripts before execution
+
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::{self, Write};
