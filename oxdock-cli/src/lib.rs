@@ -329,6 +329,7 @@ fn run_cmd(cmd: &mut Command) -> Result<()> {
 }
 
 // TODO: Don't hardcode internal config
+// TODO: FS calls should use internal filesystem crate
 fn open_editor_and_read() -> Result<String> {
     // Create a named temp file for editing.
     let tmp = tempfile::NamedTempFile::new().context("create temp file for editor")?;
