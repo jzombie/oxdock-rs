@@ -49,8 +49,8 @@ pub fn run_steps_with_context_result(
             } else {
                 String::new()
             };
-            let resolver = PathResolver::new(fs_root, build_context);
-            let tree = describe_dir(&resolver, fs_root, 2, 24);
+            let fs = PathResolver::new(fs_root, build_context);
+            let tree = describe_dir(&fs, fs_root, 2, 24);
             let snapshot = format!(
                 "filesystem snapshot (root {}):\n{}",
                 fs_root.display(),
@@ -422,38 +422,36 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     Ok(())
 }
 
-fn copy_entry(resolver: &dyn WorkspaceFs, src: &Path, dst: &Path) -> Result<()> {
+fn copy_entry(fs: &dyn WorkspaceFs, src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         bail!("source missing: {}", src.display());
     }
-    let meta = resolver.metadata_abs(src)?;
+    let meta = fs.metadata_abs(src)?;
     if meta.is_dir() {
-        resolver.copy_dir_recursive(src, dst)?;
+        fs.copy_dir_recursive(src, dst)?;
     } else if meta.is_file() {
         if let Some(parent) = dst.parent() {
-            resolver.create_dir_all_abs(parent)?;
+            fs.create_dir_all_abs(parent)?;
         }
-        resolver.copy_file(src, dst)?;
+        fs.copy_file(src, dst)?;
     } else {
         bail!("unsupported file type: {}", src.display());
     }
     Ok(())
 }
 
-// helper removed: resolver handles recursive copying now
-
-fn canonical_cwd(resolver: &dyn WorkspaceFs, cwd: &Path) -> Result<String> {
-    Ok(resolver.canonicalize_abs(cwd)?.display().to_string())
+fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &Path) -> Result<String> {
+    Ok(fs.canonicalize_abs(cwd)?.display().to_string())
 }
 
 fn describe_dir(
-    resolver: &dyn WorkspaceFs,
+    fs: &dyn WorkspaceFs,
     root: &Path,
     max_depth: usize,
     max_entries: usize,
 ) -> String {
     fn helper(
-        resolver: &dyn WorkspaceFs,
+        fs: &dyn WorkspaceFs,
         path: &Path,
         depth: usize,
         max_depth: usize,
@@ -474,7 +472,7 @@ fn describe_dir(
         if depth >= max_depth {
             return;
         }
-        let entries = match resolver.read_dir_entries(path) {
+        let entries = match fs.read_dir_entries(path) {
             Ok(e) => e,
             Err(_) => return,
         };
@@ -487,7 +485,7 @@ fn describe_dir(
             *left -= 1;
             let p = entry.path();
             if p.is_dir() {
-                helper(resolver, &p, depth + 1, max_depth, left, out);
+                helper(fs, &p, depth + 1, max_depth, left, out);
             } else {
                 out.push_str(&format!(
                     "{}  {}\n",
@@ -500,7 +498,7 @@ fn describe_dir(
 
     let mut out = String::new();
     let mut left = max_entries;
-    helper(resolver, root, 0, max_depth, &mut left, &mut out);
+    helper(fs, root, 0, max_depth, &mut left, &mut out);
     out
 }
 
