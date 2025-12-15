@@ -138,6 +138,16 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 copy_entry(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
+            StepKind::CopyGit { rev, from, to } => {
+                let to_abs = resolver.resolve_write(&cwd, to).with_context(|| {
+                    format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
+                })?;
+                resolver
+                    .copy_from_git(rev, from, &to_abs)
+                    .with_context(|| {
+                        format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
+                    })?;
+            }
             StepKind::Symlink { from, to } => {
                 let to_abs = resolver
                     .resolve_write(&cwd, to)

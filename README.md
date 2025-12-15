@@ -43,3 +43,35 @@ Every internal command is engineered to run the same way across platforms, excep
 - **Symlinks and Windows:** Creating symlinks on Windows may require elevated permissions on some older OS versions; where symlinks are not available the CLI falls back to copying directory contents so scripts remain functional across platforms.
 
 - **Globbing & shell expansion:** OxDock does not implicitly perform shell globbing or shell-side expansion for file arguments — when you need shell semantics use `RUN` with the platform shell, or add explicit DSL commands that accept wildcards if you want portable behavior.
+
+## COPY_GIT: copy from another Git revision
+
+OxDock supports copying files or directories out of a Git repository at a specific revision via the `COPY_GIT` instruction.
+
+- Syntax: `COPY_GIT <rev> <src_path> <dst_path>`
+  - `<rev>` is any git revision spec (branch, tag, or commit-ish) that `git` understands.
+  - `<src_path>` is a path inside the repository (relative to the build context / local workspace).
+  - `<dst_path>` is a path inside the current OxDock workspace where the content will be placed.
+
+- Semantics:
+  - If `<src_path>` is a file in the given revision, OxDock uses `git show <rev>:<src_path>` and writes the blob to `<dst_path>`.
+  - If `<src_path>` is a tree (directory), OxDock uses `git archive --format=tar <rev> <src_path>` and extracts the tree, then copies the extracted files into `<dst_path>`.
+  - All reads are performed via git plumbing — OxDock does not check out the revision into the working directory.
+
+- Safety and containment:
+  - `COPY_GIT` reads from the configured build context (the local repository path passed to the runner) and is only allowed to read within that build context. Attempts to reference absolute paths for `<src_path>` are rejected.
+  - The destination `<dst_path>` is validated against OxDock's workspace containment rules: writes outside the allowed workspace root are rejected.
+
+- Requirements and caveats:
+  - The implementation uses the `git` CLI and `tar` for archive extraction; these must be available on the host running OxDock (CI runners typically have them). If you need a zero-dependency fallback, we can implement a pure-git fallback using `git ls-tree` + `git show`.
+  - Symlinks stored in the git tree will be created by `tar` when extracting; on Windows this may require appropriate permissions.
+  - Errors from `git` (missing ref, missing path at ref) are surfaced to the script runner.
+
+- Example:
+```
+# copy a single file from the `release` branch
+COPY_GIT release path/to/config.toml app/config/config.toml
+
+# copy a directory from a specific commit
+COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
+```

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Clone, Copy, Debug)]
 enum AccessMode {
@@ -107,6 +108,193 @@ impl PathResolver {
         };
 
         check_access(&self.root, &candidate, mode)
+    }
+
+    /// Copy from a git revision/path into the provided destination path.
+    /// This method extracts blobs/trees using `git` plumbing (`git show`)
+    /// and copies the material into `to`. `to` should be an absolute path already
+    /// validated by the caller.
+    pub fn copy_from_git(&self, rev: &str, from: &str, to: &Path) -> Result<()> {
+        if Path::new(from).is_absolute() {
+            bail!("COPY_GIT source must be relative to build context");
+        }
+
+        // Ensure destination is within allowed root (don't trust caller)
+        let _ = check_access(&self.root, to, AccessMode::Write)
+            .with_context(|| format!("destination {} escapes allowed root", to.display()))?;
+
+        // Ensure build_context is allowed under root
+        let _ =
+            check_access(&self.root, &self.build_context, AccessMode::Read).with_context(|| {
+                format!(
+                    "build context {} not under root",
+                    self.build_context.display()
+                )
+            })?;
+
+        // First check the object type at `rev:from` to avoid treating trees as blobs.
+        let cat_type = Command::new("git")
+            .arg("-C")
+            .arg(&self.build_context)
+            .arg("cat-file")
+            .arg("-t")
+            .arg(format!("{}:{}", rev, from))
+            .output();
+
+        if let Ok(tout) = cat_type
+            && tout.status.success()
+        {
+            let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
+            if typ == "blob" {
+                // It's a file/blob; use git show to extract contents and write file
+                let show = Command::new("git")
+                    .arg("-C")
+                    .arg(&self.build_context)
+                    .arg("show")
+                    .arg(format!("{}:{}", rev, from))
+                    .output()
+                    .with_context(|| format!("failed to run git show for {}:{}", rev, from))?;
+
+                if show.status.success() {
+                    if let Some(parent) = to.parent() {
+                        fs::create_dir_all(parent)
+                            .with_context(|| format!("creating parent {}", parent.display()))?;
+                    }
+                    fs::write(to, &show.stdout)
+                        .with_context(|| format!("writing git blob to {}", to.display()))?;
+                    return Ok(());
+                }
+            }
+            // if typ is tree/commit/other, fallthrough to tree listing
+        }
+
+        // Fallback: When the requested `rev:from` is not a blob (for example,
+        // when it's a tree/directory) we can't extract it with a single
+        // `git show` write. In that case we enumerate the tree entries with
+        // `git ls-tree -r -z <rev> -- <from>` and stream each blob individually
+        // using `git show <rev>:<path>`.
+        //
+        // Triggers:
+        // - `git cat-file -t <rev>:<from>` returns `tree` (directory) or other
+        //   non-`blob` types.
+        //
+        // Behavior & format:
+        // - `git ls-tree -r -z` returns NUL-separated entries of the form
+        //   "<mode> <type> <hash>\t<path>\0". We split on NUL and parse the
+        //   header to obtain the mode and type for each entry.
+        // - For entries with type `blob` we call `git show` to retrieve the
+        //   raw contents and write them to the destination path (creating
+        //   parent directories as needed).
+        // - For entries with mode `120000` (git's symlink blob) we create a
+        //   platform-appropriate symlink on Unix and a placeholder file on
+        //   Windows.
+        // - `commit` entries (submodules) are rejected.
+        //
+        // Rationale: this approach avoids requiring external tools like
+        // `tar`/`unpack` on the host — the implementation relies only on
+        // standard `git` plumbing commands and filesystem operations.
+        let ls = Command::new("git")
+            .arg("-C")
+            .arg(&self.build_context)
+            .arg("ls-tree")
+            .arg("-r")
+            .arg("-z")
+            .arg(rev)
+            .arg("--")
+            .arg(from)
+            .output()
+            .with_context(|| format!("failed to run git ls-tree for {}:{}", rev, from))?;
+
+        if !ls.status.success() {
+            bail!("git ls-tree failed for {}:{}", rev, from);
+        }
+
+        let out = ls.stdout;
+        if out.is_empty() {
+            bail!("path {} not found in rev {}", from, rev);
+        }
+
+        // Each entry is NUL-separated and has the form: "<mode> <type> <hash>\t<path>\0"
+        for chunk in out.split(|b| *b == 0) {
+            if chunk.is_empty() {
+                continue;
+            }
+            if let Some(tab_pos) = chunk.iter().position(|b| *b == b'\t') {
+                let header = &chunk[..tab_pos];
+                let path = &chunk[tab_pos + 1..];
+                let header_str = String::from_utf8_lossy(header);
+                let mut parts = header_str.split_whitespace();
+                let mode = parts.next().unwrap_or("");
+                let typ = parts.next().unwrap_or("");
+                let _hash = parts.next().unwrap_or("");
+
+                let path_str = String::from_utf8_lossy(path).into_owned();
+                let rel = if path_str.starts_with(&format!("{}/", from)) {
+                    path_str[from.len() + 1..].to_string()
+                } else if path_str == from {
+                    String::new()
+                } else {
+                    path_str.clone()
+                };
+
+                let dest = if rel.is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(&rel)
+                };
+
+                // Ensure parent directory exists
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating parent {}", parent.display()))?;
+                }
+
+                match typ {
+                    "blob" => {
+                        let blob = Command::new("git")
+                            .arg("-C")
+                            .arg(&self.build_context)
+                            .arg("show")
+                            .arg(format!("{}:{}", rev, path_str))
+                            .output()
+                            .with_context(|| {
+                                format!("failed to run git show for {}:{}", rev, path_str)
+                            })?;
+                        if !blob.status.success() {
+                            bail!("git show failed for {}:{}", rev, path_str);
+                        }
+
+                        if mode == "120000" {
+                            let target = String::from_utf8_lossy(&blob.stdout).into_owned();
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::symlink;
+                                symlink(target.trim_end_matches('\n'), &dest).with_context(
+                                    || format!("creating symlink {} -> {}", dest.display(), target),
+                                )?;
+                            }
+                            #[cfg(windows)]
+                            {
+                                fs::write(&dest, &blob.stdout).with_context(|| {
+                                    format!("writing symlink placeholder {}", dest.display())
+                                })?;
+                            }
+                        } else {
+                            fs::write(&dest, &blob.stdout)
+                                .with_context(|| format!("writing blob to {}", dest.display()))?;
+                        }
+                    }
+                    "commit" => {
+                        bail!("submodule entries are not supported: {}", path_str);
+                    }
+                    _ => {
+                        // ignore other types
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

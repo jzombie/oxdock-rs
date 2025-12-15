@@ -9,6 +9,14 @@ members = [
 default-members = ["oxdock-cli", "oxdock-core", "oxdock-buildtime-macros"]
 resolver = "2"
 
+[workspace.package]
+authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
+version = "0.1.0-alpha"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/jzombie/oxdock-rs"
+publish = true
+
 [workspace.dependencies]
 anyhow = "1.0.100"
 indoc = "2.0.7"
