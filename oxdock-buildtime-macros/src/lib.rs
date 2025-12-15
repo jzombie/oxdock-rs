@@ -309,8 +309,12 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     }
     let has_git = find_git_root(&manifest_root);
     // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
-    // require the caller to supply an out_dir instead of trying to rebuild.
-    let should_build = has_git;
+    // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
+    // rebuild even if an out_dir already exists via OXDOCK_EMBED_FORCE_REBUILD.
+    let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let should_build = has_git || force_rebuild;
 
     let name = &input.name;
 
@@ -319,7 +323,11 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
 
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
-        eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
+        if force_rebuild {
+            eprintln!("embed: force rebuilding assets into {}", out_dir_abs.display());
+        } else {
+            eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
+        }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
         let folder_lit = syn::LitStr::new(
             out_dir_abs
