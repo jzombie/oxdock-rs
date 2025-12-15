@@ -2,12 +2,18 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::Command;
 
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
+use oxdock_process::CommandBuilder;
 
 impl PathResolver {
+    fn git_command(&self) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new("git");
+        cmd.arg("-C").arg(self.build_context.as_path());
+        cmd
+    }
+
     /// Detect whether a .git directory exists at or above the resolver root.
     pub fn has_git_dir(&self) -> Result<bool> {
         let mut cur = Some(self.root.clone());
@@ -40,28 +46,26 @@ impl PathResolver {
                 )
             })?;
 
-        let cat_type = Command::new("git")
-            .arg("-C")
-            .arg(self.build_context.as_path())
-            .arg("cat-file")
-            .arg("-t")
-            .arg(format!("{}:{}", rev, from))
-            .output();
+        let cat_type = {
+            let mut cmd = self.git_command();
+            cmd.arg("cat-file")
+                .arg("-t")
+                .arg(format!("{}:{}", rev, from));
+            cmd.output()
+        };
 
         if let Ok(tout) = cat_type
-            && tout.status.success()
+            && tout.success()
         {
             let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
             if typ == "blob" {
-                let show = Command::new("git")
-                    .arg("-C")
-                    .arg(self.build_context.as_path())
-                    .arg("show")
-                    .arg(format!("{}:{}", rev, from))
+                let mut show_cmd = self.git_command();
+                show_cmd.arg("show").arg(format!("{}:{}", rev, from));
+                let show = show_cmd
                     .output()
                     .with_context(|| format!("failed to run git show for {}:{}", rev, from))?;
 
-                if show.status.success() {
+                if show.success() {
                     if let Some(parent) = to.as_path().parent() {
                         let parent_guard = GuardedPath::new(to.root(), parent)?;
                         self.create_dir_all_abs(&parent_guard)
@@ -74,19 +78,19 @@ impl PathResolver {
             }
         }
 
-        let ls = Command::new("git")
-            .arg("-C")
-            .arg(self.build_context.as_path())
+        let mut ls_cmd = self.git_command();
+        ls_cmd
             .arg("ls-tree")
             .arg("-r")
             .arg("-z")
             .arg(rev)
             .arg("--")
-            .arg(from)
+            .arg(from);
+        let ls = ls_cmd
             .output()
             .with_context(|| format!("failed to run git ls-tree for {}:{}", rev, from))?;
 
-        if !ls.status.success() {
+        if !ls.success() {
             bail!("git ls-tree failed for {}:{}", rev, from);
         }
 
@@ -131,16 +135,12 @@ impl PathResolver {
 
                 match typ {
                     "blob" => {
-                        let blob = Command::new("git")
-                            .arg("-C")
-                            .arg(self.build_context.as_path())
-                            .arg("show")
-                            .arg(format!("{}:{}", rev, path_str))
-                            .output()
-                            .with_context(|| {
-                                format!("failed to run git show for {}:{}", rev, path_str)
-                            })?;
-                        if !blob.status.success() {
+                        let mut blob_cmd = self.git_command();
+                        blob_cmd.arg("show").arg(format!("{}:{}", rev, path_str));
+                        let blob = blob_cmd.output().with_context(|| {
+                            format!("failed to run git show for {}:{}", rev, path_str)
+                        })?;
+                        if !blob.success() {
                             bail!("git show failed for {}:{}", rev, path_str);
                         }
 

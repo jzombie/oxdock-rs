@@ -9,4 +9,5 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+oxdock-process.workspace = true
 tempfile.workspace = true

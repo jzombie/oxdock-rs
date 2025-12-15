@@ -20,3 +20,4 @@ syn.workspace = true
 
 [dev-dependencies]
 serial_test.workspace = true
+oxdock-process.workspace = true

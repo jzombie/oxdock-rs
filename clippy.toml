@@ -1,3 +1,4 @@
+# TODO: Update this description to cover "types" and "processes"
 # Disallowed methods to ensure filesystem access in `oxdock-core` goes through PathResolver.
 # Clippy will emit the `disallowed_methods` lint for any exact matches.
 # Note: this configuration works with Clippy (cargo clippy). It will not by itself
@@ -24,6 +25,13 @@ disallowed-methods = [
   "std::path::Path::new",
   "tempfile::tempdir",
   "tempfile::Builder::tempdir",
+  "std::process::Command::new",
+  "std::process::Command::spawn",
+  "std::process::Command::status",
+  "std::process::Command::output",
+  "std::process::Command::arg",
+  "std::process::Command::args",
+  "std::process::Command::current_dir",
 ]
 
 # Keep std::path usage funneled through the filesystem abstraction.
@@ -32,5 +40,9 @@ disallowed-types = [
   "std::path::PathBuf",
   "std::fs::OpenOptions",
   "oxdock_fs::UnguardedPath",
-  "tempfile::Builder"
+  "tempfile::Builder",
+  "std::process::Command",
+  "std::process::Child",
+  "std::process::Stdio",
+  "std::process::Output"
 ]

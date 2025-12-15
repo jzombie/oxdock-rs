@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_process::CommandBuilder;
 use std::env;
 use std::io::{self, IsTerminal, Read};
-use std::process::Command;
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
@@ -189,10 +189,9 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
         .copy_file_from_external(&source, &dest)
         .with_context(|| format!("failed to copy shell runner to {}", dest.display()))?;
 
-    let mut cmd = Command::new(dest.as_path());
+    let mut cmd = CommandBuilder::new(dest.as_path());
     cmd.args(std::env::args_os().skip(1));
     cmd.env("OXDOCK_SHELL_REEXEC", "1");
-
     cmd.spawn()
         .with_context(|| format!("failed to spawn shell from {}", dest.display()))?;
 
@@ -212,11 +211,11 @@ fn discover_workspace_root() -> Result<String> {
     }
 
     // Prefer the git repository root of the current working directory.
-    if let Ok(output) = Command::new("git")
+    if let Ok(output) = CommandBuilder::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
         .output()
-        && output.status.success()
+        && output.success()
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !path.is_empty() {
@@ -261,7 +260,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 
     #[cfg(unix)]
     {
-        let mut cmd = Command::new(shell_program());
+        let mut cmd = CommandBuilder::new(shell_program());
         cmd.current_dir(cwd.as_path());
 
         // Print a single banner inside the subshell, then exec the user's shell to stay interactive.
@@ -275,7 +274,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         if let Ok(resolver) = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
             && let Ok(tty) = resolver.open_external_file(&tty_path)
         {
-            cmd.stdin(tty);
+            cmd.stdin_file(tty);
         }
 
         let status = cmd.status()?;
@@ -290,7 +289,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         // Launch via `start` so Windows opens a real interactive console window rooted at the temp
         // workspace. Using `start` avoids stdin/handle inheritance issues that can make the child
         // non-interactive when CREATE_NEW_CONSOLE is set.
-        let mut cmd = Command::new("cmd");
+        let mut cmd = CommandBuilder::new("cmd");
         cmd.arg("/C")
             .arg("start")
             .arg("oxdock shell")
@@ -313,12 +312,10 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         bail!("interactive shell unsupported on this platform");
     }
 }
-fn run_cmd(cmd: &mut Command) -> Result<()> {
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run {:?}", cmd))?;
+fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
+    let status = cmd.status()?;
     if !status.success() {
-        bail!("command {:?} failed with status {}", cmd, status);
+        bail!("command returned status {}", status);
     }
     Ok(())
 }
@@ -328,19 +325,23 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
         .join("src.tar")
         .context("failed to create archive path under temp root")?;
     let archive_str = archive_guard.display().to_string();
-    run_cmd(
-        Command::new("git")
-            .current_dir(workspace_root.as_path())
-            .args(["archive", "--format=tar", "--output", &archive_str, "HEAD"]),
-    )?;
+    let mut archive_cmd = CommandBuilder::new("git");
+    archive_cmd.current_dir(workspace_root.as_path()).args([
+        "archive",
+        "--format=tar",
+        "--output",
+        &archive_str,
+        "HEAD",
+    ]);
+    run_cmd(archive_cmd)?;
 
-    run_cmd(
-        Command::new("tar")
-            .arg("-xf")
-            .arg(&archive_str)
-            .arg("-C")
-            .arg(temp_root.as_path()),
-    )?;
+    let mut tar_cmd = CommandBuilder::new("tar");
+    tar_cmd
+        .arg("-xf")
+        .arg(&archive_str)
+        .arg("-C")
+        .arg(temp_root.as_path());
+    run_cmd(tar_cmd)?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
     // Remove intermediate archive via a resolver rooted at the temp root.

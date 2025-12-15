@@ -4,6 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
 
+// TODO: Update example and don't ignore
 /// Macro that runs the DSL at compile-time, materializes assets into a temp
 /// dir, and emits a rust-embed struct pointing at that dir.
 ///

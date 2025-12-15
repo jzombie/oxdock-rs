@@ -1,5 +1,6 @@
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
+use oxdock_process::CommandBuilder;
 
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
@@ -26,6 +27,12 @@ fn create_dirs(path: &GuardedPath) {
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.as_path().join(rel).exists()
+}
+
+fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("git");
+    cmd.arg("-C").arg(repo.as_path());
+    cmd
 }
 
 #[cfg_attr(
@@ -426,24 +433,18 @@ fn copy_git_via_script_simple() {
     write_text(&assets.join("b.txt").unwrap(), "b");
 
     // init and commit
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("add")
         .arg(".")
         .status()
         .expect("git add failed");
     // Commit using `-c` so we don't write any repo config
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -454,9 +455,7 @@ fn copy_git_via_script_simple() {
         .status()
         .expect("git commit failed");
 
-    let rev_out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    let rev_out = git_cmd(&repo)
         .arg("rev-parse")
         .arg("HEAD")
         .output()
@@ -493,23 +492,17 @@ fn copy_git_directory_via_script() {
     write_text(&assets_dir.join("y.txt").unwrap(), "y");
 
     // init, add, commit (use -c to avoid writing config)
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("add")
         .arg(".")
         .status()
         .expect("git add failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -520,9 +513,7 @@ fn copy_git_directory_via_script() {
         .status()
         .expect("git commit failed");
 
-    let rev_out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    let rev_out = git_cmd(&repo)
         .arg("rev-parse")
         .arg("HEAD")
         .output()

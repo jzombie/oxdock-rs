@@ -1,7 +1,11 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
-use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
+use std::{ffi::OsStr, iter::IntoIterator};
 
 /// Context passed to process managers describing the current execution
 /// environment.
@@ -152,4 +156,95 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
         bail!("command {:?} failed with status {}", cmd, status);
     }
     Ok(())
+}
+
+/// Builder wrapper that centralizes direct usages of `std::process::Command`.
+pub struct CommandBuilder {
+    inner: ProcessCommand,
+}
+
+impl CommandBuilder {
+    pub fn new(program: impl AsRef<OsStr>) -> Self {
+        Self {
+            inner: ProcessCommand::new(program),
+        }
+    }
+
+    pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg(arg);
+        self
+    }
+
+    pub fn args<S, I>(&mut self, args: I) -> &mut Self
+    where
+        S: AsRef<OsStr>,
+        I: IntoIterator<Item = S>,
+    {
+        self.inner.args(args);
+        self
+    }
+
+    pub fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env(key, value);
+        self
+    }
+
+    pub fn stdin_file(&mut self, file: File) -> &mut Self {
+        self.inner.stdin(Stdio::from(file));
+        self
+    }
+
+    pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.inner.current_dir(dir);
+        self
+    }
+
+    pub fn status(&mut self) -> Result<ExitStatus> {
+        let desc = format!("{:?}", self.inner);
+        let status = self
+            .inner
+            .status()
+            .with_context(|| format!("failed to run {desc}"))?;
+        Ok(status)
+    }
+
+    pub fn output(&mut self) -> Result<CommandOutput> {
+        let desc = format!("{:?}", self.inner);
+        let out = self
+            .inner
+            .output()
+            .with_context(|| format!("failed to run {desc}"))?;
+        Ok(CommandOutput::from(out))
+    }
+
+    pub fn spawn(&mut self) -> Result<ChildHandle> {
+        let desc = format!("{:?}", self.inner);
+        let child = self
+            .inner
+            .spawn()
+            .with_context(|| format!("failed to spawn {desc}"))?;
+        Ok(ChildHandle { child })
+    }
+}
+
+pub struct CommandOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl CommandOutput {
+    pub fn success(&self) -> bool {
+        self.status.success()
+    }
+}
+
+impl From<StdOutput> for CommandOutput {
+    fn from(value: StdOutput) -> Self {
+        Self {
+            status: value.status,
+            stdout: value.stdout,
+            stderr: value.stderr,
+        }
+    }
 }
