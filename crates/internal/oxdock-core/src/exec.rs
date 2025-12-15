@@ -194,6 +194,8 @@ fn execute_steps(
                         format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                     })?;
             }
+
+            // TODO: Move all file operations into WorkspaceFs trait methods.
             StepKind::Symlink { from, to } => {
                 let to_abs = state
                     .fs
@@ -216,8 +218,58 @@ fn execute_steps(
                 std::os::unix::fs::symlink(&from_abs, &to_abs)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 #[cfg(all(windows, not(unix)))]
-                std::os::windows::fs::symlink_dir(&from_abs, &to_abs)
-                    .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
+                {
+                    use std::os::windows::fs::{symlink_dir, symlink_file};
+                    // Try to create a file symlink for files and dir symlink for dirs.
+                    let try_link = if from_abs.is_dir() {
+                        symlink_dir(&from_abs, &to_abs)
+                    } else {
+                        symlink_file(&from_abs, &to_abs)
+                    };
+                    if let Err(e) = try_link {
+                        // Creating symlinks on Windows may fail due to missing privileges
+                        // (Developer Mode or elevated permissions). Fall back to copying
+                        // the content to preserve behavior, but warn the user.
+                        eprintln!(
+                            "warning: failed to create symlink {} -> {}: {}; falling back to copy",
+                            to_abs.display(), from_abs.display(), e
+                        );
+                        if from_abs.is_dir() {
+                            // Copy directory recursively via resolver helper
+                            // (use a local copy implementation through resolver).
+                            // We already have access to `state.resolver` previously,
+                            // but here call the global helper `copy_entry` isn't suitable
+                            // for directories so use the resolver via a temporary
+                            // PathResolver created from fs_root/build_context is not
+                            // available here. Instead, perform a filesystem copy.
+                            // Use a simple recursive copy: create target dir and copy entries.
+                            fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+                                std::fs::create_dir_all(dst).with_context(|| format!("creating dir {}", dst.display()))?;
+                                for entry in std::fs::read_dir(src).with_context(|| format!("reading dir {}", src.display()))? {
+                                    let entry = entry?;
+                                    let file_type = entry.file_type()?;
+                                    let src_path = entry.path();
+                                    let dst_path = dst.join(entry.file_name());
+                                    if file_type.is_dir() {
+                                        copy_dir_recursive(&src_path, &dst_path)?;
+                                    } else if file_type.is_file() {
+                                        if let Some(parent) = dst_path.parent() {
+                                            std::fs::create_dir_all(parent)?;
+                                        }
+                                        std::fs::copy(&src_path, &dst_path)?;
+                                    }
+                                }
+                                Ok(())
+                            }
+                            copy_dir_recursive(&from_abs, &to_abs).with_context(|| format!("failed to copy dir {} -> {}", from_abs.display(), to_abs.display()))?;
+                        } else {
+                            if let Some(parent) = to_abs.parent() {
+                                std::fs::create_dir_all(parent).with_context(|| format!("creating parent {}", parent.display()))?;
+                            }
+                            std::fs::copy(&from_abs, &to_abs).with_context(|| format!("failed to copy file {} -> {}", from_abs.display(), to_abs.display()))?;
+                        }
+                    }
+                }
                 #[cfg(not(any(unix, windows)))]
                 copy_dir(&from_abs, &to_abs)?;
             }
