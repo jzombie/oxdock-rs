@@ -8,7 +8,7 @@ use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{PathResolver, WorkspaceFs};
 
 struct ExecState {
-    resolver: Box<dyn WorkspaceFs>,
+    fs: Box<dyn WorkspaceFs>,
     cargo_target_dir: PathBuf,
     cwd: PathBuf,
     envs: HashMap<String, String>,
@@ -64,7 +64,7 @@ pub fn run_steps_with_context_result(
 
 fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Result<PathBuf> {
     let mut state = ExecState {
-        resolver: Box::new(PathResolver::new(fs_root, build_context)),
+        fs: Box::new(PathResolver::new(fs_root, build_context)),
         cargo_target_dir: fs_root.join(".cargo-target"),
         cwd: PathResolver::new(fs_root, build_context)
             .root()
@@ -85,8 +85,8 @@ fn execute_steps(
     capture_output: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let fs_root = state.resolver.root().to_path_buf();
-    let build_context = state.resolver.build_context().to_path_buf();
+    let fs_root = state.fs.root().to_path_buf();
+    let build_context = state.fs.build_context().to_path_buf();
 
     let check_bg = |bg: &mut Vec<Child>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
@@ -117,18 +117,18 @@ fn execute_steps(
         match &step.kind {
             StepKind::Workdir(path) => {
                 state.cwd = state
-                    .resolver
+                    .fs
                     .resolve_workdir(&state.cwd, path)
                     .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
             }
             StepKind::Workspace(target) => match target {
                 WorkspaceTarget::Snapshot => {
-                    state.resolver.set_root(&fs_root);
-                    state.cwd = state.resolver.root().to_path_buf();
+                    state.fs.set_root(&fs_root);
+                    state.cwd = state.fs.root().to_path_buf();
                 }
                 WorkspaceTarget::Local => {
-                    state.resolver.set_root(&build_context);
-                    state.cwd = state.resolver.root().to_path_buf();
+                    state.fs.set_root(&build_context);
+                    state.cwd = state.fs.root().to_path_buf();
                 }
             },
             StepKind::Env { key, value } => {
@@ -173,25 +173,25 @@ fn execute_steps(
             }
             StepKind::Copy { from, to } => {
                 let from_abs = state
-                    .resolver
+                    .fs
                     .resolve_copy_source(from)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                 let to_abs = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                copy_entry(state.resolver.as_ref(), &from_abs, &to_abs)
+                copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
                     .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
             }
             StepKind::CopyGit { rev, from, to } => {
                 let to_abs = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, to)
                     .with_context(|| {
                         format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                     })?;
                 state
-                    .resolver
+                    .fs
                     .copy_from_git(rev, from, &to_abs)
                     .with_context(|| {
                         format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
@@ -199,14 +199,14 @@ fn execute_steps(
             }
             StepKind::Symlink { from, to } => {
                 let to_abs = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, to)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if to_abs.exists() {
                     bail!("SYMLINK destination already exists: {}", to_abs.display());
                 }
                 let from_abs = state
-                    .resolver
+                    .fs
                     .resolve_copy_source(from)
                     .with_context(|| format!("step {}: SYMLINK {} {}", idx + 1, from, to))?;
                 if from_abs == to_abs {
@@ -226,25 +226,25 @@ fn execute_steps(
             }
             StepKind::Mkdir(path) => {
                 let target = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 state
-                    .resolver
+                    .fs
                     .create_dir_all_abs(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
                 let dir = if let Some(p) = path_opt.as_deref() {
                     state
-                        .resolver
+                        .fs
                         .resolve_read(&state.cwd, p)
                         .with_context(|| format!("step {}: LS {}", idx + 1, p))?
                 } else {
                     state.cwd.clone()
                 };
                 let mut entries = state
-                    .resolver
+                    .fs
                     .read_dir_entries(&dir)
                     .with_context(|| format!("failed to read dir {}", dir.display()))?;
                 entries.sort_by_key(|a| a.file_name());
@@ -256,7 +256,7 @@ fn execute_steps(
             StepKind::Cwd => {
                 // Print the canonical (physical) current working directory to stdout.
                 let real =
-                    canonical_cwd(state.resolver.as_ref(), &state.cwd).with_context(|| {
+                    canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
                         format!(
                             "step {}: CWD failed to canonicalize {}",
                             idx + 1,
@@ -267,11 +267,11 @@ fn execute_steps(
             }
             StepKind::Cat(path) => {
                 let target = state
-                    .resolver
+                    .fs
                     .resolve_read(&state.cwd, path)
                     .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
                 let data = state
-                    .resolver
+                    .fs
                     .read_file(&target)
                     .with_context(|| format!("failed to read {}", target.display()))?;
                 out.write_all(&data)
@@ -279,28 +279,28 @@ fn execute_steps(
             }
             StepKind::Write { path, contents } => {
                 let target = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     state
-                        .resolver
+                        .fs
                         .create_dir_all_abs(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 state
-                    .resolver
+                    .fs
                     .write_file(&target, contents.as_bytes())
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
             StepKind::Capture { path, cmd } => {
                 let target = state
-                    .resolver
+                    .fs
                     .resolve_write(&state.cwd, path)
                     .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
                 if let Some(parent) = target.parent() {
                     state
-                        .resolver
+                        .fs
                         .create_dir_all_abs(parent)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
@@ -310,9 +310,9 @@ fn execute_steps(
                     bail!("CAPTURE expects exactly one instruction");
                 }
                 let mut sub_state = ExecState {
-                    resolver: Box::new(PathResolver::new(
-                        state.resolver.root(),
-                        state.resolver.build_context(),
+                    fs: Box::new(PathResolver::new(
+                        state.fs.root(),
+                        state.fs.build_context(),
                     )),
                     cargo_target_dir: state.cargo_target_dir.clone(),
                     cwd: state.cwd.clone(),
@@ -322,7 +322,7 @@ fn execute_steps(
                 let mut buf: Vec<u8> = Vec::new();
                 execute_steps(&mut sub_state, &steps, true, &mut buf)?;
                 state
-                    .resolver
+                    .fs
                     .write_file(&target, &buf)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
