@@ -547,3 +547,19 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     }
     Ok(steps)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_script;
+
+    #[test]
+    fn commands_are_case_sensitive() {
+        for bad in ["run echo hi", "Run echo hi", "rUn echo hi", "write foo bar"] {
+            let err = parse_script(bad).expect_err("mixed/lowercase commands must fail");
+            assert!(
+                err.to_string().contains("unknown instruction"),
+                "unexpected error for '{bad}': {err}"
+            );
+        }
+    }
+}
