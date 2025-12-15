@@ -1,5 +1,3 @@
-// TODO: Add no-stdlib tests
-
 use oxdock_fs::{GuardedPath, PathResolver};
 use proc_macro::TokenStream;
 use quote::quote;
