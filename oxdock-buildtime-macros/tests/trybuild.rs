@@ -1,3 +1,4 @@
+#[cfg_attr(miri, ignore)]
 #[test]
 fn trybuild_manifest_dir() {
     use std::process::Command;
@@ -16,6 +17,7 @@ fn trybuild_manifest_dir() {
     );
 }
 
+#[cfg_attr(miri, ignore)]
 #[test]
 fn trybuild_exit_fail() {
     use std::process::Command;
