@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::PathResolver;
+use oxdock_fs::{GuardedPath, PathResolver};
 use std::env;
 use std::io::{self, IsTerminal, Read};
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub use oxdock_core::{
@@ -10,14 +9,17 @@ pub use oxdock_core::{
 };
 
 pub fn run() -> Result<()> {
+    let workspace_root = GuardedPath::new_root_from_str(&discover_workspace_root()?)
+        .context("guard workspace root")?;
+
     let mut args = std::env::args().skip(1);
-    let opts = Options::parse(&mut args)?;
-    execute(opts)
+    let opts = Options::parse(&mut args, &workspace_root)?;
+    execute(opts, workspace_root)
 }
 
 #[derive(Debug, Clone)]
 pub enum ScriptSource {
-    Path(PathBuf),
+    Path(GuardedPath),
     Stdin,
 }
 
@@ -28,7 +30,10 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn parse(args: &mut impl Iterator<Item = String>) -> Result<Self> {
+    pub fn parse(
+        args: &mut impl Iterator<Item = String>,
+        workspace_root: &GuardedPath,
+    ) -> Result<Self> {
         let mut script: Option<ScriptSource> = None;
         let mut shell = false;
         while let Some(arg) = args.next() {
@@ -43,7 +48,11 @@ impl Options {
                     if p == "-" {
                         script = Some(ScriptSource::Stdin);
                     } else {
-                        script = Some(ScriptSource::Path(PathBuf::from(p)));
+                        script = Some(ScriptSource::Path(
+                            workspace_root
+                                .join(&p)
+                                .with_context(|| format!("guard script path {p}"))?,
+                        ));
                     }
                 }
                 "--shell" => {
@@ -59,31 +68,22 @@ impl Options {
     }
 }
 
-pub fn execute(opts: Options) -> Result<()> {
+pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     #[cfg(windows)]
     maybe_reexec_shell_to_temp(&opts)?;
 
-    // Prefer the runtime env var when present (e.g., under `cargo run`), but fall back to the
-    // compile-time value so the binary can be invoked directly without CARGO_MANIFEST_DIR set.
-    let workspace_root = discover_workspace_root()?;
-
-    let temp = tempfile::tempdir().context("failed to create temp dir")?;
-    // Keep the workspace alive for interactive shells; otherwise the tempdir cleans up on drop.
-    let temp_path = if opts.shell {
-        temp.keep()
-    } else {
-        temp.path().to_path_buf()
-    };
+    let tempdir = GuardedPath::tempdir().context("failed to create temp dir")?;
+    let temp_root = tempdir.as_guarded_path().clone();
 
     // Materialize source tree without .git
-    archive_head(&workspace_root, &temp_path)?;
+    archive_head(&workspace_root, &temp_root)?;
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
         ScriptSource::Path(path) => {
             // Read script path via PathResolver rooted at the workspace so
             // script files are validated to live under the workspace.
-            let resolver = PathResolver::new(&workspace_root, &workspace_root);
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
             resolver
                 .read_to_string(path)
                 .with_context(|| format!("failed to read script at {}", path.display()))?
@@ -91,9 +91,10 @@ pub fn execute(opts: Options) -> Result<()> {
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
-                // No piped script provided. If the caller requested `--shell`,
-                // allow running with an empty script and drop into the interactive
-                // shell afterwards. Otherwise, require a script on stdin.
+                // No piped script provided. If the caller requested `--shell`
+                // allow running with an initially-empty script so we can either
+                // drop into the interactive shell or open the editor later.
+                // Otherwise, require a script on stdin.
                 if opts.shell {
                     String::new()
                 } else {
@@ -111,13 +112,14 @@ pub fn execute(opts: Options) -> Result<()> {
             }
         }
     };
+
     // Parse and run steps if we have a non-empty script. Empty scripts are
     // valid when `--shell` is requested and the caller didn't pipe a script.
     if !script.trim().is_empty() {
         let steps = parse_script(&script)?;
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
         // can source from the original tree if needed.
-        run_steps_with_context(&temp_path, &workspace_root, &steps)?;
+        run_steps_with_context(&temp_root, &workspace_root, &steps)?;
     }
 
     // If requested, drop into an interactive shell after running the script.
@@ -125,7 +127,7 @@ pub fn execute(opts: Options) -> Result<()> {
         if !has_controlling_tty() {
             bail!("--shell requires a tty (no controlling tty available)");
         }
-        return run_shell(&temp_path, &workspace_root);
+        return run_shell(&temp_root, &workspace_root);
     }
 
     Ok(())
@@ -163,44 +165,50 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     }
 
     let self_path = std::env::current_exe().context("determine current executable")?;
-    let mut temp_path = std::env::temp_dir();
+    let base_temp =
+        GuardedPath::new_root(std::env::temp_dir().as_path()).context("guard system temp dir")?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    temp_path.push(format!("oxdock-shell-{ts}-{}.exe", std::process::id()));
+    let temp_file = base_temp
+        .join(&format!("oxdock-shell-{ts}-{}.exe", std::process::id()))
+        .context("construct temp shell path")?;
 
     // Copy the current executable into the temporary location via a
     // resolver whose root is the temp directory. The source may live
     // outside the temp dir, so use `copy_file_from_external`.
-    let temp_root = temp_path
+    let temp_root_guard = temp_file
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("/"));
-    let resolver_temp = PathResolver::new(temp_root, temp_root);
+        .ok_or_else(|| anyhow::anyhow!("temp path unexpectedly missing parent"))?;
+    let resolver_temp = PathResolver::new(temp_root_guard.as_path(), temp_root_guard.as_path())?;
+    let dest = temp_file;
+    #[allow(clippy::disallowed_types)]
+    let source = oxdock_fs::UnguardedPath::new(self_path);
     resolver_temp
-        .copy_file_from_external(&self_path, &temp_path)
-        .with_context(|| format!("failed to copy shell runner to {}", temp_path.display()))?;
+        .copy_file_from_external(&source, &dest)
+        .with_context(|| format!("failed to copy shell runner to {}", dest.display()))?;
 
-    let mut cmd = Command::new(&temp_path);
+    let mut cmd = Command::new(dest.as_path());
     cmd.args(std::env::args_os().skip(1));
     cmd.env("OXDOCK_SHELL_REEXEC", "1");
 
     cmd.spawn()
-        .with_context(|| format!("failed to spawn shell from {}", temp_path.display()))?;
+        .with_context(|| format!("failed to spawn shell from {}", dest.display()))?;
 
     // Exit immediately so the original binary can be rebuilt while the shell child stays running.
     std::process::exit(0);
 }
 
-fn discover_workspace_root() -> Result<PathBuf> {
+fn discover_workspace_root() -> Result<String> {
     if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
-        return Ok(PathBuf::from(root));
+        return Ok(root);
     }
 
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
-        && let Some(parent) = PathBuf::from(manifest_dir).parent()
+    if let Ok(resolver) = PathResolver::from_manifest_env()
+        && let Some(parent) = resolver.root().as_path().parent()
     {
-        return Ok(parent.to_path_buf());
+        return Ok(parent.to_string_lossy().to_string());
     }
 
     // Prefer the git repository root of the current working directory.
@@ -212,24 +220,30 @@ fn discover_workspace_root() -> Result<PathBuf> {
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !path.is_empty() {
-            return Ok(PathBuf::from(path));
+            return Ok(path);
         }
     }
 
-    std::env::current_dir().context("failed to determine current directory for workspace root")
+    Ok(std::env::current_dir()
+        .context("failed to determine current directory for workspace root")?
+        .to_string_lossy()
+        .to_string())
 }
-pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
+pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
 }
 
-fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {
+fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
-    format!(
-        "{} shell workspace: {} (materialized from git HEAD at {})",
-        pkg,
-        cwd.display(),
-        workspace_root.display()
-    )
+    indoc::formatdoc! {"
+        {pkg} shell workspace
+          cwd: {}
+          source: git HEAD at {}
+          lifetime: temporary directory created for this shell session; it disappears when you exit
+          creation: {pkg} archived the repo at HEAD into this temp workspace before launching the shell
+
+          WARNING: This shell still runs on your host filesystem and is **not** isolated!
+    ", cwd.display(), workspace_root.display()}
 }
 
 #[cfg(windows)]
@@ -242,13 +256,13 @@ fn escape_for_cmd(s: &str) -> String {
         .replace('<', "^<")
 }
 
-fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
+fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
     let banner = shell_banner(cwd, workspace_root);
 
     #[cfg(unix)]
     {
         let mut cmd = Command::new(shell_program());
-        cmd.current_dir(cwd);
+        cmd.current_dir(cwd.as_path());
 
         // Print a single banner inside the subshell, then exec the user's shell to stay interactive.
         let script = format!("printf '%s\\n' \"{}\"; exec {}", banner, shell_program());
@@ -256,8 +270,10 @@ fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
-        if let Ok(tty) = PathResolver::new(workspace_root, workspace_root)
-            .open_external_file(Path::new("/dev/tty"))
+        #[allow(clippy::disallowed_types)]
+        let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
+        if let Ok(resolver) = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
+            && let Ok(tty) = resolver.open_external_file(&tty_path)
         {
             cmd.stdin(tty);
         }
@@ -279,7 +295,7 @@ fn run_shell(cwd: &Path, workspace_root: &Path) -> Result<()> {
             .arg("start")
             .arg("oxdock shell")
             .arg("/D")
-            .arg(cwd)
+            .arg(cwd.as_path())
             .arg("cmd")
             .arg("/K")
             .arg(format!("echo {} && cd /d .", escape_for_cmd(&banner)));
@@ -307,30 +323,30 @@ fn run_cmd(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
-    let archive_path = temp_root.join("src.tar");
-    let archive_str = archive_path.to_string_lossy().to_string();
-    run_cmd(Command::new("git").current_dir(workspace_root).args([
-        "archive",
-        "--format=tar",
-        "--output",
-        &archive_str,
-        "HEAD",
-    ]))?;
+fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result<()> {
+    let archive_guard = temp_root
+        .join("src.tar")
+        .context("failed to create archive path under temp root")?;
+    let archive_str = archive_guard.display().to_string();
+    run_cmd(
+        Command::new("git")
+            .current_dir(workspace_root.as_path())
+            .args(["archive", "--format=tar", "--output", &archive_str, "HEAD"]),
+    )?;
 
     run_cmd(
         Command::new("tar")
             .arg("-xf")
             .arg(&archive_str)
             .arg("-C")
-            .arg(temp_root),
+            .arg(temp_root.as_path()),
     )?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
     // Remove intermediate archive via a resolver rooted at the temp root.
-    let resolver_temp = PathResolver::new(temp_root, temp_root);
+    let resolver_temp = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
     resolver_temp
-        .remove_file_abs(&archive_path)
-        .with_context(|| format!("failed to remove {}", archive_path.display()))?;
+        .remove_file_abs(&archive_guard)
+        .with_context(|| format!("failed to remove {}", archive_guard.display()))?;
     Ok(())
 }

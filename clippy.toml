@@ -21,4 +21,16 @@ disallowed-methods = [
   "std::fs::rename",
   "std::fs::write",
   "std::path::Path::canonicalize",
+  "std::path::Path::new",
+  "tempfile::tempdir",
+  "tempfile::Builder::tempdir",
+]
+
+# Keep std::path usage funneled through the filesystem abstraction.
+disallowed-types = [
+  "std::path::Path",
+  "std::path::PathBuf",
+  "std::fs::OpenOptions",
+  "oxdock_fs::UnguardedPath",
+  "tempfile::Builder"
 ]

@@ -1,22 +1,22 @@
-#![deny(clippy::disallowed_methods)]
-
 pub mod ast;
 pub mod exec;
 pub use ast::*;
 pub use exec::*;
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use indoc::indoc;
-    use oxdock_fs::PathResolver;
+    use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
     #[cfg(unix)]
     use std::time::Instant;
 
-    fn read_trimmed(path: &std::path::Path) -> String {
-        let root = path.parent().unwrap_or(path);
-        let resolver = PathResolver::new(root, root);
+    fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
+        temp.as_guarded_path().clone()
+    }
+
+    fn read_trimmed(path: &GuardedPath) -> String {
+        let resolver = PathResolver::new(path.root(), path.root()).unwrap();
         resolver
             .read_to_string(path)
             .unwrap_or_default()
@@ -24,16 +24,19 @@ mod tests {
             .to_string()
     }
 
-    fn create_dirs(path: &std::path::Path) {
-        let root = path.parent().unwrap_or(path);
-        let resolver = PathResolver::new(root, root);
+    fn create_dirs(path: &GuardedPath) {
+        let resolver = PathResolver::new(path.root(), path.root()).unwrap();
         resolver.create_dir_all_abs(path).unwrap();
+    }
+
+    fn exists(root: &GuardedPath, rel: &str) -> bool {
+        root.as_path().join(rel).exists()
     }
 
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let cmd = if cfg!(windows) {
             "echo %CARGO_TARGET_DIR% > seen.txt"
@@ -46,21 +49,21 @@ mod tests {
             kind: StepKind::Run(cmd.to_string()),
         }];
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
-        let seen = read_trimmed(&root.join("seen.txt"));
-        let expected = root.join(".cargo-target");
+        let seen = read_trimmed(&root.join("seen.txt").unwrap());
+        let expected = root.join(".cargo-target").unwrap();
         assert_eq!(
             seen.trim(),
-            expected.to_string_lossy(),
+            expected.display().to_string(),
             "CARGO_TARGET_DIR should be scoped"
         );
     }
 
     #[test]
     fn guard_skips_when_env_missing() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let guard_var = "OXDOCK_GUARD_TEST_TOKEN_UNSET";
         let script = format!(
@@ -74,19 +77,19 @@ mod tests {
         );
         let steps = parse_script(&script).unwrap();
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            !root.join("skipped.txt").exists(),
+            !exists(&root, "skipped.txt"),
             "guarded WRITE should be skipped"
         );
-        assert!(root.join("kept.txt").exists(), "unguarded WRITE should run");
+        assert!(exists(&root, "kept.txt"), "unguarded WRITE should run");
     }
 
     #[test]
     fn guard_sees_env_set_by_env_step() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc!(
             r#"
@@ -97,22 +100,19 @@ mod tests {
         );
         let steps = parse_script(script).unwrap();
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            root.join("hit.txt").exists(),
+            exists(&root, "hit.txt"),
             "guarded WRITE should run after ENV sets variable"
         );
-        assert!(
-            root.join("always.txt").exists(),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
     fn echo_runs_and_allows_subsequent_steps() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc!(
             r#"
@@ -122,18 +122,15 @@ mod tests {
         );
         let steps = parse_script(script).unwrap();
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
-        assert!(
-            root.join("always.txt").exists(),
-            "WRITE after ECHO should run"
-        );
+        assert!(exists(&root, "always.txt"), "WRITE after ECHO should run");
     }
 
     #[test]
     fn guard_on_previous_line_applies_to_next_command() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc!(
             r#"
@@ -145,22 +142,19 @@ mod tests {
         );
         let steps = parse_script(script).unwrap();
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            root.join("hit.txt").exists(),
+            exists(&root, "hit.txt"),
             "guarded WRITE on next line should run"
         );
-        assert!(
-            root.join("always.txt").exists(),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
     fn guard_respects_platform_negation() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc!(
             r#"
@@ -170,25 +164,22 @@ mod tests {
         );
         let steps = parse_script(script).unwrap();
 
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         let expect_skipped = cfg!(unix);
         assert_eq!(
-            root.join("platform.txt").exists(),
+            exists(&root, "platform.txt"),
             !expect_skipped,
             "platform guard should skip on unix and run elsewhere"
         );
-        assert!(
-            root.join("always.txt").exists(),
-            "unguarded WRITE should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
     #[test]
     fn guard_matches_profile_env() {
         // Cargo sets PROFILE during builds/tests; verify guards see it.
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
         unsafe {
@@ -205,22 +196,22 @@ mod tests {
         );
 
         let steps = parse_script(&script).unwrap();
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            root.join("hit.txt").exists(),
+            exists(&root, "hit.txt"),
             "PROFILE-matching guard should run"
         );
         assert!(
-            !root.join("miss.txt").exists(),
+            !exists(&root, "miss.txt"),
             "PROFILE inequality guard should skip for current profile"
         );
     }
 
     #[test]
     fn multiple_guards_all_must_pass() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_PASS";
         unsafe {
@@ -237,22 +228,19 @@ mod tests {
             k = key
         );
         let steps = parse_script(&script).unwrap();
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            root.join("hit.txt").exists(),
+            exists(&root, "hit.txt"),
             "guarded step should run when all guards pass"
         );
-        assert!(
-            root.join("always.txt").exists(),
-            "unguarded step should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded step should run");
     }
 
     #[test]
     fn multiple_guards_skip_when_one_fails() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_FAIL";
         unsafe {
@@ -269,40 +257,37 @@ mod tests {
             k = key
         );
         let steps = parse_script(&script).unwrap();
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
         assert!(
-            !root.join("miss.txt").exists(),
+            !exists(&root, "miss.txt"),
             "guarded step should skip when any guard fails"
         );
-        assert!(
-            root.join("always.txt").exists(),
-            "unguarded step should run"
-        );
+        assert!(exists(&root, "always.txt"), "unguarded step should run");
     }
 
     #[cfg(unix)]
     #[test]
     fn run_bg_exits_success_and_stops_pipeline() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         // Background succeeds quickly; pipeline should complete without error.
         let script = "RUN_BG sh -c 'sleep 0.05'";
         let steps = parse_script(script).unwrap();
-        let res = run_steps(root, &steps);
+        let res = run_steps(&root, &steps);
         assert!(res.is_ok(), "RUN_BG success should allow clean exit");
     }
 
     #[cfg(unix)]
     #[test]
     fn run_bg_failure_bubbles_status() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = "RUN_BG sh -c 'sleep 0.05; exit 7'";
         let steps = parse_script(script).unwrap();
-        let err = run_steps(root, &steps).unwrap_err();
+        let err = run_steps(&root, &steps).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("RUN_BG exited with status") || msg.contains("exit status: 7"),
@@ -313,8 +298,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc! {
             r#"
@@ -326,20 +311,20 @@ mod tests {
 
         let steps = parse_script(script).unwrap();
         let start = Instant::now();
-        let res = run_steps(root, &steps);
+        let res = run_steps(&root, &steps);
         let elapsed = start.elapsed();
 
         assert!(res.is_ok(), "RUN_BG success should allow clean exit");
         assert!(
-            root.join("done.txt").exists(),
+            exists(&root, "done.txt"),
             "foreground step should run after spawning backgrounds"
         );
         assert!(
-            root.join("one.txt").exists(),
+            exists(&root, "one.txt"),
             "first background should finish and emit output"
         );
         assert!(
-            !root.join("two.txt").exists(),
+            !exists(&root, "two.txt"),
             "second background should be terminated once the first exits"
         );
         assert!(
@@ -351,8 +336,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exit_terminates_backgrounds_and_returns_code() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = indoc! {
             r#"
@@ -362,19 +347,19 @@ mod tests {
         };
 
         let steps = parse_script(script).unwrap();
-        let err = run_steps(root, &steps).unwrap_err();
+        let err = run_steps(&root, &steps).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("EXIT requested with code 5"));
         assert!(
-            !root.join("late.txt").exists(),
+            !exists(&root, "late.txt"),
             "background process should be killed when EXIT is hit"
         );
     }
 
     #[test]
     fn env_applies_to_run_and_background() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
 
         let script = if cfg!(windows) {
             indoc! {
@@ -395,16 +380,18 @@ mod tests {
         };
 
         let steps = parse_script(script).unwrap();
-        run_steps(root, &steps).unwrap();
+        run_steps(&root, &steps).unwrap();
 
-        assert_eq!(read_trimmed(&root.join("run.txt")), "bar");
-        assert_eq!(read_trimmed(&root.join("bg.txt")), "bar");
+        assert_eq!(read_trimmed(&root.join("run.txt").unwrap()), "bar");
+        assert_eq!(read_trimmed(&root.join("bg.txt").unwrap()), "bar");
     }
 
     #[test]
     fn workspace_switches_between_snapshot_and_local() {
-        let snapshot = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
+        let snapshot_root = guard_root(&snapshot);
+        let local_root = guard_root(&local);
 
         let script = indoc! {
             r#"
@@ -417,18 +404,20 @@ mod tests {
         };
 
         let steps = parse_script(script).unwrap();
-        run_steps_with_context(snapshot.path(), local.path(), &steps).unwrap();
+        run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(snapshot.path().join("snap.txt").exists());
-        assert!(snapshot.path().join("snap2.txt").exists());
-        assert!(local.path().join("local.txt").exists());
+        assert!(snapshot_root.as_path().join("snap.txt").exists());
+        assert!(snapshot_root.as_path().join("snap2.txt").exists());
+        assert!(local_root.as_path().join("local.txt").exists());
     }
 
     #[test]
     fn workspace_root_changes_where_slash_points() {
-        let snapshot = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
-        let local_client = local.path().join("client");
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
+        let snapshot_root = guard_root(&snapshot);
+        let local_root = guard_root(&local);
+        let local_client = local_root.join("client").unwrap();
         create_dirs(&local_client);
 
         let script = indoc! {
@@ -445,10 +434,10 @@ mod tests {
         };
 
         let steps = parse_script(script).unwrap();
-        run_steps_with_context(snapshot.path(), local.path(), &steps).unwrap();
+        run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(local.path().join("localroot.txt").exists());
-        assert!(local_client.join("client.txt").exists());
-        assert!(snapshot.path().join("snaproot.txt").exists());
+        assert!(local_root.as_path().join("localroot.txt").exists());
+        assert!(local_client.as_path().join("client.txt").exists());
+        assert!(snapshot_root.as_path().join("snaproot.txt").exists());
     }
 }

@@ -1,6 +1,16 @@
 // Workspace-scoped path resolver with guarded file operations.
 // Methods are split across submodules by concern (access checks, IO, copy, git, resolve helpers).
-use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+pub mod path;
+pub use path::{GuardedPath, GuardedTempDir};
+
+#[allow(clippy::disallowed_types)]
+pub use path::UnguardedPath;
+
+#[allow(clippy::disallowed_types)]
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AccessMode {
@@ -21,35 +31,48 @@ impl AccessMode {
 
 /// Resolves and validates filesystem paths within a confined workspace and build context.
 pub struct PathResolver {
-    root: PathBuf,
-    build_context: PathBuf,
+    root: GuardedPath,
+    build_context: GuardedPath,
 }
 
 impl PathResolver {
-    pub fn new(root: &Path, build_context: &Path) -> Self {
-        Self {
-            root: root.to_path_buf(),
-            build_context: build_context.to_path_buf(),
-        }
+    /// Build a resolver rooted at `CARGO_MANIFEST_DIR`, using that same
+    /// directory as the build context. This centralizes env lookup and path
+    /// creation so callers avoid ad-hoc path construction.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    pub fn from_manifest_env() -> Result<Self> {
+        let manifest_dir =
+            std::env::var("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR missing")?;
+        let path = Path::new(&manifest_dir);
+        Self::new(path, path)
     }
 
-    pub fn root(&self) -> &Path {
+    #[allow(clippy::disallowed_types)]
+    pub fn new(root: &Path, build_context: &Path) -> Result<Self> {
+        Ok(Self {
+            root: GuardedPath::new_root(root)?,
+            build_context: GuardedPath::new_root(build_context)?,
+        })
+    }
+
+    pub fn root(&self) -> &GuardedPath {
         &self.root
     }
 
-    pub fn build_context(&self) -> &Path {
+    pub fn build_context(&self) -> &GuardedPath {
         &self.build_context
     }
 
-    pub fn set_root(&mut self, root: &Path) {
-        self.root = root.to_path_buf();
+    pub fn set_root(&mut self, root: GuardedPath) {
+        self.root = root;
     }
 }
 
-mod access;
+pub(crate) mod access;
 mod copy;
 mod git;
 mod io;
 mod resolve;
+use access::guard_path;
 
 // PathResolver is exported at crate root via `lib.rs` re-export.

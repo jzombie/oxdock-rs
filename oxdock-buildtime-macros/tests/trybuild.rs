@@ -24,6 +24,7 @@ fn trybuild_exit_fail() {
         .arg("run")
         .arg("--manifest-path")
         .arg("tests/fixtures/build_exit_fail/Cargo.toml")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
         .arg("--quiet")
         .output()
         .expect("failed to spawn cargo");
