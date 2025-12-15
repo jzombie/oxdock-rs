@@ -22,13 +22,15 @@ disallowed-methods = [
   "std::fs::write",
   "std::path::Path::canonicalize",
   "std::path::Path::new",
+  "tempfile::tempdir",
+  "tempfile::Builder::tempdir",
 ]
 
 # Keep std::path usage funneled through the filesystem abstraction.
 disallowed-types = [
   "std::path::Path",
   "std::path::PathBuf",
+  "std::fs::OpenOptions",
+  "oxdock_fs::UnguardedPath",
+  "tempfile::Builder"
 ]
-
-# TODO: Ensure tempdir module is guarded as well, and redirected to fs abstraction
-# TODO: Add UnguardedPath to the list of disallowed types

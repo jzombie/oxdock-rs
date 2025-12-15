@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 
 use super::{AccessMode, PathResolver};
-use crate::{GuardedPath, UnguardedPath};
+use crate::{GuardedPath};
+
+#[allow(clippy::disallowed_types)]
+use crate::UnguardedPath;
 
 // Guarded filesystem IO helpers (read/write/metadata etc.).
 impl PathResolver {
@@ -94,7 +97,7 @@ impl PathResolver {
         Ok(m)
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
     pub fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
         let m = fs::metadata(path.as_path()).with_context(|| {
             format!("failed to stat external path {}", path.as_path().display())
@@ -121,7 +124,7 @@ impl PathResolver {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
     pub fn open_external_file(&self, path: &UnguardedPath) -> Result<std::fs::File> {
         let f = fs::File::open(path.as_path())
             .with_context(|| format!("failed to open {}", path.as_path().display()))?;

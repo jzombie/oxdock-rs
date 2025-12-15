@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 
 use super::{AccessMode, PathResolver};
-use crate::{GuardedPath, UnguardedPath};
+use crate::{GuardedPath};
+
+#[allow(clippy::disallowed_types)]
+use crate::UnguardedPath;
 
 // Copy helpers for guarded and external sources.
 impl PathResolver {
@@ -80,7 +83,7 @@ impl PathResolver {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
     pub fn copy_dir_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()> {
         let guarded_dst_root = self
             .check_access(dst.as_path(), AccessMode::Write)
@@ -116,7 +119,7 @@ impl PathResolver {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
     pub fn copy_file_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64> {
         let guarded_dst = self
             .check_access(dst.as_path(), AccessMode::Write)

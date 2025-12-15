@@ -1,7 +1,10 @@
 use anyhow::Result;
 
 pub mod workspace_fs;
-pub use workspace_fs::{GuardedPath, GuardedTempDir, PathResolver, UnguardedPath};
+pub use workspace_fs::{GuardedPath, GuardedTempDir, PathResolver};
+
+#[allow(clippy::disallowed_types)]
+pub use workspace_fs::UnguardedPath;
 
 /// Trait implemented by both `GuardedPath` and `UnguardedPath` so callers can
 /// rely on a consistent set of path helper methods. This includes a small set
@@ -29,6 +32,7 @@ pub trait PathLike: Sized + std::fmt::Display {
 pub trait WorkspaceFs {
     fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath>;
     fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata>;
+    #[allow(clippy::disallowed_types)]
     fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata>;
     fn root(&self) -> &GuardedPath;
     fn build_context(&self) -> &GuardedPath;
@@ -45,11 +49,14 @@ pub trait WorkspaceFs {
 
     fn copy_file(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<u64>;
     fn copy_dir_recursive(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn copy_dir_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn copy_file_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64>;
 
     fn symlink(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()>;
 
+    #[allow(clippy::disallowed_types)]
     fn open_external_file(&self, path: &UnguardedPath) -> Result<std::fs::File>;
     fn set_permissions_mode_unix(&self, path: &GuardedPath, mode: u32) -> Result<()>;
 
@@ -70,6 +77,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::metadata_abs(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
         PathResolver::metadata_external(self, path)
     }
@@ -122,10 +130,12 @@ impl WorkspaceFs for PathResolver {
         PathResolver::copy_dir_recursive(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_dir_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()> {
         PathResolver::copy_dir_from_external(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_file_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64> {
         PathResolver::copy_file_from_external(self, src, dst)
     }
@@ -134,6 +144,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::symlink(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn open_external_file(&self, path: &UnguardedPath) -> Result<std::fs::File> {
         PathResolver::open_external_file(self, path)
     }

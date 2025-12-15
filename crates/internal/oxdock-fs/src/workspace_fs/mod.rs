@@ -3,11 +3,14 @@
 
 use anyhow::{Context, Result};
 
+pub mod path;
+pub use path::{GuardedPath, GuardedTempDir};
+
+#[allow(clippy::disallowed_types)]
+pub use path::UnguardedPath;
+
 #[allow(clippy::disallowed_types)]
 use std::path::Path;
-
-pub mod path;
-pub use path::{GuardedPath, GuardedTempDir, UnguardedPath};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AccessMode {
