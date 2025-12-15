@@ -5,7 +5,9 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_core::{
+    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
+};
 
 pub fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -76,15 +78,6 @@ pub fn execute(opts: Options) -> Result<()> {
     // Materialize source tree without .git
     archive_head(&workspace_root, &temp_path)?;
 
-    // Drop into an interactive shell if requested.
-    if opts.shell {
-        let stdin = io::stdin();
-        if !stdin.is_terminal() {
-            bail!("--shell requires a tty (stdin is piped)");
-        }
-        return run_shell(&temp_path, &workspace_root);
-    }
-
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
         ScriptSource::Path(path) => fs::read_to_string(path)
@@ -92,24 +85,61 @@ pub fn execute(opts: Options) -> Result<()> {
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
-                bail!(
-                    "no stdin detected; pass --script <file> or pipe a script into stdin (use --script - if explicit)"
-                );
+                // No piped script provided. If the caller requested `--shell`,
+                // allow running with an empty script and drop into the interactive
+                // shell afterwards. Otherwise, require a script on stdin.
+                if opts.shell {
+                    String::new()
+                } else {
+                    bail!(
+                        "no stdin detected; pass --script <file> or pipe a script into stdin (use --script - if explicit)"
+                    );
+                }
+            } else {
+                let mut buf = String::new();
+                stdin
+                    .lock()
+                    .read_to_string(&mut buf)
+                    .context("failed to read script from stdin")?;
+                buf
             }
-            let mut buf = String::new();
-            stdin
-                .lock()
-                .read_to_string(&mut buf)
-                .context("failed to read script from stdin")?;
-            buf
         }
     };
-    let steps = parse_script(&script)?;
-    // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
-    // can source from the original tree if needed.
-    run_steps_with_context(&temp_path, &workspace_root, &steps)?;
+    // Parse and run steps if we have a non-empty script. Empty scripts are
+    // valid when `--shell` is requested and the caller didn't pipe a script.
+    if !script.trim().is_empty() {
+        let steps = parse_script(&script)?;
+        // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
+        // can source from the original tree if needed.
+        run_steps_with_context(&temp_path, &workspace_root, &steps)?;
+    }
+
+    // If requested, drop into an interactive shell after running the script.
+    if opts.shell {
+        if !has_controlling_tty() {
+            bail!("--shell requires a tty (no controlling tty available)");
+        }
+        return run_shell(&temp_path, &workspace_root);
+    }
 
     Ok(())
+}
+
+fn has_controlling_tty() -> bool {
+    #[cfg(unix)]
+    {
+        std::fs::File::open("/dev/tty").is_ok()
+    }
+
+    #[cfg(windows)]
+    {
+        std::fs::File::open("CONIN$").is_ok()
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
 }
 
 #[cfg(windows)]
@@ -173,18 +203,6 @@ fn discover_workspace_root() -> Result<PathBuf> {
 }
 pub fn run_script(workspace_root: &Path, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
-}
-
-fn shell_program() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
-    }
-
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-    }
 }
 
 fn shell_banner(cwd: &Path, workspace_root: &Path) -> String {

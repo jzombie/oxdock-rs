@@ -232,6 +232,110 @@ fn workdir_cannot_escape_root() {
 }
 
 #[test]
+fn write_cannot_escape_root() {
+    let root = tempdir().unwrap();
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Write {
+            path: "../escape.txt".into(),
+            contents: "nope".into(),
+        },
+    }];
+
+    let err = run_steps(root.path(), &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
+        "expected WRITE escape error, got {}",
+        err
+    );
+}
+
+#[test]
+fn read_cannot_escape_root() {
+    let root = tempdir().unwrap();
+    let parent = root.path().parent().expect("tempdir should have a parent");
+    let secret = parent.join(format!(
+        "{}-secret.txt",
+        root.path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("escape")
+    ));
+    fs::write(&secret, "nope").unwrap();
+
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Cat("../secret.txt".into()),
+    }];
+
+    let err = run_steps(root.path(), &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
+        "expected CAT escape error, got {}",
+        err
+    );
+
+    let _ = fs::remove_file(&secret);
+}
+
+#[test]
+fn read_symlink_escape_is_blocked() {
+    let root = tempdir().unwrap();
+    let parent = root.path().parent().expect("tempdir should have a parent");
+    let secret = parent.join(format!(
+        "{}-symlink-secret.txt",
+        root.path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("escape")
+    ));
+    fs::write(&secret, "top secret").unwrap();
+
+    // Inside root, create a link that points to the outside secret.
+    let link_path = root.path().join("leak.txt");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&secret, &link_path).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&secret, &link_path).unwrap();
+
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Cat("leak.txt".into()),
+    }];
+
+    let err = run_steps(root.path(), &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
+        "expected CAT symlink escape error, got {}",
+        err
+    );
+
+    let _ = fs::remove_file(&secret);
+}
+
+#[test]
+fn write_missing_path_cannot_escape_root() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("a/b")).unwrap();
+
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Write {
+            // Ancestor exists inside root, but remaining components attempt to climb out.
+            path: "a/b/../../../../outside.txt".into(),
+            contents: "nope".into(),
+        },
+    }];
+
+    let err = run_steps(root.path(), &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
+        "expected WRITE escape error for missing path, got {}",
+        err
+    );
+}
+
+#[test]
 fn workdir_creates_missing_dirs_within_root() {
     let root = tempdir().unwrap();
     let steps = vec![Step {
