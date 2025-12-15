@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -7,7 +9,6 @@ use crate::GuardedPath;
 
 // Path resolution helpers (WORKDIR, READ/WRITE, COPY sources).
 impl PathResolver {
-    #[allow(clippy::disallowed_methods)]
     pub fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         if new_dir == "/" {
             // Reset to the resolver root when WORKDIR is set to '/'.
@@ -45,7 +46,6 @@ impl PathResolver {
         self.resolve(cwd, rel, AccessMode::Write)
     }
 
-    #[allow(clippy::disallowed_methods)]
     pub fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         if Path::new(from).is_absolute() {
             bail!("COPY source must be relative to build context");

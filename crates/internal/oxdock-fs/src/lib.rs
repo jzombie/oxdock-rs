@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 

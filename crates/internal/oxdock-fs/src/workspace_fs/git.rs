@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
@@ -7,7 +9,6 @@ use crate::GuardedPath;
 
 // COPY_GIT support using git plumbing commands.
 impl PathResolver {
-    #[allow(clippy::disallowed_methods)]
     pub fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
         if PathBuf::from(from).is_absolute() {
             bail!("COPY_GIT source must be relative to build context");

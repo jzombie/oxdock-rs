@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -89,7 +91,6 @@ pub(crate) fn guard_path(root: &Path, candidate: &Path, mode: AccessMode) -> Res
 
 // Guard and canonicalize paths under the configured roots.
 impl PathResolver {
-    #[allow(clippy::disallowed_methods)]
     pub(crate) fn check_access_with_root(
         &self,
         root: &GuardedPath,

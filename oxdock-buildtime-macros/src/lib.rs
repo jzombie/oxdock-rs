@@ -3,7 +3,6 @@
 use oxdock_fs::{GuardedPath, PathResolver, UnguardedPath};
 use proc_macro::TokenStream;
 use quote::quote;
-use std::path::Path;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
 
@@ -50,21 +49,22 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let manifest_resolver = PathResolver::from_manifest_env()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    let manifest_path = manifest_root.as_path();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    fn find_git_root(start: &Path) -> bool {
-        let mut cur = Some(start);
+    fn find_git_root(start: &GuardedPath) -> bool {
+        let mut cur = Some(start.clone());
         while let Some(p) = cur {
-            if p.join(".git").exists() {
+            if let Ok(dot_git) = p.join(".git")
+                && dot_git.as_path().exists()
+            {
                 return true;
             }
             cur = p.parent();
         }
         false
     }
-    let has_git = find_git_root(manifest_path);
+    let has_git = find_git_root(&manifest_root);
     let should_build = has_git;
 
     let out_dir_str = input.out_dir.value();
@@ -290,23 +290,24 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let manifest_resolver = PathResolver::from_manifest_env()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    let manifest_path = manifest_root.as_path();
     let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
     // Detect a Git repository by walking up from the consuming crate's manifest dir.
     // This supports workspace layouts where .git is at the root rather than per-crate.
-    fn find_git_root(start: &Path) -> bool {
-        let mut cur = Some(start);
+    fn find_git_root(start: &GuardedPath) -> bool {
+        let mut cur = Some(start.clone());
         while let Some(p) = cur {
-            if p.join(".git").exists() {
+            if let Ok(dot_git) = p.join(".git")
+                && dot_git.as_path().exists()
+            {
                 return true;
             }
             cur = p.parent();
         }
         false
     }
-    let has_git = find_git_root(manifest_path);
+    let has_git = find_git_root(&manifest_root);
     // Allow building whenever a Git checkout is present. In a crates.io tarball (no .git), we
     // require the caller to supply an out_dir instead of trying to rebuild.
     let should_build = has_git;
@@ -338,7 +339,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         );
 
         return Ok(quote! {
-            #[allow(clippy::disallowed_methods)]
+            #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
             mod #mod_ident {
                 #[derive(::rust_embed::RustEmbed)]
                 #[folder = #folder_lit]
@@ -374,7 +375,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         );
 
         return Ok(quote! {
-            #[allow(clippy::disallowed_methods)]
+            #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
             mod #mod_ident {
                 #[derive(::rust_embed::RustEmbed)]
                 #[folder = #out_dir_lit]
@@ -571,10 +572,9 @@ mod tests {
     use oxdock_fs::GuardedPath;
     use serial_test::serial;
     use std::env;
-    use std::path::PathBuf;
 
-    fn guard_root(path: &Path) -> GuardedPath {
-        GuardedPath::new_root(path).unwrap()
+    fn guard_root(path: &str) -> GuardedPath {
+        GuardedPath::new_root_from_str(path).unwrap()
     }
 
     fn resolver_for(root: &GuardedPath) -> PathResolver {
@@ -585,7 +585,7 @@ mod tests {
     #[serial]
     fn errors_when_out_dir_is_file_before_build() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
         // Create .git dir via PathResolver to centralize filesystem access.
         let resolver = resolver_for(&manifest_dir);
         resolver
@@ -627,7 +627,7 @@ mod tests {
     #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -694,7 +694,7 @@ mod tests {
     #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         let resolver = resolver_for(&manifest_dir);
@@ -722,8 +722,8 @@ mod tests {
 
         let folder_path = folder_attr_path(&ts);
         assert_eq!(
-            PathBuf::from(&folder_path),
-            assets_abs.as_path(),
+            folder_path,
+            assets_abs.as_path().to_string_lossy().into_owned(),
             "should point folder to out_dir abs path"
         );
     }
@@ -732,7 +732,7 @@ mod tests {
     #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
 
         unsafe {
             env::remove_var("CARGO_PRIMARY_PACKAGE");
@@ -759,7 +759,7 @@ mod tests {
     #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -788,7 +788,7 @@ mod tests {
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
         let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new(manifest_dir.root(), &PathBuf::from(&folder_path))
+        let folder_guard = GuardedPath::new_root_from_str(&folder_path)
             .expect("guard folder path");
         let copied = folder_guard.join("copied.txt").expect("join copied.txt");
         let contents = resolver
@@ -804,7 +804,7 @@ mod tests {
     #[serial]
     fn uses_final_workdir_for_folder() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let manifest_dir = guard_root(temp.path());
+        let manifest_dir = guard_root(temp.path().to_str().expect("utf8 temp path"));
         let resolver = resolver_for(&manifest_dir);
         resolver
             .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
@@ -839,7 +839,7 @@ mod tests {
             "folder should be the out_dir path"
         );
 
-        let folder_guard = GuardedPath::new(manifest_dir.root(), &PathBuf::from(&folder_path))
+        let folder_guard = GuardedPath::new_root_from_str(&folder_path)
             .expect("guard folder path");
         let inside = folder_guard.join("hello.txt").expect("join hello.txt");
         assert!(

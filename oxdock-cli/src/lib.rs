@@ -347,33 +347,33 @@ fn open_editor_and_read() -> Result<String> {
 
     // Determine a per-user cache path to store the last inline script.
     fn last_inline_path() -> Option<GuardedPath> {
-        if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
-            if let Ok(root) = GuardedPath::new_root_from_str(&x)
-                && let Ok(path) = root.join("oxdock")
-                    .and_then(|p| p.join("last_inline"))
-            {
-                return Some(path);
-            }
+        if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
+            && let Ok(root) = GuardedPath::new_root_from_str(&x)
+            && let Ok(path) = root
+                .join("oxdock")
+                .and_then(|p| p.join("last_inline"))
+        {
+            return Some(path);
         }
+
         if cfg!(windows)
             && let Ok(app) = std::env::var("APPDATA")
+            && let Ok(root) = GuardedPath::new_root_from_str(&app)
+            && let Ok(path) = root
+                .join("oxdock")
+                .and_then(|p| p.join("last_inline"))
         {
-            if let Ok(root) = GuardedPath::new_root_from_str(&app)
-                && let Ok(path) = root.join("oxdock")
-                    .and_then(|p| p.join("last_inline"))
-            {
-                return Some(path);
-            }
+            return Some(path);
         }
-        if let Ok(home) = std::env::var("HOME") {
-            if let Ok(root) = GuardedPath::new_root_from_str(&home)
-                && let Ok(path) = root
-                    .join(".config")
-                    .and_then(|p| p.join("oxdock"))
-                    .and_then(|p| p.join("last_inline"))
-            {
-                return Some(path);
-            }
+
+        if let Ok(home) = std::env::var("HOME")
+            && let Ok(root) = GuardedPath::new_root_from_str(&home)
+            && let Ok(path) = root
+                .join(".config")
+                .and_then(|p| p.join("oxdock"))
+                .and_then(|p| p.join("last_inline"))
+        {
+            return Some(path);
         }
         None
     }
@@ -382,16 +382,12 @@ fn open_editor_and_read() -> Result<String> {
     // editor opens with the previous content.
     if let Some(cache) = last_inline_path()
         && let Some(cache_parent) = cache.parent()
+        && let Ok(cache_fs) = PathResolver::new(cache_parent.as_path(), cache_parent.as_path())
+        && cache_fs.metadata_abs(&cache).is_ok()
+        && let Ok(prev) = cache_fs.read_to_string(&cache)
     {
-        if let Ok(cache_fs) = PathResolver::new(cache_parent.as_path(), cache_parent.as_path())
-        {
-            if cache_fs.metadata_abs(&cache).is_ok()
-                && let Ok(prev) = cache_fs.read_to_string(&cache)
-            {
-                let tmp_fs = PathResolver::new(tmp_root.as_path(), tmp_root.as_path())?;
-                let _ = tmp_fs.write_file(&tmp_file, prev.as_bytes());
-            }
-        }
+        let tmp_fs = PathResolver::new(tmp_root.as_path(), tmp_root.as_path())?;
+        let _ = tmp_fs.write_file(&tmp_file, prev.as_bytes());
     }
 
     // Choose editor: VISUAL, EDITOR, then sensible defaults.
@@ -428,12 +424,10 @@ fn open_editor_and_read() -> Result<String> {
     // so the editor flow remains best-effort.
     if let Some(cache) = last_inline_path()
         && let Some(parent) = cache.parent()
+        && let Ok(cache_fs) = PathResolver::new(parent.as_path(), parent.as_path())
     {
-        if let Ok(cache_fs) = PathResolver::new(parent.as_path(), parent.as_path())
-        {
-            let _ = cache_fs.create_dir_all_abs(&parent);
-            let _ = cache_fs.write_file(&cache, contents.as_bytes());
-        }
+        let _ = cache_fs.create_dir_all_abs(&parent);
+        let _ = cache_fs.write_file(&cache, contents.as_bytes());
     }
 
     Ok(contents)
