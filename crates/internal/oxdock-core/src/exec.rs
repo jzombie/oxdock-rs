@@ -542,7 +542,7 @@ mod tests {
     use crate::Guard;
     use oxdock_fs::GuardedPath;
     use std::cell::RefCell;
-    use std::collections::VecDeque;
+    use std::collections::{HashMap as StdHashMap, HashSet, VecDeque};
     use std::rc::Rc;
 
     #[test]
@@ -808,5 +808,282 @@ mod tests {
     fn exit_status_from_code(code: i32) -> ExitStatus {
         use std::os::windows::process::ExitStatusExt;
         ExitStatusExt::from_raw(code as u32)
+    }
+
+    #[derive(Clone)]
+    struct MemoryWorkspaceFs {
+        root: GuardedPath,
+        build_context: GuardedPath,
+        root_prefix: String,
+        state: Rc<RefCell<MemoryState>>,
+    }
+
+    struct MemoryState {
+        files: StdHashMap<String, Vec<u8>>,
+        dirs: HashSet<String>,
+    }
+
+    impl MemoryWorkspaceFs {
+        fn new() -> Self {
+            let root = GuardedPath::new_root_from_str(".").unwrap();
+            let build_context = root.clone();
+            let mut prefix = root.as_path().display().to_string();
+            if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
+                prefix.push(std::path::MAIN_SEPARATOR);
+            }
+            let mut dirs = HashSet::new();
+            dirs.insert(String::new());
+            Self {
+                root,
+                build_context,
+                root_prefix: prefix,
+                state: Rc::new(RefCell::new(MemoryState {
+                    files: StdHashMap::new(),
+                    dirs,
+                })),
+            }
+        }
+
+        fn normalize_rel(&self, base: &GuardedPath, rel: &str) -> Result<String> {
+            let mut segments = if rel.starts_with('/') || rel.starts_with('\\') {
+                Vec::new()
+            } else {
+                self.split_components(&self.relative_path(base))
+            };
+            for part in self.split_components(rel) {
+                match part.as_str() {
+                    "" | "." => {}
+                    ".." => {
+                        segments.pop();
+                    }
+                    other => segments.push(other.to_string()),
+                }
+            }
+            Ok(segments.join("/"))
+        }
+
+        fn guard_from_rel(&self, rel: String) -> Result<GuardedPath> {
+            if rel.is_empty() {
+                return Ok(self.root.clone());
+            }
+            let native = if std::path::MAIN_SEPARATOR == '/' {
+                rel
+            } else {
+                rel.replace('/', std::path::MAIN_SEPARATOR_STR)
+            };
+            self.root
+                .join(native.as_str())
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        }
+
+        fn relative_path(&self, path: &GuardedPath) -> String {
+            let full = path.as_path().display().to_string();
+            let stripped = full
+                .strip_prefix(&self.root_prefix)
+                .unwrap_or(&full)
+                .trim_start_matches(std::path::MAIN_SEPARATOR);
+            stripped.replace('\\', "/")
+        }
+
+        fn split_components(&self, input: &str) -> Vec<String> {
+            input
+                .split(['/', '\\'])
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        }
+
+        fn snapshot(&self) -> StdHashMap<String, Vec<u8>> {
+            self.state.borrow().files.clone()
+        }
+
+        fn create_exec_state(&self) -> ExecState<MockProcessManager> {
+            let cargo = self.root.join(".cargo-target").unwrap();
+            ExecState {
+                fs: Box::new(self.clone()),
+                cargo_target_dir: cargo,
+                cwd: self.root.clone(),
+                envs: HashMap::new(),
+                bg_children: Vec::new(),
+            }
+        }
+    }
+
+    impl WorkspaceFs for MemoryWorkspaceFs {
+        fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
+            Ok(path.clone())
+        }
+
+        fn metadata_abs(&self, _path: &GuardedPath) -> Result<std::fs::Metadata> {
+            bail!("metadata not supported in memory fs");
+        }
+
+        #[allow(clippy::disallowed_types)]
+        fn metadata_external(&self, _path: &oxdock_fs::UnguardedPath) -> Result<std::fs::Metadata> {
+            bail!("metadata not supported in memory fs");
+        }
+
+        fn root(&self) -> &GuardedPath {
+            &self.root
+        }
+
+        fn build_context(&self) -> &GuardedPath {
+            &self.build_context
+        }
+
+        fn set_root(&mut self, root: GuardedPath) {
+            self.root = root;
+        }
+
+        fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
+            let rel = self.relative_path(path);
+            self.state
+                .borrow()
+                .files
+                .get(&rel)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing file {}", path.display()))
+        }
+
+        fn read_to_string(&self, path: &GuardedPath) -> Result<String> {
+            let bytes = self.read_file(path)?;
+            String::from_utf8(bytes).map_err(|e| anyhow::anyhow!(e))
+        }
+
+        fn read_dir_entries(&self, _path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>> {
+            bail!("read_dir unsupported in memory fs");
+        }
+
+        fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
+            let rel = self.relative_path(path);
+            self.state.borrow_mut().files.insert(rel, contents.to_vec());
+            Ok(())
+        }
+
+        fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+            let rel = self.relative_path(path);
+            let mut state = self.state.borrow_mut();
+            state.dirs.insert(String::new());
+            let mut prefix: Vec<String> = Vec::new();
+            for comp in self.split_components(&rel) {
+                prefix.push(comp.clone());
+                state.dirs.insert(prefix.join("/"));
+            }
+            Ok(())
+        }
+
+        fn remove_file_abs(&self, _path: &GuardedPath) -> Result<()> {
+            bail!("remove unsupported")
+        }
+
+        fn remove_dir_all_abs(&self, _path: &GuardedPath) -> Result<()> {
+            bail!("remove unsupported")
+        }
+
+        fn copy_file(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<u64> {
+            bail!("copy unsupported")
+        }
+
+        fn copy_dir_recursive(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<()> {
+            bail!("copy unsupported")
+        }
+
+        #[allow(clippy::disallowed_types)]
+        fn copy_dir_from_external(
+            &self,
+            _src: &oxdock_fs::UnguardedPath,
+            _dst: &GuardedPath,
+        ) -> Result<()> {
+            bail!("copy unsupported")
+        }
+
+        #[allow(clippy::disallowed_types)]
+        fn copy_file_from_external(
+            &self,
+            _src: &oxdock_fs::UnguardedPath,
+            _dst: &GuardedPath,
+        ) -> Result<u64> {
+            bail!("copy unsupported")
+        }
+
+        fn symlink(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<()> {
+            bail!("symlink unsupported")
+        }
+
+        #[allow(clippy::disallowed_types)]
+        fn open_external_file(&self, _path: &oxdock_fs::UnguardedPath) -> Result<std::fs::File> {
+            bail!("open unsupported")
+        }
+
+        fn set_permissions_mode_unix(&self, _path: &GuardedPath, _mode: u32) -> Result<()> {
+            bail!("perms unsupported")
+        }
+
+        fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
+            if new_dir == "/" {
+                return Ok(self.root.clone());
+            }
+            let target = self.normalize_rel(current, new_dir)?;
+            self.guard_from_rel(target)
+        }
+
+        fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
+            let target = self.normalize_rel(cwd, rel)?;
+            self.guard_from_rel(target)
+        }
+
+        fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
+            let target = self.normalize_rel(cwd, rel)?;
+            self.guard_from_rel(target)
+        }
+
+        fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
+            let rel = self.split_components(from).join("/");
+            self.guard_from_rel(rel)
+        }
+
+        fn copy_from_git(&self, _rev: &str, _from: &str, _to: &GuardedPath) -> Result<()> {
+            bail!("git copy unsupported")
+        }
+    }
+
+    fn run_with_memory_fs(steps: &[Step]) -> StdHashMap<String, Vec<u8>> {
+        let fs = MemoryWorkspaceFs::new();
+        let mut state = fs.create_exec_state();
+        let mut proc = MockProcessManager::default();
+        let mut sink = Vec::new();
+        execute_steps(&mut state, &mut proc, steps, false, &mut sink).unwrap();
+        fs.snapshot()
+    }
+
+    #[test]
+    fn memory_fs_handles_workdir_and_write() {
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Mkdir("app".into()),
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Workdir("app".into()),
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Write {
+                    path: "out.txt".into(),
+                    contents: "hi".into(),
+                },
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Cat("out.txt".into()),
+            },
+        ];
+        let files = run_with_memory_fs(&steps);
+        let written = files
+            .iter()
+            .find(|(k, _)| k.ends_with("app/out.txt"))
+            .map(|(_, v)| String::from_utf8_lossy(v).to_string());
+        assert_eq!(written, Some("hi".into()));
     }
 }
