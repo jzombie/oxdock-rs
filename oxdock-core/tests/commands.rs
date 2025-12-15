@@ -215,6 +215,23 @@ fn accepts_semicolon_separated_commands() {
 }
 
 #[test]
+fn write_cmd_captures_output() {
+    let root = tempdir().unwrap();
+    let cmd = if cfg!(windows) { "echo hello" } else { "printf %s \"hello\"" };
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "out.txt".into(),
+                cmd: cmd.into(),
+            },
+        },
+    ];
+    run_steps(root.path(), &steps).unwrap();
+    assert_eq!(read_trimmed(&root.path().join("out.txt")), "hello");
+}
+
+#[test]
 fn copy_git_via_script_simple() {
     let snapshot = tempdir().unwrap();
 

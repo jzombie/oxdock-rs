@@ -219,6 +219,28 @@ fn run_steps_inner(fs_root: &Path, build_context: &Path, steps: &[Step]) -> Resu
                 fs::write(&target, contents)
                     .with_context(|| format!("failed to write {}", target.display()))?;
             }
+            StepKind::Capture { path, cmd } => {
+                let target = resolver
+                    .resolve_write(&cwd, path)
+                    .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("failed to create parent {}", parent.display()))?;
+                }
+                // Run the command in the current working directory, capture stdout.
+                let mut command = shell_cmd(cmd);
+                command.current_dir(&cwd);
+                command.envs(envs.iter());
+                command.env("CARGO_TARGET_DIR", &cargo_target_dir);
+                let out = command
+                    .output()
+                    .with_context(|| format!("step {}: CAPTURE failed to run {}", idx + 1, cmd))?;
+                if !out.status.success() {
+                    bail!("CAPTURE command failed with status {}", out.status);
+                }
+                fs::write(&target, &out.stdout)
+                    .with_context(|| format!("failed to write {}", target.display()))?;
+            }
             StepKind::Exit(code) => {
                 for child in bg_children.iter_mut() {
                     if child.try_wait()?.is_none() {
