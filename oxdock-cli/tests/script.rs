@@ -1,6 +1,7 @@
 use oxdock_cli::{Step, StepKind, run_script};
 use oxdock_fs::{GuardedPath, PathResolver};
 
+#[cfg_attr(miri, ignore(reason = "spawns subprocesses; process spawning not supported under Miri"))]
 #[test]
 fn script_runs_copy_and_symlink() {
     let temp = GuardedPath::tempdir().unwrap();
