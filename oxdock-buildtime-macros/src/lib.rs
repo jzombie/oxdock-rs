@@ -1,5 +1,4 @@
-// TODO: Add non-embedded `prepare` macro.
-// TODO: Add no-stdlib test
+// TODO: Add no-stdlib tests
 
 use oxdock_fs::PathResolver;
 use proc_macro::TokenStream;
@@ -27,6 +26,77 @@ pub fn embed(input: TokenStream) -> TokenStream {
         Ok(ts) => ts.into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Macro similar to `embed!` but only prepares (builds/copies) the
+/// out_dir at compile time and emits no runtime struct. Use this when you
+/// want the assets present on disk during build but don't want a
+/// `rust-embed` struct generated into the consuming crate.
+#[proc_macro]
+pub fn prepare(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as EmbedDslInput);
+    match expand_prepare_internal(&input) {
+        Ok(()) => TokenStream::new(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
+    let (script_src, span) = match &input.script {
+        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
+        ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
+    };
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map_err(|e| syn::Error::new(span, format!("CARGO_MANIFEST_DIR missing: {e}")))?;
+    let manifest_path = Path::new(&manifest_dir);
+    let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    fn find_git_root(start: &Path) -> bool {
+        let mut cur = Some(start);
+        while let Some(p) = cur {
+            if p.join(".git").exists() {
+                return true;
+            }
+            cur = p.parent();
+        }
+        false
+    }
+    let has_git = find_git_root(manifest_path);
+    let should_build = has_git;
+
+    let out_dir_str = input.out_dir.value();
+    let out_dir_abs = manifest_path.join(&out_dir_str);
+
+    if should_build {
+        preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
+        eprintln!("prepare: rebuilding assets into {}", out_dir_abs.display());
+        let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
+        return Ok(());
+    }
+
+    if out_dir_abs.exists() {
+        if !out_dir_abs.is_dir() {
+            return Err(syn::Error::new(
+                input.out_dir.span(),
+                format!(
+                    "out_dir exists but is not a directory: {}",
+                    out_dir_abs.display()
+                ),
+            ));
+        }
+        eprintln!("prepare: reusing assets at {}", out_dir_abs.display());
+        return Ok(());
+    }
+
+    Err(syn::Error::new(
+        span,
+        format!(
+            "prepare: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
+            out_dir_abs.display()
+        ),
+    ))
 }
 
 struct EmbedDslInput {
