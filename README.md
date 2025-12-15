@@ -69,6 +69,21 @@ OxDock supports copying files or directories out of a Git repository at a specif
 
 - Example:
 ```
+
+## Workspaces & Filesystem (draft)
+
+- **How workspaces are created:** OxDock materializes a clean workspace by using Git's archival capabilities (the CLI runs `git archive`/`tar` under the hood). That produces a copy of the repository content at HEAD without the `.git` metadata; the result is very fast and lightweight compared to full checkouts. Treat this materialized tree as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
+
+- **Typical usage pattern:** the materialized workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is just a filesystem snapshot it is safe to run multiple concurrent experiments without changing the original repo.
+
+- **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate-internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
+
+- **What `oxdock-fs` protects you from:** the guardrails are pragmatic — they prevent common mistakes such as accidentally writing outside the materialized workspace or reading files from arbitrary absolute paths. However, they are not a full sandbox: a determined process or script can still create destructive actions (e.g., invoking native `RUN` commands that modify external state). If you require strict isolation, run OxDock inside a container or VM.
+
+- **Performance:** routing via `oxdock-fs` adds negligible overhead for typical workloads. The module focuses on correctness and containment with minimal runtime cost so interactive iteration remains fast.
+
+> Note: this is a draft—feel free to tweak phrasing or add pointers on how to enable stricter isolation (examples: running inside Docker, enabling CI-only checks, or using ephemeral VMs).
+
 # copy a single file from the `release` branch
 COPY_GIT release path/to/config.toml app/config/config.toml
 
