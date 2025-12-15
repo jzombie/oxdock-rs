@@ -1,9 +1,9 @@
 // TODO: Add non-embedded `prepare` macro.
 // TODO: Add no-stdlib test
 
+use oxdock_fs::PathResolver;
 use proc_macro::TokenStream;
 use quote::quote;
-use oxdock_fs::PathResolver;
 use std::fs;
 use std::path::{Path, PathBuf};
 use syn::parse::{Parse, ParseStream};
@@ -325,13 +325,22 @@ fn preflight_out_dir_for_build(out_dir: &Path, out_dir_span: proc_macro2::Span) 
         if !out_dir.is_dir() {
             return Err(syn::Error::new(
                 out_dir_span,
-                format!("out_dir exists but is not a directory: {}", out_dir.display()),
+                format!(
+                    "out_dir exists but is not a directory: {}",
+                    out_dir.display()
+                ),
             ));
         }
     } else {
-        resolver
-            .create_dir_all_abs(out_dir)
-            .map_err(|e| syn::Error::new(out_dir_span, format!("failed to create out_dir {} during pre-check: {e}", out_dir.display())))?;
+        resolver.create_dir_all_abs(out_dir).map_err(|e| {
+            syn::Error::new(
+                out_dir_span,
+                format!(
+                    "failed to create out_dir {} during pre-check: {e}",
+                    out_dir.display()
+                ),
+            )
+        })?;
     }
 
     // Probe writeability by writing and removing a small file through the resolver.
@@ -396,14 +405,22 @@ fn build_assets(script: &str, span: proc_macro2::Span, out_dir: &Path) -> syn::R
     if out_dir.exists() {
         clear_dir(out_dir, span)?;
     } else {
-        resolver
-            .create_dir_all_abs(out_dir)
-            .map_err(|e| syn::Error::new(span, format!("failed to create out_dir {}: {e}", out_dir.display())))?;
+        resolver.create_dir_all_abs(out_dir).map_err(|e| {
+            syn::Error::new(
+                span,
+                format!("failed to create out_dir {}: {e}", out_dir.display()),
+            )
+        })?;
     }
 
     resolver
         .copy_dir_from_external(&final_cwd, out_dir)
-        .map_err(|e| syn::Error::new(span, format!("failed to copy final workdir into out_dir: {e}")))?;
+        .map_err(|e| {
+            syn::Error::new(
+                span,
+                format!("failed to copy final workdir into out_dir: {e}"),
+            )
+        })?;
     eprintln!(
         "embed: populated out_dir from final workdir; entries now: {}",
         count_entries(out_dir, span)?
@@ -429,21 +446,32 @@ fn clear_dir(dir: &Path, span: proc_macro2::Span) -> syn::Result<()> {
         ));
     }
 
-    let entries = resolver
-        .read_dir_entries(dir)
-        .map_err(|e| syn::Error::new(span, format!("failed to read out_dir {}: {e}", dir.display())))?;
+    let entries = resolver.read_dir_entries(dir).map_err(|e| {
+        syn::Error::new(
+            span,
+            format!("failed to read out_dir {}: {e}", dir.display()),
+        )
+    })?;
 
     for entry in entries {
         let path = entry.path();
-        let ft = entry.file_type().map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
         if ft.is_dir() {
-            resolver
-                .remove_dir_all_abs(&path)
-                .map_err(|e| syn::Error::new(span, format!("failed to remove dir {}: {e}", path.display())))?;
+            resolver.remove_dir_all_abs(&path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to remove dir {}: {e}", path.display()),
+                )
+            })?;
         } else {
-            resolver
-                .remove_file_abs(&path)
-                .map_err(|e| syn::Error::new(span, format!("failed to remove file {}: {e}", path.display())))?;
+            resolver.remove_file_abs(&path).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to remove file {}: {e}", path.display()),
+                )
+            })?;
         }
     }
     Ok(())
@@ -463,10 +491,10 @@ fn count_entries(dir: &Path, span: proc_macro2::Span) -> syn::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxdock_fs::PathResolver;
     use serial_test::serial;
     use std::env;
     use std::fs;
-    use oxdock_fs::PathResolver;
 
     #[test]
     #[serial]

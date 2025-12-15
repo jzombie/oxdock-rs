@@ -12,9 +12,9 @@ publish.workspace = true
 anyhow.workspace = true
 oxdock-buildtime-macros.workspace = true
 oxdock-core.workspace = true
+oxdock-fs.workspace = true
 rust-embed.workspace = true
 tempfile.workspace = true
-oxdock-fs.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true

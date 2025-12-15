@@ -9,7 +9,9 @@ fn script_runs_copy_and_symlink() {
     // Prepare minimal workspace structure using the PathResolver to avoid
     // calling `std::fs` directly from non-fs crates.
     let resolver = PathResolver::new(root, root);
-    resolver.create_dir_all_abs(&root.join("client/dist")).unwrap();
+    resolver
+        .create_dir_all_abs(&root.join("client/dist"))
+        .unwrap();
     resolver.create_dir_all_abs(&root.join("server")).unwrap();
     // Seed dist with a file
     resolver

@@ -489,7 +489,8 @@ impl PathResolver {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(e).with_context(|| format!("failed to remove file {}", guarded.display()))
+                return Err(e)
+                    .with_context(|| format!("failed to remove file {}", guarded.display()));
             }
         }
         Ok(())
@@ -571,8 +572,8 @@ impl PathResolver {
     /// external device files or temporary locations.
     #[allow(clippy::disallowed_methods)]
     pub fn open_external_file(&self, path: &Path) -> Result<std::fs::File> {
-        let f = fs::File::open(path)
-            .with_context(|| format!("failed to open {}", path.display()))?;
+        let f =
+            fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
         Ok(f)
     }
 }

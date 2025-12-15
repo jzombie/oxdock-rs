@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
+use oxdock_fs::PathResolver;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use oxdock_fs::PathResolver;
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
@@ -173,7 +173,9 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     // Copy the current executable into the temporary location via a
     // resolver whose root is the temp directory. The source may live
     // outside the temp dir, so use `copy_file_from_external`.
-    let temp_root = temp_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+    let temp_root = temp_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("/"));
     let resolver_temp = PathResolver::new(temp_root, temp_root);
     resolver_temp
         .copy_file_from_external(&self_path, &temp_path)
