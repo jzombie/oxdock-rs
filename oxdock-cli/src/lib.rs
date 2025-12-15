@@ -3,7 +3,7 @@ use oxdock_fs::PathResolver;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
@@ -25,12 +25,14 @@ pub enum ScriptSource {
 pub struct Options {
     pub script: ScriptSource,
     pub shell: bool,
+    pub inline: bool,
 }
 
 impl Options {
     pub fn parse(args: &mut impl Iterator<Item = String>) -> Result<Self> {
         let mut script: Option<ScriptSource> = None;
         let mut shell = false;
+        let mut inline = false;
         while let Some(arg) = args.next() {
             if arg.is_empty() {
                 continue;
@@ -49,13 +51,18 @@ impl Options {
                 "--shell" => {
                     shell = true;
                 }
+                "--inline" => {
+                    // Read script interactively from the terminal (type the script,
+                    // finish with a single '.' on a line or Ctrl-D).
+                    inline = true;
+                }
                 other => bail!("unexpected flag: {}", other),
             }
         }
 
         let script = script.unwrap_or(ScriptSource::Stdin);
 
-        Ok(Self { script, shell })
+        Ok(Self { script, shell, inline })
     }
 }
 
@@ -91,10 +98,11 @@ pub fn execute(opts: Options) -> Result<()> {
         ScriptSource::Stdin => {
             let stdin = io::stdin();
             if stdin.is_terminal() {
-                // No piped script provided. If the caller requested `--shell`,
-                // allow running with an empty script and drop into the interactive
-                // shell afterwards. Otherwise, require a script on stdin.
-                if opts.shell {
+                // No piped script provided. If the caller requested `--shell` or
+                // `--inline`, allow running with an initially-empty script so we
+                // can either drop into the interactive shell or open the editor
+                // later. Otherwise, require a script on stdin.
+                if opts.shell || opts.inline {
                     String::new()
                 } else {
                     bail!(
@@ -111,6 +119,15 @@ pub fn execute(opts: Options) -> Result<()> {
             }
         }
     };
+
+    // If the caller requested inline editing, open the user's default editor
+    // on a temporary file and read the contents as the script. The editor is
+    // chosen from `$VISUAL`, then `$EDITOR`. On Unix fall back to `nano` or
+    // `vi`; on Windows fall back to `notepad`.
+    let mut script = script;
+    if opts.inline {
+        script = open_editor_and_read().context("failed to read inline script from editor")?;
+    }
     // Parse and run steps if we have a non-empty script. Empty scripts are
     // valid when `--shell` is requested and the caller didn't pipe a script.
     if !script.trim().is_empty() {
@@ -305,6 +322,80 @@ fn run_cmd(cmd: &mut Command) -> Result<()> {
         bail!("command {:?} failed with status {}", cmd, status);
     }
     Ok(())
+}
+
+// TODO: Don't hardcode internal config
+fn open_editor_and_read() -> Result<String> {
+    // Create a named temp file for editing.
+    let tmp = tempfile::NamedTempFile::new().context("create temp file for editor")?;
+    let path = tmp.path().to_path_buf();
+
+    // Determine a per-user cache path to store the last inline script.
+    fn last_inline_path() -> Option<std::path::PathBuf> {
+        if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
+            return Some(std::path::PathBuf::from(x).join("oxdock").join("last_inline"));
+        }
+        if cfg!(windows) {
+            if let Ok(app) = std::env::var("APPDATA") {
+                return Some(std::path::PathBuf::from(app).join("oxdock").join("last_inline"));
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return Some(std::path::PathBuf::from(home).join(".config").join("oxdock").join("last_inline"));
+        }
+        None
+    }
+
+    // If a cached inline script exists, preload it into the temp file so the
+    // editor opens with the previous content.
+    if let Some(cache) = last_inline_path() {
+        if cache.exists() {
+            if let Ok(prev) = std::fs::read_to_string(&cache) {
+                let _ = std::fs::write(&path, prev);
+            }
+        }
+    }
+
+    // Choose editor: VISUAL, EDITOR, then sensible defaults.
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "notepad".to_string()
+            } else {
+                // prefer nano if available, otherwise vi
+                "nano".to_string()
+            }
+        });
+
+    // Spawn editor attached to the current terminal so users can interact.
+    let mut cmd = Command::new(editor);
+    cmd.arg(&path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    let status = cmd.status().context("failed to launch editor")?;
+    if !status.success() {
+        bail!("editor exited with status {}", status);
+    }
+
+    // Read the file contents back (tmp stays until drop)
+    let mut contents = String::new();
+    std::fs::File::open(&path)
+        .and_then(|mut f| f.read_to_string(&mut contents))
+        .with_context(|| format!("failed to read edited file {}", path.display()))?;
+
+    // Save the edited script back to the cache for next time. Ignore errors
+    // so the editor flow remains best-effort.
+    if let Some(cache) = last_inline_path() {
+        if let Some(parent) = cache.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&cache, &contents);
+    }
+
+    Ok(contents)
 }
 
 fn archive_head(workspace_root: &Path, temp_root: &Path) -> Result<()> {
