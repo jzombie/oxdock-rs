@@ -312,18 +312,13 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         );
 
         // Emit a dummy struct that matches the public API but has no assets.
+        // We use the oxdock_fs::define_embed macro to handle the struct definition
+        // and ensure the correct cfg(miri) behavior is applied in the generated code.
+        // Note: We pass a dummy folder path because the macro requires it, but it won't be used under Miri.
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
             mod #mod_ident {
-                pub struct #name;
-                impl #name {
-                    pub fn get(_file: &str) -> Option<rust_embed::EmbeddedFile> {
-                        None
-                    }
-                    pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
-                        std::iter::empty()
-                    }
-                }
+                oxdock_fs::define_embed!(#name, ".");
             }
             pub use #mod_ident::#name;
         });
@@ -363,9 +358,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         return Ok(quote! {
             #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
             mod #mod_ident {
-                #[derive(::rust_embed::RustEmbed)]
-                #[folder = #folder_lit]
-                pub struct #name;
+                oxdock_fs::define_embed!(#name, #folder_lit);
             }
             pub use #mod_ident::#name;
         });
@@ -396,9 +389,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
             mod #mod_ident {
-                #[derive(::rust_embed::RustEmbed)]
-                #[folder = #out_dir_lit]
-                pub struct #name;
+                oxdock_fs::define_embed!(#name, #out_dir_lit);
             }
             pub use #mod_ident::#name;
         });
@@ -609,6 +600,7 @@ mod tests {
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
     use std::env;
+    use syn::parse::Parser;
 
     fn guard_root(path: &UnguardedPath) -> GuardedPath {
         GuardedPath::new_root(path.as_path()).unwrap()
@@ -941,41 +933,45 @@ mod tests {
     }
 
     fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {
-        // The macro now emits a module wrapping the derived struct. Support
-        // both direct structs and module-wrapped structs for robustness.
+        // The macro now emits a call to oxdock_fs::define_embed!(Name, "path").
+        // We need to parse this macro call and extract the second argument.
         let file: syn::File = syn::parse2(ts.clone()).expect("parse output as file");
 
-        // Helper to extract folder attribute from a struct item
-        fn folder_from_struct(item: &syn::ItemStruct) -> Option<String> {
-            item.attrs.iter().find_map(|a| {
-                if a.path().is_ident("folder")
-                    && let syn::Meta::NameValue(ref nv) = a.meta
-                    && let syn::Expr::Lit(expr_lit) = &nv.value
+        fn extract_folder_from_macro(m: &syn::ItemMacro) -> Option<String> {
+            if m.mac.path.segments.last().unwrap().ident == "define_embed" {
+                let tokens = &m.mac.tokens;
+                // Parse the tokens as a comma-separated list of expressions
+                let parser =
+                    syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+                let args = parser.parse2(tokens.clone()).ok()?;
+
+                if args.len() >= 2
+                    && let syn::Expr::Lit(expr_lit) = &args[1]
                     && let syn::Lit::Str(ref litstr) = expr_lit.lit
                 {
                     return Some(litstr.value());
                 }
-                None
-            })
+            }
+            None
         }
 
-        // Search top-level items first
+        // Search top-level items
         for item in &file.items {
-            if let syn::Item::Struct(s) = item
-                && let Some(f) = folder_from_struct(s)
+            if let syn::Item::Macro(m) = item
+                && let Some(f) = extract_folder_from_macro(m)
             {
                 return f;
             }
         }
 
-        // Then look for the wrapped module and extract the struct inside
+        // Search inside modules
         for item in &file.items {
             if let syn::Item::Mod(m) = item
                 && let Some((_, items)) = &m.content
             {
                 for inner in items {
-                    if let syn::Item::Struct(s) = inner
-                        && let Some(f) = folder_from_struct(s)
+                    if let syn::Item::Macro(inner_macro) = inner
+                        && let Some(f) = extract_folder_from_macro(inner_macro)
                     {
                         return f;
                     }
@@ -983,6 +979,6 @@ mod tests {
             }
         }
 
-        panic!("folder attribute not found");
+        panic!("folder attribute or define_embed! macro not found");
     }
 }

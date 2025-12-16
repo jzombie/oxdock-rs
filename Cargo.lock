@@ -98,6 +98,7 @@ name = "fixture-build-from-manifest"
 version = "0.1.0-alpha"
 dependencies = [
  "oxdock-buildtime-macros",
+ "oxdock-fs",
  "rust-embed",
 ]
 
@@ -280,11 +281,9 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
- "oxdock-buildtime-macros",
  "oxdock-core",
  "oxdock-fs",
  "oxdock-process",
- "rust-embed",
  "tempfile",
 ]
 
@@ -303,6 +302,7 @@ name = "oxdock-fs"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "rust-embed",
  "tempfile",
 ]
 

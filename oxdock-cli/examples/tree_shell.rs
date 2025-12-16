@@ -1,3 +1,5 @@
+// TODO: Rework this example; it's currently useless
+
 use oxdock_cli::{parse_script, run_script};
 use oxdock_fs::GuardedPath;
 
