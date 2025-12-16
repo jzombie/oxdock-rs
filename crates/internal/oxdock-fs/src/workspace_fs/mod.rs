@@ -153,11 +153,69 @@ impl PathResolver {
         let build_guard = GuardedPath::new_root(build_context)?;
         #[cfg(miri)]
         let (root_state, build_state) = {
+            use std::fs;
             let root_state = Rc::new(RefCell::new(SyntheticRootState::new()));
+            // Seed synthetic state with any existing host files/dirs under the root so
+            // multiple resolver instances see the same initial contents (we mirror
+            // writes to the host filesystem elsewhere).
+            if root_guard.as_path().exists() {
+                fn walk(dir: &std::path::Path, rel_prefix: &str, state: &mut SyntheticRootState) {
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            let rel = if rel_prefix.is_empty() {
+                                name.clone()
+                            } else {
+                                format!("{}/{}", rel_prefix, name)
+                            };
+                            if let Ok(ft) = entry.file_type() {
+                                if ft.is_dir() {
+                                    state.ensure_dir(&rel);
+                                    walk(&path, &rel, state);
+                                } else if ft.is_file() {
+                                    if let Ok(data) = fs::read(&path) {
+                                        state.write_file(&rel, &data);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                walk(root_guard.as_path(), "", &mut root_state.borrow_mut());
+            }
+
             if root_guard.as_path() == build_guard.as_path() {
                 (root_state.clone(), root_state)
             } else {
-                (root_state, Rc::new(RefCell::new(SyntheticRootState::new())))
+                let build_state = Rc::new(RefCell::new(SyntheticRootState::new()));
+                if build_guard.as_path().exists() {
+                    fn walk_build(dir: &std::path::Path, rel_prefix: &str, state: &mut SyntheticRootState) {
+                        if let Ok(entries) = std::fs::read_dir(dir) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                let name = entry.file_name().to_string_lossy().to_string();
+                                let rel = if rel_prefix.is_empty() {
+                                    name.clone()
+                                } else {
+                                    format!("{}/{}", rel_prefix, name)
+                                };
+                                if let Ok(ft) = entry.file_type() {
+                                    if ft.is_dir() {
+                                        state.ensure_dir(&rel);
+                                        walk_build(&path, &rel, state);
+                                    } else if ft.is_file() {
+                                        if let Ok(data) = fs::read(&path) {
+                                            state.write_file(&rel, &data);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    walk_build(build_guard.as_path(), "", &mut build_state.borrow_mut());
+                }
+                (root_state, build_state)
             }
         };
         Ok(Self {
@@ -362,5 +420,3 @@ use access::guard_path;
 
 #[cfg(feature = "mock-fs")]
 pub mod mock;
-
-// PathResolver is exported at crate root via `lib.rs` re-export.

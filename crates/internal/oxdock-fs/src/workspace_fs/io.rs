@@ -60,6 +60,15 @@ impl PathResolver {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read_dir denied for {}", path.display()))?;
+        // Prefer real host FS entries if they exist (we mirror writes there),
+        // otherwise fall back to synthetic in-memory entries.
+        if guarded.as_path().exists() {
+            let entries = fs::read_dir(guarded.as_path())
+                .with_context(|| format!("failed to read dir {}", guarded.display()))?;
+            let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
+            return Ok(vec);
+        }
+
         let rel = Self::normalize_rel(&guarded);
         let state_ref = self.state_for_guard(&guarded);
         let state = state_ref.borrow();
@@ -89,6 +98,12 @@ impl PathResolver {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
+        // Prefer host file if present (we mirror writes to host), else fall back to synthetic state.
+        if guarded.as_path().exists() {
+            let data = fs::read(guarded.as_path())
+                .with_context(|| format!("failed to read {}", guarded.display()))?;
+            return Ok(data);
+        }
         let rel = Self::normalize_rel(&guarded);
         let data = self.state_for_guard(&guarded).borrow().read_file(&rel)?;
         Ok(data)
