@@ -310,7 +310,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             &format!("__oxdock_embed_{}", name),
             proc_macro2::Span::call_site(),
         );
-        
+
         // Emit a dummy struct that matches the public API but has no assets.
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
