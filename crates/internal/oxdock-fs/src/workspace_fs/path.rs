@@ -22,7 +22,6 @@ static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub struct GuardedPath {
     root: PathBuf,
     path: PathBuf,
-    synthetic: bool,
 }
 
 impl GuardedPath {
@@ -32,7 +31,6 @@ impl GuardedPath {
         Ok(Self {
             root: root.to_path_buf(),
             path: guarded,
-            synthetic: false,
         })
     }
 
@@ -49,7 +47,6 @@ impl GuardedPath {
         Ok(Self {
             root: guarded.clone(),
             path: guarded,
-            synthetic: false,
         })
     }
 
@@ -101,7 +98,6 @@ impl GuardedPath {
         let guard = GuardedPath {
             root: path.clone(),
             path,
-            synthetic: true,
         };
         Ok(GuardedTempDir::new(guard, None))
     }
@@ -133,38 +129,18 @@ impl GuardedPath {
     }
 
     pub fn join(&self, rel: &str) -> Result<Self> {
-        if self.synthetic {
-            Ok(Self {
-                root: self.root.clone(),
-                path: self.path.join(rel),
-                synthetic: true,
-            })
-        } else {
-            GuardedPath::new(&self.root, &self.path.join(rel))
-        }
+        GuardedPath::new(&self.root, &self.path.join(rel))
     }
 
     /// Return the parent directory as a guarded path, if it exists within the same root.
     pub fn parent(&self) -> Option<Self> {
         let parent = self.path.parent()?.to_path_buf();
-        if self.synthetic {
-            Some(Self {
-                root: self.root.clone(),
-                path: parent,
-                synthetic: true,
-            })
-        } else {
-            GuardedPath::new(&self.root, &parent).ok()
-        }
+        GuardedPath::new(&self.root, &parent).ok()
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
-        Self {
-            root,
-            path,
-            synthetic: false,
-        }
+        Self { root, path }
     }
 }
 
@@ -209,17 +185,20 @@ impl PathLike for GuardedPath {
 
 /// Temporary directory that cleans itself up on drop while exposing the guarded path.
 pub struct GuardedTempDir {
-    guard: GuardedPath,
+    guard: Option<GuardedPath>,
     tempdir: Option<TempDir>,
 }
 
 impl GuardedTempDir {
     fn new(guard: GuardedPath, tempdir: Option<TempDir>) -> Self {
-        Self { guard, tempdir }
+        Self {
+            guard: Some(guard),
+            tempdir,
+        }
     }
 
     pub fn as_guarded_path(&self) -> &GuardedPath {
-        &self.guard
+        self.guard.as_ref().unwrap()
     }
 
     /// Prevent automatic cleanup and return the guarded path rooted at the
@@ -229,11 +208,11 @@ impl GuardedTempDir {
         if let Some(tempdir) = self.tempdir.take() {
             let _ = tempdir.into_path();
         }
-        self.guard
+        self.guard.take().unwrap()
     }
 
-    pub fn into_parts(self) -> (Option<TempDir>, GuardedPath) {
-        (self.tempdir, self.guard)
+    pub fn into_parts(mut self) -> (Option<TempDir>, GuardedPath) {
+        (self.tempdir.take(), self.guard.take().unwrap())
     }
 }
 
@@ -241,14 +220,25 @@ impl std::ops::Deref for GuardedTempDir {
     type Target = GuardedPath;
 
     fn deref(&self) -> &Self::Target {
-        &self.guard
+        self.guard.as_ref().unwrap()
+    }
+}
+
+impl Drop for GuardedTempDir {
+    fn drop(&mut self) {
+        #[cfg(miri)]
+        {
+            if let Some(guard) = &self.guard {
+                super::backend::cleanup_synthetic_root(guard.root());
+            }
+        }
     }
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 impl std::fmt::Display for GuardedTempDir {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.guard.fmt(f)
+        self.guard.as_ref().unwrap().fmt(f)
     }
 }
 

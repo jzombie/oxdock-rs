@@ -203,10 +203,12 @@ impl PathResolver {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use std::path::Path;
 
     fn resolver() -> Result<PathResolver> {
-        PathResolver::new(Path::new("/synthetic-root"), Path::new("/synthetic-root"))
+        let temp = GuardedPath::tempdir()?;
+        let guard = temp.as_guarded_path().clone();
+        std::mem::forget(temp);
+        PathResolver::new_guarded(guard.clone(), guard)
     }
 
     #[test]

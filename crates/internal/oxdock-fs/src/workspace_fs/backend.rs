@@ -155,8 +155,8 @@ mod miri_backend {
     > = OnceLock::new();
 
     pub(in crate::workspace_fs) struct MiriBackend {
-        root_state: Arc<Mutex<SyntheticRootState>>,
-        build_state: Arc<Mutex<SyntheticRootState>>,
+        root_state: Option<Arc<Mutex<SyntheticRootState>>>,
+        build_state: Option<Arc<Mutex<SyntheticRootState>>>,
         root_path: std::path::PathBuf,
     }
 
@@ -166,25 +166,32 @@ mod miri_backend {
 
             if root.as_path() == build.as_path() {
                 Ok(Self {
-                    root_state: root_state.clone(),
-                    build_state: root_state,
+                    root_state: Some(root_state.clone()),
+                    build_state: Some(root_state),
                     root_path: root.as_path().to_path_buf(),
                 })
             } else {
                 let build_state = shared_state_for(build.as_path());
                 Ok(Self {
-                    root_state,
-                    build_state,
+                    root_state: Some(root_state),
+                    build_state: Some(build_state),
                     root_path: root.as_path().to_path_buf(),
                 })
             }
         }
 
-        fn state_for_guard_rc(&self, guard: &GuardedPath) -> Arc<Mutex<SyntheticRootState>> {
+        fn state_for_guard_rc(
+            &self,
+            guard: &GuardedPath,
+        ) -> Result<Arc<Mutex<SyntheticRootState>>> {
             if guard.root() == self.root_path.as_path() {
-                self.root_state.clone()
+                self.root_state
+                    .clone()
+                    .ok_or_else(|| anyhow!("synthetic state missing for root"))
             } else {
-                self.build_state.clone()
+                self.build_state
+                    .clone()
+                    .ok_or_else(|| anyhow!("synthetic state missing for build context"))
             }
         }
     }
@@ -200,7 +207,7 @@ mod miri_backend {
 
     impl BackendImpl for MiriBackend {
         fn create_dir_all_abs(&self, _root: &GuardedPath, path: &GuardedPath) -> Result<()> {
-            let state = self.state_for_guard_rc(path);
+            let state = self.state_for_guard_rc(path)?;
             let rel = normalize_rel(path);
             state.lock().expect("miri state poisoned").ensure_dir(&rel);
             Ok(())
@@ -208,7 +215,7 @@ mod miri_backend {
 
         fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>> {
             let rel = normalize_rel(path);
-            let state_ref = self.state_for_guard_rc(path);
+            let state_ref = self.state_for_guard_rc(path)?;
             let state = state_ref.lock().expect("miri state poisoned");
             if !state.dir_exists(&rel) {
                 bail!("directory does not exist: {}", path.display());
@@ -223,7 +230,7 @@ mod miri_backend {
         fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
             let rel = normalize_rel(path);
             let data = self
-                .state_for_guard_rc(path)
+                .state_for_guard_rc(path)?
                 .lock()
                 .expect("miri state poisoned")
                 .read_file(&rel)?;
@@ -232,7 +239,7 @@ mod miri_backend {
 
         fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
             let rel = normalize_rel(path);
-            let binding = self.state_for_guard_rc(path);
+            let binding = self.state_for_guard_rc(path)?;
             binding
                 .lock()
                 .expect("miri state poisoned")
@@ -246,7 +253,7 @@ mod miri_backend {
 
         fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
             let rel = normalize_rel(path);
-            let binding = self.state_for_guard_rc(path);
+            let binding = self.state_for_guard_rc(path)?;
             let state = binding.lock().expect("miri state poisoned");
             if let Some(kind) = state.entry_kind(&rel) {
                 synthetic_metadata(kind)
@@ -257,7 +264,7 @@ mod miri_backend {
 
         fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
             let rel = normalize_rel(path);
-            let binding = self.state_for_guard_rc(path);
+            let binding = self.state_for_guard_rc(path)?;
             let state = binding.lock().expect("miri state poisoned");
             state
                 .entry_kind(&rel)
@@ -266,7 +273,7 @@ mod miri_backend {
 
         fn resolve_workdir(&self, resolved: GuardedPath) -> Result<GuardedPath> {
             let rel = normalize_rel(&resolved);
-            let state = self.state_for_guard_rc(&resolved);
+            let state = self.state_for_guard_rc(&resolved)?;
 
             {
                 let mut state_mut = state.lock().expect("miri state poisoned");
@@ -281,7 +288,7 @@ mod miri_backend {
         fn resolve_copy_source(&self, guarded: GuardedPath) -> Result<GuardedPath> {
             let rel = normalize_rel(&guarded);
             let kind = self
-                .state_for_guard_rc(&guarded)
+                .state_for_guard_rc(&guarded)?
                 .lock()
                 .expect("miri state poisoned")
                 .entry_kind(&rel)
@@ -300,7 +307,7 @@ mod miri_backend {
 
         fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
             let rel = normalize_rel(path);
-            self.state_for_guard_rc(path)
+            self.state_for_guard_rc(path)?
                 .lock()
                 .expect("miri state poisoned")
                 .remove_file(&rel);
@@ -309,7 +316,7 @@ mod miri_backend {
 
         fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
             let rel = normalize_rel(path);
-            self.state_for_guard_rc(path)
+            self.state_for_guard_rc(path)?
                 .lock()
                 .expect("miri state poisoned")
                 .remove_dir_all(&rel);
@@ -493,6 +500,19 @@ mod miri_backend {
             entries.into_iter().collect()
         }
     }
+
+    pub(super) fn cleanup_root(path: &std::path::Path) {
+        if let Some(registry) = STATE_REGISTRY.get() {
+            let mut guard = registry.lock().expect("miri state registry poisoned");
+            guard.remove(path);
+        }
+    }
+}
+
+#[cfg(miri)]
+#[allow(clippy::disallowed_types)]
+pub(super) fn cleanup_synthetic_root(root: &std::path::Path) {
+    miri_backend::cleanup_root(root);
 }
 
 /// Public backend delegator used by `PathResolver`. It holds either a host

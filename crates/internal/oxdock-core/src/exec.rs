@@ -92,7 +92,7 @@ fn run_steps_with_manager<P: ProcessManager>(
     steps: &[Step],
     process: P,
 ) -> Result<GuardedPath> {
-    let resolver = PathResolver::new(fs_root.as_path(), build_context.as_path())?;
+    let resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
     let cwd = resolver.root().clone();
     let mut state = ExecState {
         fs: Box::new(resolver),

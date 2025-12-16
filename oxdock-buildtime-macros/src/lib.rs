@@ -48,22 +48,14 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let manifest_resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    #[cfg(not(miri))]
+
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    #[cfg(not(miri))]
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
 
-    // Under cfg(miri) we still allow building assets when they are missing so
-    // clippy/miri builds do not fail simply because the prebuilt out_dir is
-    // absent in the checkout. This remains guarded by the same PathResolver
-    // used elsewhere, so path checks stay consistent.
-    #[cfg(miri)]
-    let should_build = true;
-    #[cfg(not(miri))]
     let should_build = has_git || is_primary;
 
     let out_dir_str = input.out_dir.value();
@@ -289,17 +281,15 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let manifest_resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    #[cfg(not(miri))]
+
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
 
-    #[cfg(not(miri))]
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
-    #[cfg(miri)]
-    let _has_git = false;
+
     // Allow building whenever the crate is the primary package or a Git checkout is present.
     // In a crates.io tarball (no .git) or when compiling as a non-primary package, we
     // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
@@ -307,10 +297,8 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    #[cfg(not(miri))]
+
     let should_build = has_git || is_primary || force_rebuild;
-    #[cfg(miri)]
-    let should_build = false;
 
     let name = &input.name;
 

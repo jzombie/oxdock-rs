@@ -154,6 +154,15 @@ impl PathResolver {
         })
     }
 
+    pub fn new_guarded(root: GuardedPath, build_context: GuardedPath) -> Result<Self> {
+        let backend = Backend::new(&root, &build_context)?;
+        Ok(Self {
+            root,
+            build_context,
+            backend,
+        })
+    }
+
     pub fn root(&self) -> &GuardedPath {
         &self.root
     }
