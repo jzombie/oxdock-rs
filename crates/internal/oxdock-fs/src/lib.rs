@@ -6,6 +6,9 @@ pub use workspace_fs::{GuardedPath, GuardedTempDir, PathResolver};
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
 
+#[cfg(feature = "memory-fs")]
+pub use workspace_fs::memory::MemoryWorkspaceFs;
+
 /// Trait implemented by both `GuardedPath` and `UnguardedPath` so callers can
 /// rely on a consistent set of path helper methods. This includes a small set
 /// of constructors and a `root` accessor so code that needs to treat either

@@ -75,4 +75,7 @@ mod io;
 mod resolve;
 use access::guard_path;
 
+#[cfg(feature = "memory-fs")]
+pub mod memory;
+
 // PathResolver is exported at crate root via `lib.rs` re-export.

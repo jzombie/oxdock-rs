@@ -15,3 +15,4 @@ oxdock-process.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+oxdock-fs = { workspace = true, features = ["memory-fs"] }

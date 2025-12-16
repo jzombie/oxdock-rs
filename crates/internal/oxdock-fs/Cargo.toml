@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+memory-fs = []
+
 [dependencies]
 anyhow.workspace = true
 oxdock-process.workspace = true
