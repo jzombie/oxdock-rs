@@ -6,6 +6,7 @@ use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use std::borrow::Cow;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::{Builder, TempDir};
@@ -295,4 +296,40 @@ impl PathLike for UnguardedPath {
     fn new_root(root: &Path) -> Result<Self> {
         Ok(UnguardedPath::new(root.to_path_buf()))
     }
+}
+
+/// Convert a guarded path into a platform-normalized `Path` suitable for
+/// passing to system `Command` APIs. This lives in `oxdock-fs` so that
+/// usage of `std::path::Path` stays inside the crate that is allowed to touch
+/// host path types and syscalls.
+#[allow(clippy::disallowed_types)]
+pub fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.as_path().components();
+    if let Some(Component::Prefix(prefix)) = components.next() {
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => {
+                let mut buf = PathBuf::from(format!("{}:", char::from(drive)));
+                buf.extend(components);
+                return Cow::Owned(buf);
+            }
+            Prefix::VerbatimUNC(server, share) => {
+                let mut buf = PathBuf::from(r"\\");
+                buf.push(server);
+                buf.push(share);
+                buf.extend(components);
+                return Cow::Owned(buf);
+            }
+            Prefix::Verbatim(_) => {
+                let mut buf = PathBuf::new();
+                buf.push(prefix.as_os_str());
+                buf.extend(components);
+                return Cow::Owned(buf);
+            }
+            _ => {}
+        }
+    }
+
+    Cow::Borrowed(path.as_path())
 }

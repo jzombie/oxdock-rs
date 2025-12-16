@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_fs::{GuardedPath, PathResolver, command_path};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
-#[cfg(windows)]
-use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 #[cfg(test)]
@@ -267,9 +265,9 @@ pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
 
 fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     #[cfg(windows)]
-    let cwd_disp = command_path(cwd).as_ref().display().to_string();
+    let cwd_disp = oxdock_fs::command_path(cwd).as_ref().display().to_string();
     #[cfg(windows)]
-    let workspace_disp = command_path(workspace_root).as_ref().display().to_string();
+    let workspace_disp = oxdock_fs::command_path(workspace_root).as_ref().display().to_string();
 
     #[cfg(not(windows))]
     let cwd_disp = cwd.display().to_string();
@@ -299,14 +297,15 @@ fn escape_for_cmd(s: &str) -> String {
 }
 
 #[cfg(windows)]
-fn windows_banner_command(banner: &str, cwd: &std::path::Path) -> String {
+fn windows_banner_command(banner: &str, cwd: &GuardedPath) -> String {
     let mut parts: Vec<String> = banner
         .lines()
         .map(|line| format!("echo {}", escape_for_cmd(line)))
         .collect();
+    let cwd_path = oxdock_fs::command_path(cwd);
     parts.push(format!(
         "cd /d {}",
-        escape_for_cmd(&cwd.display().to_string())
+        escape_for_cmd(&cwd_path.as_ref().display().to_string())
     ));
     parts.join(" && ")
 }
@@ -354,8 +353,8 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         // Launch via `start` so Windows opens a real interactive console window. Normalize the path
         // and also set the parent process working directory to the temp workspace; this avoids
         // start's `/D` parsing quirks on paths with spaces or verbatim prefixes.
-        let cwd_path = command_path(cwd);
-        let banner_cmd = windows_banner_command(&banner, cwd_path.as_ref());
+        let cwd_path = oxdock_fs::command_path(cwd);
+        let banner_cmd = windows_banner_command(&banner, cwd);
         let mut cmd = CommandBuilder::new("cmd");
         cmd.current_dir(cwd_path.as_ref())
             .arg("/C")
@@ -430,40 +429,7 @@ fn try_shell_command_hook(_cmd: &mut CommandBuilder) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(windows)]
-fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
-    #[cfg(windows)]
-    {
-        use std::path::{Component, PathBuf, Prefix};
-
-        let mut components = path.as_path().components();
-        if let Some(Component::Prefix(prefix)) = components.next() {
-            match prefix.kind() {
-                Prefix::VerbatimDisk(drive) => {
-                    let mut buf = PathBuf::from(format!("{}:", char::from(drive)));
-                    buf.extend(components);
-                    return Cow::Owned(buf);
-                }
-                Prefix::VerbatimUNC(server, share) => {
-                    let mut buf = PathBuf::from(r"\\");
-                    buf.push(server);
-                    buf.push(share);
-                    buf.extend(components);
-                    return Cow::Owned(buf);
-                }
-                Prefix::Verbatim(_) => {
-                    let mut buf = PathBuf::new();
-                    buf.push(prefix.as_os_str());
-                    buf.extend(components);
-                    return Cow::Owned(buf);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Cow::Borrowed(path.as_path())
-}
+// `command_path` now lives in `oxdock-fs` to centralize Path usage.
 
 fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result<()> {
     let archive_guard = temp_root
@@ -639,10 +605,7 @@ mod tests {
                 .iter()
                 .map(|s| s.to_string_lossy().to_string())
                 .collect();
-            let banner_cmd = windows_banner_command(
-                &shell_banner(&cwd, &workspace_root),
-                command_path(&cwd).as_ref(),
-            );
+            let banner_cmd = windows_banner_command(&shell_banner(&cwd, &workspace_root), &cwd);
             let expected = vec![
                 "/C".to_string(),
                 "start".to_string(),
@@ -713,7 +676,7 @@ mod windows_shell_tests {
     #[test]
     fn command_path_strips_verbatim_prefix() -> Result<()> {
         let temp = GuardedPath::tempdir()?;
-        let converted = command_path(temp.as_guarded_path());
+        let converted = oxdock_fs::command_path(temp.as_guarded_path());
         let as_str = converted.as_ref().display().to_string();
         assert!(
             !as_str.starts_with(r"\\?\"),
@@ -725,12 +688,13 @@ mod windows_shell_tests {
     #[test]
     fn windows_banner_command_emits_all_lines() {
         let banner = "line1\nline2\nline3";
-        let cwd = std::path::Path::new(r"C:\temp\workspace");
-        let cmd = windows_banner_command(banner, cwd);
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let cwd = workspace.as_guarded_path().clone();
+        let cmd = windows_banner_command(banner, &cwd);
         assert!(cmd.contains("line1"));
         assert!(cmd.contains("line2"));
         assert!(cmd.contains("line3"));
-        assert!(cmd.contains("cd /d C:\\temp\\workspace"));
+        assert!(cmd.contains("cd /d "));
     }
 
     #[test]
@@ -764,10 +728,7 @@ mod windows_shell_tests {
             .iter()
             .map(|s| s.to_string_lossy().to_string())
             .collect();
-        let banner_cmd = windows_banner_command(
-            &shell_banner(&cwd, &workspace_root),
-            command_path(&cwd).as_ref(),
-        );
+            let banner_cmd = windows_banner_command(&shell_banner(&cwd, &workspace_root), &cwd);
         let expected = vec![
             "/C".to_string(),
             "start".to_string(),

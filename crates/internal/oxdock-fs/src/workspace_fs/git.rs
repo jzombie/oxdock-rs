@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 #[cfg(not(miri))]
 use std::ffi::OsStr;
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
 use std::process::{Command, Output};
 
 #[cfg(not(miri))]
@@ -11,8 +12,10 @@ use crate::GuardedPath;
 #[cfg(not(miri))]
 use anyhow::bail;
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
 use std::path::PathBuf;
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 impl PathResolver {
     #[cfg(not(miri))]
     fn git_command(&self) -> GitCommand {
@@ -236,7 +239,7 @@ struct GitCommand {
 }
 
 #[cfg(not(miri))]
-#[allow(clippy::disallowed_methods)]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 impl GitCommand {
     fn new(cwd: &std::path::Path) -> Self {
         let mut cmd = Command::new("git");

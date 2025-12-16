@@ -1,7 +1,7 @@
 #[cfg(not(miri))]
 use anyhow::Context;
 use anyhow::{Result, bail};
-#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+#[allow(clippy::disallowed_types)]
 use std::path::Path;
 #[cfg(miri)]
 #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use super::{AccessMode, GuardedPath, PathResolver};
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
-#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub(crate) fn guard_path(
     root: &Path,
     candidate: &Path,
@@ -165,7 +165,7 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
 
 // Guard and canonicalize paths under the configured roots.
 impl PathResolver {
-    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub(crate) fn check_access_with_root(
         &self,
         root: &GuardedPath,
@@ -185,7 +185,7 @@ impl PathResolver {
         Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub(crate) fn check_access(&self, candidate: &Path, mode: AccessMode) -> Result<GuardedPath> {
         self.check_access_with_root(&self.root, candidate, mode)
     }
