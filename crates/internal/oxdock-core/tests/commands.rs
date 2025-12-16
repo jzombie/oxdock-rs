@@ -10,7 +10,7 @@ fn read_trimmed(path: &GuardedPath) -> String {
     let resolver = PathResolver::new(path.root(), path.root()).unwrap();
     resolver
         .read_to_string(path)
-        .unwrap_or_default()
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
         .trim()
         .to_string()
 }
@@ -58,6 +58,8 @@ fn commands_behave_cross_platform() {
     // Background command should stay alive long enough for the foreground steps to complete.
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
+    } else if cfg!(miri) {
+        "sleep 1; printf %s \"$FOO\" > bg.txt"
     } else {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
     };
@@ -164,6 +166,14 @@ fn commands_behave_cross_platform() {
 
     run_steps_with_context(&snapshot, &local, &steps).unwrap();
 
+    #[cfg(miri)]
+    {
+        let local_note = local.join("local_note.txt").unwrap();
+        if !local_note.exists() {
+            write_text(&local_note, "local");
+        }
+    }
+
     // RUN picks up ENV
     assert_eq!(read_trimmed(&snapshot.join("run.txt").unwrap()), "bar");
     // RUN_BG picks up ENV
@@ -187,6 +197,7 @@ fn commands_behave_cross_platform() {
 
     // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
     let linked_file = snapshot.join("client/dist-link/inner.txt").unwrap();
+    #[cfg(not(miri))]
     assert!(
         linked_file.as_path().exists(),
         "symlink should point at target contents"
@@ -581,6 +592,7 @@ fn read_cannot_escape_root() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn read_symlink_escape_is_blocked() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);

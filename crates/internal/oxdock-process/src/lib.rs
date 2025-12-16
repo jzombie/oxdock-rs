@@ -192,7 +192,7 @@ impl BackgroundHandle for SyntheticBgHandle {
         }
         let now = std::time::Instant::now();
         let elapsed = now.saturating_duration_since(self.last_polled);
-        const MAX_ADVANCE: std::time::Duration = std::time::Duration::from_millis(50);
+        const MAX_ADVANCE: std::time::Duration = std::time::Duration::from_millis(15);
         let advance = elapsed.min(MAX_ADVANCE).min(self.remaining);
         self.remaining = self.remaining.saturating_sub(advance);
         self.last_polled = now;
@@ -726,7 +726,13 @@ fn synthetic_output(snapshot: &CommandSnapshot) -> Result<CommandOutput> {
 
 #[cfg(miri)]
 fn simulate_git(args: &[String]) -> Result<CommandOutput> {
-    if args.len() >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+    let mut iter = args.iter();
+    if matches!(iter.next(), Some(arg) if arg == "-C") {
+        let _ = iter.next();
+    }
+    let remaining: Vec<String> = iter.map(|s| s.to_string()).collect();
+
+    if remaining.len() >= 2 && remaining[0] == "rev-parse" && remaining[1] == "HEAD" {
         return Ok(CommandOutput {
             status: exit_status_from_code(0),
             stdout: b"HEAD\n".to_vec(),

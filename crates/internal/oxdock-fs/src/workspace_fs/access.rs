@@ -167,6 +167,15 @@ impl PathResolver {
         mode: AccessMode,
     ) -> Result<GuardedPath> {
         let guarded = guard_path(root.as_path(), candidate, mode)?;
+        #[cfg(miri)]
+        {
+            return Ok(GuardedPath::from_guarded_parts(
+                root.root().to_path_buf(),
+                guarded,
+            ));
+        }
+
+        #[cfg(not(miri))]
         Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
     }
 

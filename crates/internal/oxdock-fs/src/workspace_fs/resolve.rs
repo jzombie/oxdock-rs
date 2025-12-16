@@ -38,11 +38,29 @@ impl PathResolver {
             bail!("COPY source must be relative to build context");
         }
         let candidate = self.build_context.as_path().join(from);
-        let guarded = self
-            .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
-            .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
 
-        self.backend.resolve_copy_source(guarded)
+        #[cfg(miri)]
+        {
+            // Ensure the candidate stays within the declared build context, but use the
+            // resolver root for guard tracking so synthetic state remains consistent even
+            // when the build context is a subdir.
+            let _ = self
+                .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+            let guarded = self
+                .check_access_with_root(&self.root, &candidate, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+            return self.backend.resolve_copy_source(guarded);
+        }
+
+        #[cfg(not(miri))]
+        {
+            let guarded = self
+                .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+
+            self.backend.resolve_copy_source(guarded)
+        }
     }
 
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {

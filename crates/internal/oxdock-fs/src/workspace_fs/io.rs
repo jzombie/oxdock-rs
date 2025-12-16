@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 
-use super::{AccessMode, PathResolver};
+use super::{AccessMode, EntryKind, PathResolver};
 use crate::GuardedPath;
 
 #[allow(clippy::disallowed_types)]
@@ -267,7 +267,34 @@ impl PathResolver {
     }
 
     #[cfg(miri)]
-    pub fn symlink(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<()> {
-        bail!("symlinks are not supported under miri synthetic filesystem");
+    pub fn symlink(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()> {
+        let guarded_src = self
+            .check_access_with_root(&self.root, src.as_path(), AccessMode::Read)
+            .with_context(|| format!("symlink source denied for {}", src.display()))?;
+        let guarded_dst = self
+            .check_access_with_root(&self.root, dst.as_path(), AccessMode::Write)
+            .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
+
+        let kind = self.entry_kind(&guarded_src)?;
+
+        if kind == EntryKind::Dir {
+            self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
+                format!(
+                    "failed to copy dir {} -> {}",
+                    guarded_src.display(),
+                    guarded_dst.display()
+                )
+            })?;
+        } else {
+            self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
+                format!(
+                    "failed to copy file {} -> {}",
+                    guarded_src.display(),
+                    guarded_dst.display()
+                )
+            })?;
+        }
+
+        Ok(())
     }
 }
