@@ -1084,4 +1084,38 @@ mod tests {
             .map(|(_, v)| String::from_utf8_lossy(v).to_string());
         assert_eq!(written, Some("hi".into()));
     }
+
+    #[test]
+    fn final_cwd_tracks_last_workdir() {
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Write {
+                    path: "temp.txt".into(),
+                    contents: "123".into(),
+                },
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Workdir("sub".into()),
+            },
+        ];
+        let fs = MemoryWorkspaceFs::new();
+        let mut state = fs.create_exec_state();
+        let mut proc = MockProcessManager::default();
+        let mut sink = Vec::new();
+        execute_steps(&mut state, &mut proc, &steps, false, &mut sink).unwrap();
+        assert!(
+            state.cwd.as_path().ends_with("sub"),
+            "expected final cwd to match last WORKDIR, got {}",
+            state.cwd.display()
+        );
+        let snapshot = fs.snapshot();
+        let keys: Vec<_> = snapshot.keys().cloned().collect();
+        assert!(
+            keys.iter().any(|path| path.ends_with("temp.txt")),
+            "WRITE should produce temp file, snapshot: {:?}",
+            keys
+        );
+    }
 }

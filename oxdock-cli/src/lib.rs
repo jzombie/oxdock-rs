@@ -6,7 +6,10 @@ use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 
-pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_core::{
+    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context,
+    run_steps_with_context_result,
+};
 pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
@@ -70,6 +73,19 @@ impl Options {
 }
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
+    execute_with_shell_runner(opts, workspace_root, run_shell, true, true)
+}
+
+fn execute_with_shell_runner<F>(
+    opts: Options,
+    workspace_root: GuardedPath,
+    shell_runner: F,
+    require_tty: bool,
+    prepare_snapshot: bool,
+) -> Result<()>
+where
+    F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
+{
     #[cfg(windows)]
     maybe_reexec_shell_to_temp(&opts)?;
 
@@ -77,7 +93,9 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     let temp_root = tempdir.as_guarded_path().clone();
 
     // Materialize source tree without .git
-    archive_head(&workspace_root, &temp_root)?;
+    if prepare_snapshot {
+        archive_head(&workspace_root, &temp_root)?;
+    }
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
@@ -116,22 +134,32 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
 
     // Parse and run steps if we have a non-empty script. Empty scripts are
     // valid when `--shell` is requested and the caller didn't pipe a script.
+    let mut final_cwd = temp_root.clone();
     if !script.trim().is_empty() {
         let steps = parse_script(&script)?;
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
-        // can source from the original tree if needed.
-        run_steps_with_context(&temp_root, &workspace_root, &steps)?;
+        // can source from the original tree if needed. Capture the final working directory so shells
+        // inherit whatever WORKDIR the script ended on.
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
     }
 
     // If requested, drop into an interactive shell after running the script.
     if opts.shell {
-        if !has_controlling_tty() {
+        if require_tty && !has_controlling_tty() {
             bail!("--shell requires a tty (no controlling tty available)");
         }
-        return run_shell(&temp_root, &workspace_root);
+        return shell_runner(&final_cwd, &workspace_root);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+fn execute_for_test<F>(opts: Options, workspace_root: GuardedPath, shell_runner: F) -> Result<()>
+where
+    F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
+{
+    execute_with_shell_runner(opts, workspace_root, shell_runner, false, false)
 }
 
 fn has_controlling_tty() -> bool {
@@ -429,12 +457,72 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
     use super::*;
-    #[cfg(windows)]
+    use indoc::indoc;
+    use oxdock_fs::PathResolver;
+    use std::cell::Cell;
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn shell_runner_receives_final_workdir() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let script_path = workspace_root.join("script.ox")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        let script = indoc! {"
+            WRITE temp.txt 123
+            WORKDIR sub
+        "};
+        resolver.write_file(&script_path, script.as_bytes())?;
+
+        let opts = Options {
+            script: ScriptSource::Path(script_path),
+            shell: true,
+        };
+
+        let observed = Cell::new(false);
+        execute_for_test(opts, workspace_root.clone(), |cwd, _| {
+            assert!(
+                cwd.as_path().ends_with("sub"),
+                "final cwd should end in WORKDIR target, got {}",
+                cwd.display()
+            );
+
+            let temp_root = GuardedPath::new_root(cwd.root())
+                .context("construct guard for temp workspace root")?;
+            let sub_dir = temp_root.join("sub")?;
+            assert_eq!(
+                cwd.as_path(),
+                sub_dir.as_path(),
+                "shell runner cwd should match guarded sub dir"
+            );
+            let temp_file = temp_root.join("temp.txt")?;
+            let temp_resolver = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
+            let contents = temp_resolver.read_to_string(&temp_file)?;
+            assert!(
+                contents.contains("123"),
+                "expected WRITE command to materialize temp file"
+            );
+            observed.set(true);
+            Ok(())
+        })?;
+
+        assert!(
+            observed.into_inner(),
+            "shell runner closure should have been invoked"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_shell_tests {
+    use super::*;
     use oxdock_fs::PathResolver;
 
-    #[cfg(windows)]
     fn git(
         workspace_root: &GuardedPath,
         args: impl IntoIterator<Item = &'static str>,
@@ -448,7 +536,6 @@ mod tests {
         miri,
         ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
     )]
-    #[cfg(windows)]
     #[test]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
@@ -483,7 +570,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(windows)]
     #[test]
     fn command_path_strips_verbatim_prefix() -> Result<()> {
         let temp = GuardedPath::tempdir()?;
@@ -496,7 +582,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(windows)]
     #[test]
     fn windows_banner_command_emits_all_lines() {
         let banner = "line1\nline2\nline3";
