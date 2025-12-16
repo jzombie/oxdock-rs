@@ -945,12 +945,11 @@ mod tests {
                     syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
                 let args = parser.parse2(tokens.clone()).ok()?;
 
-                if args.len() >= 2 {
-                    if let syn::Expr::Lit(expr_lit) = &args[1] {
-                        if let syn::Lit::Str(ref litstr) = expr_lit.lit {
-                            return Some(litstr.value());
-                        }
-                    }
+                if args.len() >= 2
+                    && let syn::Expr::Lit(expr_lit) = &args[1]
+                    && let syn::Lit::Str(ref litstr) = expr_lit.lit
+                {
+                    return Some(litstr.value());
                 }
             }
             None
@@ -958,23 +957,23 @@ mod tests {
 
         // Search top-level items
         for item in &file.items {
-            if let syn::Item::Macro(m) = item {
-                if let Some(f) = extract_folder_from_macro(m) {
-                    return f;
-                }
+            if let syn::Item::Macro(m) = item
+                && let Some(f) = extract_folder_from_macro(m)
+            {
+                return f;
             }
         }
 
         // Search inside modules
         for item in &file.items {
-            if let syn::Item::Mod(m) = item {
-                if let Some((_, items)) = &m.content {
-                    for inner in items {
-                        if let syn::Item::Macro(inner_macro) = inner {
-                            if let Some(f) = extract_folder_from_macro(inner_macro) {
-                                return f;
-                            }
-                        }
+            if let syn::Item::Mod(m) = item
+                && let Some((_, items)) = &m.content
+            {
+                for inner in items {
+                    if let syn::Item::Macro(inner_macro) = inner
+                        && let Some(f) = extract_folder_from_macro(inner_macro)
+                    {
+                        return f;
                     }
                 }
             }
