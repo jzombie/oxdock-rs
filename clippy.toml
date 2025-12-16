@@ -6,6 +6,7 @@
 
 # The list below was provided by the user; each entry includes a short note.
 disallowed-methods = [
+  "std::boxed::Box::leak",
   "std::fs::read",
   "std::fs::read_to_string",
   "std::fs::read_dir",
