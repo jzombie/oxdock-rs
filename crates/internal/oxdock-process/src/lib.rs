@@ -1,6 +1,10 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
+mod shell;
+
 use anyhow::{Context, Result, bail};
+use shell::shell_cmd;
+pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
@@ -100,30 +104,6 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext<'_>) {
     command.current_dir(ctx.cwd());
     command.envs(ctx.envs());
     command.env("CARGO_TARGET_DIR", ctx.cargo_target_dir());
-}
-
-/// Return the system shell program.
-pub fn shell_program() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".to_string())
-    }
-
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-    }
-}
-
-fn shell_cmd(cmd: &str) -> ProcessCommand {
-    let program = shell_program();
-    let mut c = ProcessCommand::new(program);
-    if cfg!(windows) {
-        c.arg("/C").arg(cmd);
-    } else {
-        c.arg("-c").arg(cmd);
-    }
-    c
 }
 
 #[derive(Debug)]

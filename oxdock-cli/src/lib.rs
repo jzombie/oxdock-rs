@@ -1,13 +1,13 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
+#[cfg(windows)]
 use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 
-pub use oxdock_core::{
-    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
-};
+pub use oxdock_core::{Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context};
+pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
     let workspace_root = GuardedPath::new_root_from_str(&discover_workspace_root()?)
@@ -237,10 +237,7 @@ fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     #[cfg(windows)]
     let cwd_disp = command_path(cwd).as_ref().display().to_string();
     #[cfg(windows)]
-    let workspace_disp = command_path(workspace_root)
-        .as_ref()
-        .display()
-        .to_string();
+    let workspace_disp = command_path(workspace_root).as_ref().display().to_string();
 
     #[cfg(not(windows))]
     let cwd_disp = cwd.display().to_string();
@@ -348,6 +345,7 @@ fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
     #[cfg(windows)]
     {
@@ -386,25 +384,32 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
     let archive_guard = temp_root
         .join("src.tar")
         .context("failed to create archive path under temp root")?;
-    let archive_path = command_path(&archive_guard);
-    let temp_root_path = command_path(temp_root);
+    #[cfg(windows)]
+    let archive_path_buf = command_path(&archive_guard);
+    #[cfg(windows)]
+    let archive_path = archive_path_buf.as_ref();
+    #[cfg(not(windows))]
+    let archive_path = archive_guard.as_path();
+
+    #[cfg(windows)]
+    let temp_root_path_buf = command_path(temp_root);
+    #[cfg(windows)]
+    let temp_root_path = temp_root_path_buf.as_ref();
+    #[cfg(not(windows))]
+    let temp_root_path = temp_root.as_path();
     let mut archive_cmd = CommandBuilder::new("git");
-    archive_cmd.current_dir(workspace_root.as_path()).args([
-        "archive",
-        "--format=tar",
-        "--output",
-    ]);
     archive_cmd
-        .arg(archive_path.as_ref())
-        .arg("HEAD");
+        .current_dir(workspace_root.as_path())
+        .args(["archive", "--format=tar", "--output"]);
+    archive_cmd.arg(archive_path).arg("HEAD");
     run_cmd(archive_cmd)?;
 
     let mut tar_cmd = CommandBuilder::new("tar");
     tar_cmd
         .arg("-xf")
-        .arg(archive_path.as_ref())
+        .arg(archive_path)
         .arg("-C")
-        .arg(temp_root_path.as_ref());
+        .arg(temp_root_path);
     run_cmd(tar_cmd)?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
@@ -418,7 +423,9 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use super::*;
+    #[cfg(windows)]
     use oxdock_fs::PathResolver;
 
     #[cfg(windows)]
@@ -448,7 +455,10 @@ mod tests {
         resolver.write_file(&readme, b"shell workspace")?;
 
         git(&workspace_root, ["init"])?;
-        git(&workspace_root, ["config", "user.email", "test@example.com"])?;
+        git(
+            &workspace_root,
+            ["config", "user.email", "test@example.com"],
+        )?;
         git(&workspace_root, ["config", "user.name", "Test User"])?;
         git(&workspace_root, ["add", "."])?;
         git(&workspace_root, ["commit", "-m", "init"])?;
@@ -460,8 +470,7 @@ mod tests {
         archive_head(&workspace_root, &archive_root)?;
 
         let extracted_readme = archive_root.join("README.md")?;
-        let archive_resolver =
-            PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
+        let archive_resolver = PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
         let contents = archive_resolver.read_to_string(&extracted_readme)?;
         assert_eq!(contents, "shell workspace");
 

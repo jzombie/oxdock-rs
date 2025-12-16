@@ -7,8 +7,6 @@ use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{GuardedPath, PathResolver, WorkspaceFs};
 use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, ShellProcessManager};
 
-pub use oxdock_process::shell_program;
-
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
     cargo_target_dir: GuardedPath,
