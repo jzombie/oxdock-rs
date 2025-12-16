@@ -538,10 +538,9 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
 mod tests {
     use super::*;
     use crate::Guard;
-    use oxdock_fs::{GuardedPath, MemoryWorkspaceFs};
-    use std::cell::RefCell;
-    use std::collections::{HashMap, VecDeque};
-    use std::rc::Rc;
+    use oxdock_fs::{GuardedPath, MockFs};
+    use oxdock_process::{MockProcessManager, MockRunCall};
+    use std::collections::HashMap;
 
     #[test]
     fn run_records_env_and_cwd() {
@@ -561,10 +560,18 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
-        assert_eq!(
-            mock.recorded_runs(),
-            vec![format!("echo hi|cwd={}|FOO=bar", root.as_path().display())]
-        );
+        let runs = mock.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        let MockRunCall {
+            script,
+            cwd,
+            envs,
+            cargo_target_dir,
+        } = &runs[0];
+        assert_eq!(script, "echo hi");
+        assert_eq!(cwd, root.as_path());
+        assert_eq!(cargo_target_dir, &root.join(".cargo-target").unwrap().to_path_buf());
+        assert_eq!(envs.get("FOO"), Some(&"bar".into()));
     }
 
     #[test]
@@ -587,7 +594,9 @@ mod tests {
             mock.recorded_runs().is_empty(),
             "foreground run should not execute when RUN_BG completes early"
         );
-        assert_eq!(mock.spawn_log(), vec!["sleep"]);
+        let spawns = mock.spawn_log();
+        let spawned: Vec<_> = spawns.iter().map(|c| c.script.as_str()).collect();
+        assert_eq!(spawned, vec!["sleep"]);
     }
 
     #[test]
@@ -642,10 +651,7 @@ mod tests {
         run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
-        assert!(
-            runs[0].starts_with("echo second"),
-            "unexpected runs: {runs:?}"
-        );
+        assert_eq!(runs[0].script, "echo second");
     }
 
     #[test]
@@ -676,8 +682,9 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
-        assert_eq!(mock.recorded_runs().len(), 1);
-        assert!(mock.recorded_runs()[0].starts_with("echo guarded"));
+        let runs = mock.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].script, "echo guarded");
     }
 
     #[test]
@@ -699,99 +706,6 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Default)]
-    struct MockProcessManager {
-        runs: Rc<RefCell<Vec<String>>>,
-        spawns: Rc<RefCell<Vec<String>>>,
-        killed: Rc<RefCell<Vec<String>>>,
-        plans: Rc<RefCell<VecDeque<BgPlan>>>,
-    }
-
-    impl MockProcessManager {
-        fn recorded_runs(&self) -> Vec<String> {
-            self.runs.borrow().clone()
-        }
-
-        fn spawn_log(&self) -> Vec<String> {
-            self.spawns.borrow().clone()
-        }
-
-        fn killed(&self) -> Vec<String> {
-            self.killed.borrow().clone()
-        }
-
-        fn push_bg_plan(&self, ready_after: usize, status: ExitStatus) {
-            self.plans.borrow_mut().push_back(BgPlan {
-                ready_after,
-                status,
-            });
-        }
-    }
-
-    impl ProcessManager for MockProcessManager {
-        type Handle = MockHandle;
-
-        fn run(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<()> {
-            let cwd = ctx.cwd().display().to_string();
-            let foo = ctx.envs().get("FOO").cloned().unwrap_or_default();
-            self.runs
-                .borrow_mut()
-                .push(format!("{script}|cwd={cwd}|FOO={foo}"));
-            Ok(())
-        }
-
-        fn run_capture(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<Vec<u8>> {
-            self.run(ctx, script)?;
-            Ok(Vec::new())
-        }
-
-        fn spawn_bg(&mut self, _ctx: &CommandContext<'_>, script: &str) -> Result<Self::Handle> {
-            self.spawns.borrow_mut().push(script.to_string());
-            let plan = self.plans.borrow_mut().pop_front().unwrap_or(BgPlan {
-                ready_after: 0,
-                status: success_status(),
-            });
-            Ok(MockHandle {
-                script: script.to_string(),
-                remaining: plan.ready_after,
-                status: plan.status,
-                killed: self.killed.clone(),
-            })
-        }
-    }
-
-    struct BgPlan {
-        ready_after: usize,
-        status: ExitStatus,
-    }
-
-    struct MockHandle {
-        script: String,
-        remaining: usize,
-        status: ExitStatus,
-        killed: Rc<RefCell<Vec<String>>>,
-    }
-
-    impl BackgroundHandle for MockHandle {
-        fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-            if self.remaining == 0 {
-                Ok(Some(self.status))
-            } else {
-                self.remaining -= 1;
-                Ok(None)
-            }
-        }
-
-        fn kill(&mut self) -> Result<()> {
-            self.killed.borrow_mut().push(self.script.clone());
-            Ok(())
-        }
-
-        fn wait(&mut self) -> Result<ExitStatus> {
-            Ok(self.status)
-        }
-    }
-
     fn success_status() -> ExitStatus {
         exit_status_from_code(0)
     }
@@ -808,7 +722,7 @@ mod tests {
         ExitStatusExt::from_raw(code as u32)
     }
 
-    fn create_exec_state(fs: MemoryWorkspaceFs) -> ExecState<MockProcessManager> {
+    fn create_exec_state(fs: MockFs) -> ExecState<MockProcessManager> {
         let cargo = fs.root().join(".cargo-target").unwrap();
         ExecState {
             fs: Box::new(fs.clone()),
@@ -819,8 +733,8 @@ mod tests {
         }
     }
 
-    fn run_with_memory_fs(steps: &[Step]) -> (GuardedPath, HashMap<String, Vec<u8>>) {
-        let fs = MemoryWorkspaceFs::new();
+    fn run_with_mock_fs(steps: &[Step]) -> (GuardedPath, HashMap<String, Vec<u8>>) {
+        let fs = MockFs::new();
         let mut state = create_exec_state(fs.clone());
         let mut proc = MockProcessManager::default();
         let mut sink = Vec::new();
@@ -829,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_fs_handles_workdir_and_write() {
+    fn mock_fs_handles_workdir_and_write() {
         let steps = vec![
             Step {
                 guards: Vec::new(),
@@ -851,7 +765,7 @@ mod tests {
                 kind: StepKind::Cat("out.txt".into()),
             },
         ];
-        let (_cwd, files) = run_with_memory_fs(&steps);
+        let (_cwd, files) = run_with_mock_fs(&steps);
         let written = files
             .iter()
             .find(|(k, _)| k.ends_with("app/out.txt"))
@@ -874,7 +788,7 @@ mod tests {
                 kind: StepKind::Workdir("sub".into()),
             },
         ];
-        let (cwd, snapshot) = run_with_memory_fs(&steps);
+        let (cwd, snapshot) = run_with_mock_fs(&steps);
         assert!(
             cwd.as_path().ends_with("sub"),
             "expected final cwd to match last WORKDIR, got {}",
@@ -889,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_fs_normalizes_backslash_workdir() {
+    fn mock_fs_normalizes_backslash_workdir() {
         let steps = vec![
             Step {
                 guards: Vec::new(),
@@ -907,7 +821,7 @@ mod tests {
                 },
             },
         ];
-        let (cwd, snapshot) = run_with_memory_fs(&steps);
+        let (cwd, snapshot) = run_with_mock_fs(&steps);
         let cwd_display = cwd.display().to_string();
         assert!(
             cwd_display.ends_with("win\\nested") || cwd_display.ends_with("win/nested"),
@@ -924,12 +838,12 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn memory_fs_rejects_absolute_windows_paths() {
+    fn mock_fs_rejects_absolute_windows_paths() {
         let steps = vec![Step {
             guards: Vec::new(),
             kind: StepKind::Workdir(r"C:\outside".into()),
         }];
-        let fs = MemoryWorkspaceFs::new();
+        let fs = MockFs::new();
         let mut state = create_exec_state(fs);
         let mut proc = MockProcessManager::default();
         let mut sink = Vec::new();

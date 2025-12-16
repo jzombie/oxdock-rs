@@ -9,20 +9,21 @@ use crate::WorkspaceFs;
 
 use super::GuardedPath;
 
+/// In-memory workspace filesystem for tests and Miri runs.
 #[derive(Clone)]
-pub struct MemoryWorkspaceFs {
+pub struct MockFs {
     root: GuardedPath,
     build_context: GuardedPath,
-    state: Rc<RefCell<MemoryState>>,
+    state: Rc<RefCell<MockState>>,
 }
 
 #[derive(Default)]
-struct MemoryState {
+struct MockState {
     files: HashMap<String, Vec<u8>>,
     dirs: HashSet<String>,
 }
 
-impl MemoryWorkspaceFs {
+impl MockFs {
     pub fn new() -> Self {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let build_context = root.clone();
@@ -31,7 +32,7 @@ impl MemoryWorkspaceFs {
         Self {
             root,
             build_context,
-            state: Rc::new(RefCell::new(MemoryState {
+            state: Rc::new(RefCell::new(MockState {
                 files: HashMap::new(),
                 dirs,
             })),
@@ -95,24 +96,24 @@ impl MemoryWorkspaceFs {
     }
 }
 
-impl Default for MemoryWorkspaceFs {
+impl Default for MockFs {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WorkspaceFs for MemoryWorkspaceFs {
+impl WorkspaceFs for MockFs {
     fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
         Ok(path.clone())
     }
 
     fn metadata_abs(&self, _path: &GuardedPath) -> Result<std::fs::Metadata> {
-        bail!("metadata not supported in memory fs");
+        bail!("metadata not supported in mock fs");
     }
 
     #[allow(clippy::disallowed_types)]
     fn metadata_external(&self, _path: &crate::UnguardedPath) -> Result<std::fs::Metadata> {
-        bail!("metadata not supported in memory fs");
+        bail!("metadata not supported in mock fs");
     }
 
     fn root(&self) -> &GuardedPath {
@@ -143,7 +144,7 @@ impl WorkspaceFs for MemoryWorkspaceFs {
     }
 
     fn read_dir_entries(&self, _path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>> {
-        bail!("read_dir unsupported in memory fs");
+        bail!("read_dir unsupported in mock fs");
     }
 
     fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
@@ -254,3 +255,6 @@ impl WorkspaceFs for MemoryWorkspaceFs {
         bail!("git copy unsupported")
     }
 }
+
+/// Backward compatible alias while downstream code migrates.
+pub type MockWorkspaceFs = MockFs;

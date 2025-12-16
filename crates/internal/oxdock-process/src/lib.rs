@@ -1,6 +1,8 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 mod shell;
+#[cfg(feature = "mock-process")]
+mod mock;
 
 use anyhow::{Context, Result, bail};
 use shell::shell_cmd;
@@ -10,6 +12,9 @@ use std::fs::File;
 use std::path::Path;
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
 use std::{ffi::OsStr, iter::IntoIterator};
+
+#[cfg(feature = "mock-process")]
+pub use mock::{MockHandle, MockProcessManager, MockRunCall, MockSpawnCall};
 
 /// Context passed to process managers describing the current execution
 /// environment.
