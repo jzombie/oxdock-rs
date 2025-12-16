@@ -123,6 +123,7 @@ mod miri_backend {
     use anyhow::anyhow;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::Component;
+    use super::{DirEntry, EntryKind};
 
     pub(super) struct MiriBackend {
         root_state: std::rc::Rc<std::cell::RefCell<SyntheticRootState>>,
@@ -183,8 +184,8 @@ mod miri_backend {
                 for entry in entries {
                     let entry = entry?;
                     let ft = entry.file_type()?;
-                    let kind = if ft.is_dir() { super::EntryKind::Dir } else { super::EntryKind::File };
-                    out.push(super::DirEntry::new(entry.path(), kind));
+                    let kind = if ft.is_dir() { EntryKind::Dir } else { EntryKind::File };
+                    out.push(DirEntry::new(entry.path(), kind));
                 }
                 return Ok(out);
             }
@@ -198,7 +199,7 @@ mod miri_backend {
             let children = state.list_children(&rel);
             Ok(children
                 .into_iter()
-                .map(|(name, kind)| super::DirEntry::new(path.as_path().join(name), kind))
+                .map(|(name, kind)| DirEntry::new(path.as_path().join(name), kind))
                 .collect())
         }
 
@@ -279,7 +280,7 @@ mod miri_backend {
                 .borrow()
                 .entry_kind(&rel)
                 .ok_or_else(|| anyhow!("COPY source missing in build context: {}", guarded.display()))?;
-            if matches!(kind, super::EntryKind::Dir | super::EntryKind::File) {
+            if matches!(kind, EntryKind::Dir | EntryKind::File) {
                 Ok(guarded)
             } else {
                 bail!("COPY source unsupported kind: {}", guarded.display());
@@ -432,33 +433,33 @@ mod miri_backend {
 
         fn entry_kind(&self, rel: &str) -> Option<super::EntryKind> {
             if rel.is_empty() {
-                return Some(super::EntryKind::Dir);
+                return Some(EntryKind::Dir);
             }
             if self.files.contains_key(rel) {
-                Some(super::EntryKind::File)
+                Some(EntryKind::File)
             } else if self.dirs.contains(rel) {
-                Some(super::EntryKind::Dir)
+                Some(EntryKind::Dir)
             } else {
                 None
             }
         }
 
-        fn list_children(&self, rel: &str) -> Vec<(String, super::EntryKind)> {
-            let mut entries: BTreeMap<String, super::EntryKind> = BTreeMap::new();
+        fn list_children(&self, rel: &str) -> Vec<(String, EntryKind)> {
+            let mut entries: BTreeMap<String, EntryKind> = BTreeMap::new();
             let prefix = if rel.is_empty() { None } else { Some(format!("{rel}/")) };
 
-            let mut push_child = |child: &str, kind: super::EntryKind| {
+                let mut push_child = |child: &str, kind: EntryKind| {
                 if child.is_empty() {
                     return;
                 }
-                entries
-                    .entry(child.to_string())
-                    .and_modify(|existing| {
-                        if matches!(kind, super::EntryKind::Dir) {
-                            *existing = super::EntryKind::Dir;
-                        }
-                    })
-                    .or_insert(kind);
+                    entries
+                        .entry(child.to_string())
+                        .and_modify(|existing| {
+                            if matches!(kind, EntryKind::Dir) {
+                                *existing = EntryKind::Dir;
+                            }
+                        })
+                        .or_insert(kind);
             };
 
             for dir in self.dirs.iter() {
@@ -467,12 +468,12 @@ mod miri_backend {
                         continue;
                     }
                     if let Some(child) = dir.split('/').next() {
-                        push_child(child, super::EntryKind::Dir);
+                        push_child(child, EntryKind::Dir);
                     }
                 } else if let Some(prefix) = prefix.as_ref() {
                     if let Some(rest) = dir.strip_prefix(prefix) {
                         if let Some(child) = rest.split('/').next() {
-                            push_child(child, super::EntryKind::Dir);
+                            push_child(child, EntryKind::Dir);
                         }
                     }
                 }
@@ -481,12 +482,12 @@ mod miri_backend {
             for file in self.files.keys() {
                 if rel.is_empty() {
                     if let Some(child) = file.split('/').next() {
-                        push_child(child, super::EntryKind::File);
+                        push_child(child, EntryKind::File);
                     }
                 } else if let Some(prefix) = prefix.as_ref() {
                     if let Some(rest) = file.strip_prefix(prefix) {
                         if let Some(child) = rest.split('/').next() {
-                            push_child(child, super::EntryKind::File);
+                            push_child(child, EntryKind::File);
                         }
                     }
                 }
