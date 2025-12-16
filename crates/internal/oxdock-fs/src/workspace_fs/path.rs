@@ -6,9 +6,9 @@ use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tempfile::{Builder, TempDir};
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tempfile::{Builder, TempDir};
 
 #[cfg(miri)]
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -220,7 +220,6 @@ impl GuardedTempDir {
     pub fn into_parts(self) -> (Option<TempDir>, GuardedPath) {
         (self.tempdir, self.guard)
     }
-
 }
 
 impl std::ops::Deref for GuardedTempDir {

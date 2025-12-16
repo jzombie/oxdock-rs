@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 
 use super::{DirEntry, GuardedPath};
@@ -51,7 +51,8 @@ impl BackendImpl for HostBackend {
     }
 
     fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
-        let data = fs::read(path.as_path()).with_context(|| format!("failed to read {}", path.display()))?;
+        let data = fs::read(path.as_path())
+            .with_context(|| format!("failed to read {}", path.display()))?;
         Ok(data)
     }
 
@@ -89,8 +90,8 @@ impl BackendImpl for HostBackend {
     fn resolve_workdir(&self, resolved: GuardedPath) -> Result<GuardedPath> {
         if let Ok(meta) = fs::metadata(resolved.as_path()) {
             if meta.is_dir() {
-                let canon = fs::canonicalize(resolved.as_path())
-                    .unwrap_or_else(|_| resolved.to_path_buf());
+                let canon =
+                    fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
                 return GuardedPath::new(resolved.root(), &canon);
             }
             bail!("WORKDIR path is not a directory: {}", resolved.display());
@@ -98,13 +99,17 @@ impl BackendImpl for HostBackend {
 
         fs::create_dir_all(resolved.as_path())
             .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
-        let final_abs = fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
+        let final_abs =
+            fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
         GuardedPath::new(resolved.root(), &final_abs)
     }
 
     fn resolve_copy_source(&self, guarded: GuardedPath) -> Result<GuardedPath> {
         if !guarded.as_path().exists() {
-            bail!("COPY source missing in build context: {}", guarded.display());
+            bail!(
+                "COPY source missing in build context: {}",
+                guarded.display()
+            );
         }
         Ok(guarded)
     }
@@ -114,8 +119,7 @@ impl BackendImpl for HostBackend {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("failed to remove file {}", path.display()));
+                return Err(e).with_context(|| format!("failed to remove file {}", path.display()));
             }
         }
         Ok(())
@@ -131,14 +135,16 @@ impl BackendImpl for HostBackend {
 // Miri implementation (keeps synthetic state + mirrors to host)
 #[cfg(miri)]
 mod miri_backend {
-    use super::*;
     use super::super::EntryKind;
+    use super::*;
     use anyhow::anyhow;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::Component;
     use std::sync::{Arc, Mutex, OnceLock};
 
-    static STATE_REGISTRY: OnceLock<Mutex<HashMap<std::path::PathBuf, Arc<Mutex<SyntheticRootState>>>>> = OnceLock::new();
+    static STATE_REGISTRY: OnceLock<
+        Mutex<HashMap<std::path::PathBuf, Arc<Mutex<SyntheticRootState>>>>,
+    > = OnceLock::new();
 
     pub(in crate::workspace_fs) struct MiriBackend {
         root_state: Arc<Mutex<SyntheticRootState>>,
@@ -271,7 +277,12 @@ mod miri_backend {
                 .lock()
                 .expect("miri state poisoned")
                 .entry_kind(&rel)
-                .ok_or_else(|| anyhow!("COPY source missing in build context: {}", guarded.display()))?;
+                .ok_or_else(|| {
+                    anyhow!(
+                        "COPY source missing in build context: {}",
+                        guarded.display()
+                    )
+                })?;
             if matches!(kind, EntryKind::Dir | EntryKind::File) {
                 Ok(guarded)
             } else {
@@ -302,8 +313,11 @@ mod miri_backend {
         #[cfg(unix)]
         {
             // Use a stable FD (/dev/null) to obtain metadata without path-based statx.
-            let f = fs::File::open("/dev/null").with_context(|| "failed to open /dev/null for synthetic metadata")?;
-            return f.metadata().with_context(|| "failed to fetch synthetic metadata");
+            let f = fs::File::open("/dev/null")
+                .with_context(|| "failed to open /dev/null for synthetic metadata")?;
+            return f
+                .metadata()
+                .with_context(|| "failed to fetch synthetic metadata");
         }
 
         #[cfg(not(unix))]
@@ -390,9 +404,15 @@ mod miri_backend {
         }
 
         fn remove_dir_all(&mut self, rel: &str) {
-            let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
-            self.files.retain(|path, _| !path.eq(rel) && !path.starts_with(&prefix));
-            self.dirs.retain(|dir| !dir.eq(rel) && !dir.starts_with(&prefix));
+            let prefix = if rel.is_empty() {
+                String::new()
+            } else {
+                format!("{rel}/")
+            };
+            self.files
+                .retain(|path, _| !path.eq(rel) && !path.starts_with(&prefix));
+            self.dirs
+                .retain(|dir| !dir.eq(rel) && !dir.starts_with(&prefix));
         }
 
         fn dir_exists(&self, rel: &str) -> bool {
@@ -414,20 +434,24 @@ mod miri_backend {
 
         fn list_children(&self, rel: &str) -> Vec<(String, EntryKind)> {
             let mut entries: BTreeMap<String, EntryKind> = BTreeMap::new();
-            let prefix = if rel.is_empty() { None } else { Some(format!("{rel}/")) };
+            let prefix = if rel.is_empty() {
+                None
+            } else {
+                Some(format!("{rel}/"))
+            };
 
-                let mut push_child = |child: &str, kind: EntryKind| {
+            let mut push_child = |child: &str, kind: EntryKind| {
                 if child.is_empty() {
                     return;
                 }
-                    entries
-                        .entry(child.to_string())
-                        .and_modify(|existing| {
-                            if matches!(kind, EntryKind::Dir) {
-                                *existing = EntryKind::Dir;
-                            }
-                        })
-                        .or_insert(kind);
+                entries
+                    .entry(child.to_string())
+                    .and_modify(|existing| {
+                        if matches!(kind, EntryKind::Dir) {
+                            *existing = EntryKind::Dir;
+                        }
+                    })
+                    .or_insert(kind);
             };
 
             for dir in self.dirs.iter() {
@@ -477,10 +501,12 @@ pub(super) enum Backend {
 
 impl Backend {
     pub(super) fn new(root: &GuardedPath, build: &GuardedPath) -> Result<Self> {
-        #[cfg(miri)] {
+        #[cfg(miri)]
+        {
             return Ok(Backend::Miri(miri_backend::MiriBackend::new(root, build)?));
         }
-        #[cfg(not(miri))] {
+        #[cfg(not(miri))]
+        {
             return Ok(Backend::Host(HostBackend::new(root, build)?));
         }
     }
@@ -538,4 +564,3 @@ impl Backend {
         self.as_impl().remove_dir_all_abs(path)
     }
 }
-

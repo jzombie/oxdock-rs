@@ -163,7 +163,6 @@ impl PathResolver {
     pub fn set_root(&mut self, root: GuardedPath) {
         self.root = root;
     }
-
 }
 pub(crate) mod access;
 mod backend;

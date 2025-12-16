@@ -177,7 +177,11 @@ impl PathResolver {
                                     use std::os::unix::fs::symlink;
                                     symlink(target.trim_end_matches('\n'), dest.as_path())
                                         .with_context(|| {
-                                            format!("creating symlink {} -> {}", dest.display(), target)
+                                            format!(
+                                                "creating symlink {} -> {}",
+                                                dest.display(),
+                                                target
+                                            )
                                         })?;
                                 }
                                 #[cfg(windows)]
@@ -186,18 +190,22 @@ impl PathResolver {
                                     // symlink target (trimmed). This does NOT create an OS-level
                                     // symlink and may lose or alter non-UTF8 bytes (from_utf8_lossy
                                     // is used above).
-                                    self.write_file(&dest, target.trim_end_matches('\n').as_bytes())
-                                        .with_context(|| {
-                                            format!(
-                                                "writing symlink placeholder {} -> {}",
-                                                dest.display(),
-                                                target
-                                            )
-                                        })?;
+                                    self.write_file(
+                                        &dest,
+                                        target.trim_end_matches('\n').as_bytes(),
+                                    )
+                                    .with_context(|| {
+                                        format!(
+                                            "writing symlink placeholder {} -> {}",
+                                            dest.display(),
+                                            target
+                                        )
+                                    })?;
                                 }
                             } else {
-                                self.write_file(&dest, &blob.stdout)
-                                    .with_context(|| format!("writing blob to {}", dest.display()))?;
+                                self.write_file(&dest, &blob.stdout).with_context(|| {
+                                    format!("writing blob to {}", dest.display())
+                                })?;
                             }
                         }
                         "commit" => {

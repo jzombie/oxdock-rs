@@ -46,10 +46,14 @@ impl PathResolver {
             // when the build context is a subdir.
             let _ = self
                 .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
-                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
             let guarded = self
                 .check_access_with_root(&self.root, &candidate, AccessMode::Read)
-                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
             return self.backend.resolve_copy_source(guarded);
         }
 
@@ -57,7 +61,9 @@ impl PathResolver {
         {
             let guarded = self
                 .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
-                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
 
             self.backend.resolve_copy_source(guarded)
         }

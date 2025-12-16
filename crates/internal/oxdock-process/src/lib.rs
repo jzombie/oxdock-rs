@@ -254,10 +254,17 @@ impl ProcessManager for SyntheticProcessManager {
 }
 
 #[cfg(miri)]
-fn execute_sync(ctx: &CommandContext, script: &str, capture: bool) -> Result<(Vec<u8>, ExitStatus)> {
+fn execute_sync(
+    ctx: &CommandContext,
+    script: &str,
+    capture: bool,
+) -> Result<(Vec<u8>, ExitStatus)> {
     let mut stdout = Vec::new();
     let mut status = exit_status_from_code(0);
-    let resolver = PathResolver::new(ctx.workspace_root().as_path(), ctx.build_context().as_path())?;
+    let resolver = PathResolver::new(
+        ctx.workspace_root().as_path(),
+        ctx.build_context().as_path(),
+    )?;
 
     let script = normalize_shell(script);
     for raw in script.split(';') {
@@ -294,7 +301,10 @@ fn execute_sync(ctx: &CommandContext, script: &str, capture: bool) -> Result<(Ve
 
 #[cfg(miri)]
 fn plan_background(ctx: &CommandContext, script: &str) -> Result<SyntheticBgHandle> {
-    let resolver = PathResolver::new(ctx.workspace_root().as_path(), ctx.build_context().as_path())?;
+    let resolver = PathResolver::new(
+        ctx.workspace_root().as_path(),
+        ctx.build_context().as_path(),
+    )?;
     let mut actions: Vec<Action> = Vec::new();
     let mut ready = std::time::Duration::ZERO;
     let mut status = exit_status_from_code(0);
@@ -362,7 +372,10 @@ fn parse_command(
             Ok((None, duration, None))
         }
         "exit" => {
-            let code = tokens.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let code = tokens
+                .get(1)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             Ok((None, std::time::Duration::ZERO, Some(code)))
         }
         "printf" => {
@@ -371,9 +384,17 @@ fn parse_command(
             let data = expanded.into_bytes();
             if let Some(path_str) = redirect {
                 let target = resolve_write(resolver, ctx, &path_str)?;
-                Ok((Some(CommandAction::Write { target, data }), std::time::Duration::ZERO, None))
+                Ok((
+                    Some(CommandAction::Write { target, data }),
+                    std::time::Duration::ZERO,
+                    None,
+                ))
             } else if capture {
-                Ok((Some(CommandAction::Stdout { data }), std::time::Duration::ZERO, None))
+                Ok((
+                    Some(CommandAction::Stdout { data }),
+                    std::time::Duration::ZERO,
+                    None,
+                ))
             } else {
                 Ok((None, std::time::Duration::ZERO, None))
             }
@@ -385,9 +406,17 @@ fn parse_command(
             data.push(b'\n');
             if let Some(path_str) = redirect {
                 let target = resolve_write(resolver, ctx, &path_str)?;
-                Ok((Some(CommandAction::Write { target, data }), std::time::Duration::ZERO, None))
+                Ok((
+                    Some(CommandAction::Write { target, data }),
+                    std::time::Duration::ZERO,
+                    None,
+                ))
             } else if capture {
-                Ok((Some(CommandAction::Stdout { data }), std::time::Duration::ZERO, None))
+                Ok((
+                    Some(CommandAction::Stdout { data }),
+                    std::time::Duration::ZERO,
+                    None,
+                ))
             } else {
                 Ok((None, std::time::Duration::ZERO, None))
             }
@@ -505,7 +534,10 @@ fn normalize_shell(script: &str) -> String {
 
 #[cfg(miri)]
 fn apply_actions(ctx: &CommandContext, actions: &[Action]) -> Result<()> {
-    let resolver = PathResolver::new(ctx.workspace_root().as_path(), ctx.build_context().as_path())?;
+    let resolver = PathResolver::new(
+        ctx.workspace_root().as_path(),
+        ctx.build_context().as_path(),
+    )?;
     for action in actions {
         match action {
             Action::WriteFile { target, data } => {
@@ -708,7 +740,11 @@ fn synthetic_status(snapshot: &CommandSnapshot) -> Result<ExitStatus> {
 #[cfg(miri)]
 fn synthetic_output(snapshot: &CommandSnapshot) -> Result<CommandOutput> {
     let program = snapshot.program.to_string_lossy().to_string();
-    let args: Vec<String> = snapshot.args.iter().map(|a| a.to_string_lossy().to_string()).collect();
+    let args: Vec<String> = snapshot
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
 
     if program == "git" {
         return simulate_git(&args);

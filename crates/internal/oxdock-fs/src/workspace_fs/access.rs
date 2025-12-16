@@ -151,7 +151,11 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
         }
     }
 
-    let mut out = if is_abs { PathBuf::from("/") } else { PathBuf::new() };
+    let mut out = if is_abs {
+        PathBuf::from("/")
+    } else {
+        PathBuf::new()
+    };
     for seg in parts {
         out.push(seg);
     }

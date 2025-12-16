@@ -278,21 +278,23 @@ impl PathResolver {
         let kind = self.entry_kind(&guarded_src)?;
 
         if kind == EntryKind::Dir {
-            self.copy_dir_recursive(&guarded_src, &guarded_dst).with_context(|| {
-                format!(
-                    "failed to copy dir {} -> {}",
-                    guarded_src.display(),
-                    guarded_dst.display()
-                )
-            })?;
+            self.copy_dir_recursive(&guarded_src, &guarded_dst)
+                .with_context(|| {
+                    format!(
+                        "failed to copy dir {} -> {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
+                })?;
         } else {
-            self.copy_file(&guarded_src, &guarded_dst).with_context(|| {
-                format!(
-                    "failed to copy file {} -> {}",
-                    guarded_src.display(),
-                    guarded_dst.display()
-                )
-            })?;
+            self.copy_file(&guarded_src, &guarded_dst)
+                .with_context(|| {
+                    format!(
+                        "failed to copy file {} -> {}",
+                        guarded_src.display(),
+                        guarded_dst.display()
+                    )
+                })?;
         }
 
         Ok(())
