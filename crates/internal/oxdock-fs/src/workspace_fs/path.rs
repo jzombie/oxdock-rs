@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
+#[cfg(not(miri))]
 use super::AccessMode;
 #[cfg(not(miri))]
 use super::guard_path;

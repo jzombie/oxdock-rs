@@ -1,7 +1,11 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use anyhow::{Result, bail};
+#[cfg(not(miri))]
+use anyhow::Context;
+#[cfg(miri)]
+use std::path::PathBuf;
+use std::path::Path;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 

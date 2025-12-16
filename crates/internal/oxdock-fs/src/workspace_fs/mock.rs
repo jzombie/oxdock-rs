@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 
-use crate::WorkspaceFs;
+use crate::{EntryKind, WorkspaceFs};
 
 use super::GuardedPath;
 
@@ -143,7 +143,7 @@ impl WorkspaceFs for MockFs {
         String::from_utf8(bytes).map_err(|e| anyhow::anyhow!(e))
     }
 
-    fn read_dir_entries(&self, _path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>> {
+    fn read_dir_entries(&self, _path: &GuardedPath) -> Result<Vec<crate::DirEntry>> {
         bail!("read_dir unsupported in mock fs");
     }
 
@@ -210,6 +210,18 @@ impl WorkspaceFs for MockFs {
 
     fn set_permissions_mode_unix(&self, _path: &GuardedPath, _mode: u32) -> Result<()> {
         bail!("perms unsupported")
+    }
+
+    fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
+        let rel = self.relative_path(path);
+        let state = self.state.borrow();
+        if rel.is_empty() || state.dirs.contains(&rel) {
+            Ok(EntryKind::Dir)
+        } else if state.files.contains_key(&rel) {
+            Ok(EntryKind::File)
+        } else {
+            bail!("missing path {}", path.display())
+        }
     }
 
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {

@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::process::ExitStatus;
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
-use oxdock_fs::{GuardedPath, PathResolver, WorkspaceFs};
+use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
 use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, ShellProcessManager};
 
 struct ExecState<P: ProcessManager> {
@@ -374,17 +374,17 @@ fn execute_steps<P: ProcessManager>(
 }
 
 fn copy_entry(fs: &dyn WorkspaceFs, src: &GuardedPath, dst: &GuardedPath) -> Result<()> {
-    let meta = fs.metadata_abs(src)?;
-    if meta.is_dir() {
-        fs.copy_dir_recursive(src, dst)?;
-    } else if meta.is_file() {
-        if let Some(parent) = dst.as_path().parent() {
-            let parent_guard = GuardedPath::new(dst.root(), parent)?;
-            fs.create_dir_all_abs(&parent_guard)?;
+    match fs.entry_kind(src)? {
+        EntryKind::Dir => {
+            fs.copy_dir_recursive(src, dst)?;
         }
-        fs.copy_file(src, dst)?;
-    } else {
-        bail!("unsupported file type: {}", src.display());
+        EntryKind::File => {
+            if let Some(parent) = dst.as_path().parent() {
+                let parent_guard = GuardedPath::new(dst.root(), parent)?;
+                fs.create_dir_all_abs(&parent_guard)?;
+            }
+            fs.copy_file(src, dst)?;
+        }
     }
     Ok(())
 }
