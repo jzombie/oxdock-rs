@@ -1,7 +1,6 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use anyhow::{Context, Result, bail};
-#[cfg(not(miri))]
 use std::fs;
 use std::path::Path;
 
@@ -49,13 +48,37 @@ impl PathResolver {
         {
             let rel = Self::normalize_rel(&resolved);
             let state = self.state_for_guard(&resolved);
-            {
-                let mut state_mut = state.borrow_mut();
-                if state_mut.entry_kind(&rel).is_none() {
-                    state_mut.ensure_dir(&rel);
+
+            if resolved.as_path().exists() {
+                let meta = fs::metadata(resolved.as_path())
+                    .with_context(|| format!("failed to stat {}", resolved.display()))?;
+                if !meta.is_dir() {
+                    bail!("WORKDIR path is not a directory: {}", resolved.display());
                 }
+                {
+                    let mut state_mut = state.borrow_mut();
+                    if state_mut.entry_kind(&rel).is_none() {
+                        state_mut.ensure_dir(&rel);
+                    }
+                }
+            } else {
+                {
+                    let mut state_mut = state.borrow_mut();
+                    if state_mut.entry_kind(&rel).is_none() {
+                        state_mut.ensure_dir(&rel);
+                    }
+                }
+                if let Some(parent) = resolved.as_path().parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating dir {}", parent.display()))?;
+                }
+                fs::create_dir_all(resolved.as_path())
+                    .with_context(|| format!("creating WORKDIR {}", resolved.display()))?;
             }
-            Ok(resolved)
+
+            let final_abs =
+                fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
+            GuardedPath::new(resolved.root(), &final_abs)
         }
     }
 
