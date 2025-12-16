@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+#[cfg(not(miri))]
+use anyhow::bail;
 use std::fs;
 
 #[cfg(miri)]

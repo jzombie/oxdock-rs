@@ -199,6 +199,7 @@ impl PathResolver {
 }
 
 #[cfg(all(test, miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use anyhow::Result;

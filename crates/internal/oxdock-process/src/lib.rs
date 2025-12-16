@@ -320,10 +320,8 @@ fn plan_background(ctx: &CommandContext, script: &str) -> Result<SyntheticBgHand
         }
         let (action, sleep_dur, exit_code) = parse_command(cmd, ctx, &resolver, false)?;
         ready += sleep_dur;
-        if let Some(act) = action {
-            if let CommandAction::Write { target, data } = act {
-                actions.push(Action::WriteFile { target, data });
-            }
+        if let Some(CommandAction::Write { target, data }) = action {
+            actions.push(Action::WriteFile { target, data });
         }
         if let Some(code) = exit_code {
             status = exit_status_from_code(code);
@@ -560,12 +558,12 @@ fn exit_status_from_code(code: i32) -> ExitStatus {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
-        return ExitStatusExt::from_raw(code << 8);
+        ExitStatusExt::from_raw(code << 8)
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::ExitStatusExt;
-        return ExitStatusExt::from_raw(code as u32);
+        ExitStatusExt::from_raw(code as u32)
     }
 }
 
@@ -647,7 +645,7 @@ impl CommandBuilder {
         #[cfg(miri)]
         {
             let snap = self.snapshot();
-            return synthetic_status(&snap);
+            synthetic_status(&snap)
         }
 
         #[cfg(not(miri))]
@@ -665,7 +663,7 @@ impl CommandBuilder {
         #[cfg(miri)]
         {
             let snap = self.snapshot();
-            return synthetic_output(&snap);
+            synthetic_output(&snap)
         }
 
         #[cfg(not(miri))]

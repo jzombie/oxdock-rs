@@ -1,15 +1,16 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-
 #[cfg(not(miri))]
 use anyhow::Context;
 use anyhow::{Result, bail};
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::Path;
 #[cfg(miri)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::PathBuf;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub(crate) fn guard_path(
     root: &Path,
     candidate: &Path,
@@ -17,7 +18,7 @@ pub(crate) fn guard_path(
 ) -> Result<std::path::PathBuf> {
     #[cfg(miri)]
     {
-        return guard_path_miri(root, candidate, mode);
+        guard_path_miri(root, candidate, mode)
     }
 
     #[cfg(not(miri))]
@@ -104,6 +105,7 @@ pub(crate) fn guard_path(
 }
 
 #[cfg(miri)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn guard_path_miri(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
     // Avoid host filesystem syscalls under Miri by normalizing paths purely in memory.
     let root_abs = if root.is_absolute() {
@@ -131,6 +133,7 @@ fn guard_path_miri(root: &Path, candidate: &Path, mode: AccessMode) -> Result<Pa
 }
 
 #[cfg(miri)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn normalize_no_fs(path: &Path) -> PathBuf {
     let mut parts: Vec<PathBuf> = Vec::new();
     let is_abs = path.is_absolute();
@@ -140,10 +143,8 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
             std::path::Component::RootDir => parts.clear(),
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                if let Some(last) = parts.last() {
-                    if !last.as_os_str().is_empty() {
-                        parts.pop();
-                    }
+                if let Some(last) = parts.last() && !last.as_os_str().is_empty() {
+                    parts.pop();
                 }
             }
             std::path::Component::Normal(seg) => parts.push(seg.into()),
@@ -164,6 +165,7 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
 
 // Guard and canonicalize paths under the configured roots.
 impl PathResolver {
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub(crate) fn check_access_with_root(
         &self,
         root: &GuardedPath,
@@ -173,16 +175,17 @@ impl PathResolver {
         let guarded = guard_path(root.as_path(), candidate, mode)?;
         #[cfg(miri)]
         {
-            return Ok(GuardedPath::from_guarded_parts(
+            Ok(GuardedPath::from_guarded_parts(
                 root.root().to_path_buf(),
                 guarded,
-            ));
+            ))
         }
 
         #[cfg(not(miri))]
         Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub(crate) fn check_access(&self, candidate: &Path, mode: AccessMode) -> Result<GuardedPath> {
         self.check_access_with_root(&self.root, candidate, mode)
     }

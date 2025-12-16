@@ -54,7 +54,7 @@ impl PathResolver {
                 .with_context(|| {
                     format!("failed to resolve COPY source {}", candidate.display())
                 })?;
-            return self.backend.resolve_copy_source(guarded);
+            self.backend.resolve_copy_source(guarded)
         }
 
         #[cfg(not(miri))]

@@ -11,6 +11,7 @@ pub type DirEntry = std::fs::DirEntry;
 pub type FileType = std::fs::FileType;
 
 #[cfg(miri)]
+#[allow(clippy::disallowed_types)]
 mod synthetic_entry {
     use super::EntryKind;
     use std::ffi::OsString;
@@ -48,7 +49,7 @@ mod synthetic_entry {
             let file_name = path
                 .file_name()
                 .map(|n| n.to_os_string())
-                .unwrap_or_else(|| OsString::new());
+                    .unwrap_or_default();
             Self {
                 path,
                 file_name,

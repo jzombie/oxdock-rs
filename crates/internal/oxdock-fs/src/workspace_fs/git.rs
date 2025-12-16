@@ -1,7 +1,7 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-
 use anyhow::{Context, Result};
+#[cfg(not(miri))]
 use std::ffi::OsStr;
+#[cfg(not(miri))]
 use std::process::{Command, Output};
 
 #[cfg(not(miri))]
@@ -230,11 +230,13 @@ impl PathResolver {
 }
 
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 struct GitCommand {
     inner: Command,
 }
 
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_methods)]
 impl GitCommand {
     fn new(cwd: &std::path::Path) -> Self {
         let mut cmd = Command::new("git");

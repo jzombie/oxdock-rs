@@ -135,6 +135,7 @@ impl BackendImpl for HostBackend {
 
 // Miri implementation (keeps synthetic state + mirrors to host)
 #[cfg(miri)]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types, clippy::collapsible_if, clippy::needless_return, clippy::duplicated_attributes)]
 mod miri_backend {
     use super::super::EntryKind;
     use super::*;
@@ -242,10 +243,10 @@ mod miri_backend {
             let binding = self.state_for_guard_rc(path);
             let state = binding.lock().expect("miri state poisoned");
             if let Some(kind) = state.entry_kind(&rel) {
-                return synthetic_metadata(kind);
+                synthetic_metadata(kind)
+            } else {
+                bail!("failed to stat {}", path.display())
             }
-
-            bail!("failed to stat {}", path.display())
         }
 
         fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
@@ -316,15 +317,13 @@ mod miri_backend {
             // Use a stable FD (/dev/null) to obtain metadata without path-based statx.
             let f = fs::File::open("/dev/null")
                 .with_context(|| "failed to open /dev/null for synthetic metadata")?;
-            return f
-                .metadata()
-                .with_context(|| "failed to fetch synthetic metadata");
+            f.metadata().with_context(|| "failed to fetch synthetic metadata")
         }
 
         #[cfg(not(unix))]
         {
             // Conservative fallback: metadata is not available under Miri on this platform.
-            let _ = kind;
+            let _ = _kind;
             bail!("synthetic metadata unsupported under miri on this platform")
         }
     }
@@ -350,8 +349,6 @@ mod miri_backend {
         parts.join("/")
     }
 
-    #[cfg(miri)]
-    #[cfg(miri)]
     #[derive(Default)]
     struct SyntheticRootState {
         files: HashMap<String, Vec<u8>>,
@@ -463,11 +460,9 @@ mod miri_backend {
                     if let Some(child) = dir.split('/').next() {
                         push_child(child, EntryKind::Dir);
                     }
-                } else if let Some(prefix) = prefix.as_ref() {
-                    if let Some(rest) = dir.strip_prefix(prefix) {
-                        if let Some(child) = rest.split('/').next() {
-                            push_child(child, EntryKind::Dir);
-                        }
+                } else if let Some(prefix) = prefix.as_ref() && let Some(rest) = dir.strip_prefix(prefix) {
+                    if let Some(child) = rest.split('/').next() {
+                        push_child(child, EntryKind::Dir);
                     }
                 }
             }
@@ -477,11 +472,9 @@ mod miri_backend {
                     if let Some(child) = file.split('/').next() {
                         push_child(child, EntryKind::File);
                     }
-                } else if let Some(prefix) = prefix.as_ref() {
-                    if let Some(rest) = file.strip_prefix(prefix) {
-                        if let Some(child) = rest.split('/').next() {
-                            push_child(child, EntryKind::File);
-                        }
+                } else if let Some(prefix) = prefix.as_ref() && let Some(rest) = file.strip_prefix(prefix) {
+                    if let Some(child) = rest.split('/').next() {
+                        push_child(child, EntryKind::File);
                     }
                 }
             }
@@ -504,7 +497,7 @@ impl Backend {
     pub(super) fn new(root: &GuardedPath, build: &GuardedPath) -> Result<Self> {
         #[cfg(miri)]
         {
-            return Ok(Backend::Miri(miri_backend::MiriBackend::new(root, build)?));
+            Ok(Backend::Miri(miri_backend::MiriBackend::new(root, build)?))
         }
         #[cfg(not(miri))]
         {
