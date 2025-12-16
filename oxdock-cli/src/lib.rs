@@ -397,8 +397,10 @@ fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
 }
 
 #[cfg(test)]
-static SHELL_CMD_HOOK: Mutex<Option<Box<dyn FnMut(&CommandSnapshot) -> Result<()> + Send>>> =
-    Mutex::new(None);
+type ShellCmdHook = dyn FnMut(&CommandSnapshot) -> Result<()> + Send;
+
+#[cfg(test)]
+static SHELL_CMD_HOOK: Mutex<Option<Box<ShellCmdHook>>> = Mutex::new(None);
 
 #[cfg(test)]
 fn set_shell_command_hook<F>(hook: F)

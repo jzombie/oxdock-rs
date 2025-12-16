@@ -1,14 +1,20 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::ffi::OsStr;
-use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use super::{AccessMode, PathResolver};
+#[cfg(not(miri))]
+use super::AccessMode;
+use super::PathResolver;
 use crate::GuardedPath;
+#[cfg(not(miri))]
+use anyhow::bail;
+#[cfg(not(miri))]
+use std::path::PathBuf;
 
 impl PathResolver {
+    #[cfg(not(miri))]
     fn git_command(&self) -> GitCommand {
         GitCommand::new(self.build_context.as_path())
     }
@@ -223,10 +229,12 @@ impl PathResolver {
     }
 }
 
+#[cfg(not(miri))]
 struct GitCommand {
     inner: Command,
 }
 
+#[cfg(not(miri))]
 impl GitCommand {
     fn new(cwd: &std::path::Path) -> Self {
         let mut cmd = Command::new("git");

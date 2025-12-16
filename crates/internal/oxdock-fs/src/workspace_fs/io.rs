@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 
-use super::{AccessMode, EntryKind, PathResolver};
+#[cfg(miri)]
+use super::EntryKind;
+use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
 #[allow(clippy::disallowed_types)]

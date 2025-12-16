@@ -32,6 +32,7 @@ impl HostBackend {
 }
 
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_methods)]
 impl BackendImpl for HostBackend {
     fn create_dir_all_abs(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()> {
         if !root.as_path().exists() {
@@ -507,7 +508,7 @@ impl Backend {
         }
         #[cfg(not(miri))]
         {
-            return Ok(Backend::Host(HostBackend::new(root, build)?));
+            Ok(Backend::Host(HostBackend::new(root, build)?))
         }
     }
 

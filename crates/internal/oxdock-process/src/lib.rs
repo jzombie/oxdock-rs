@@ -5,7 +5,7 @@ mod mock;
 mod shell;
 
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_fs::GuardedPath;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
@@ -16,6 +16,9 @@ use std::{
     ffi::{OsStr, OsString},
     iter::IntoIterator,
 };
+
+#[cfg(miri)]
+use oxdock_fs::PathResolver;
 
 #[cfg(feature = "mock-process")]
 pub use mock::{MockHandle, MockProcessManager, MockRunCall, MockSpawnCall};

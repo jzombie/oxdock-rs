@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
