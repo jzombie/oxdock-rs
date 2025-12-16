@@ -16,7 +16,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 indoc.workspace = true
-oxdock-buildtime-macros.workspace = true
 oxdock-core.workspace = true
 oxdock-fs.workspace = true
 oxdock-process.workspace = true

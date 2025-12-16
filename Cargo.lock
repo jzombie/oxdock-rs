@@ -281,7 +281,6 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
- "oxdock-buildtime-macros",
  "oxdock-core",
  "oxdock-fs",
  "oxdock-process",
