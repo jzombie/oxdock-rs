@@ -167,7 +167,8 @@ pub struct SyntheticProcessManager;
 pub struct SyntheticBgHandle {
     ctx: CommandContext,
     actions: Vec<Action>,
-    ready_at: std::time::Instant,
+    remaining: std::time::Duration,
+    last_polled: std::time::Instant,
     status: ExitStatus,
     applied: bool,
     killed: bool,
@@ -189,7 +190,14 @@ impl BackgroundHandle for SyntheticBgHandle {
         if self.applied {
             return Ok(Some(self.status));
         }
-        if std::time::Instant::now() >= self.ready_at {
+        let now = std::time::Instant::now();
+        let elapsed = now.saturating_duration_since(self.last_polled);
+        const MAX_ADVANCE: std::time::Duration = std::time::Duration::from_millis(50);
+        let advance = elapsed.min(MAX_ADVANCE).min(self.remaining);
+        self.remaining = self.remaining.saturating_sub(advance);
+        self.last_polled = now;
+
+        if self.remaining.is_zero() {
             apply_actions(&self.ctx, &self.actions)?;
             self.applied = true;
             Ok(Some(self.status))
@@ -208,11 +216,10 @@ impl BackgroundHandle for SyntheticBgHandle {
             self.applied = true;
             return Ok(self.status);
         }
-        let now = std::time::Instant::now();
-        if now < self.ready_at {
-            std::thread::sleep(self.ready_at - now);
-        }
         if !self.applied {
+            if !self.remaining.is_zero() {
+                std::thread::sleep(self.remaining);
+            }
             apply_actions(&self.ctx, &self.actions)?;
             self.applied = true;
         }
@@ -311,10 +318,14 @@ fn plan_background(ctx: &CommandContext, script: &str) -> Result<SyntheticBgHand
         }
     }
 
+    let min_ready = std::time::Duration::from_millis(50);
+    ready = ready.max(min_ready);
+
     let handle = SyntheticBgHandle {
         ctx: ctx.clone(),
         actions,
-        ready_at: std::time::Instant::now() + ready,
+        remaining: ready,
+        last_polled: std::time::Instant::now(),
         status,
         applied: false,
         killed: false,
