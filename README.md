@@ -34,6 +34,12 @@ Every internal command is engineered to run the same way across platforms, excep
 ... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor
 ... TODO: Show example
 
+## Testing
+
+Testing is performed across Linux, Mac, and Windows environments, and UB (Undefined Behavior) testing is handled by [Miri](https://github.com/rust-lang/miri).
+
+We strongly prioritize keeping unit and integration tests compatible with Miri, because doing so also encourages clean separation of process and filesystem modeling from direct OS calls, avoiding scattered filesystem and process usage throughout the codebase.
+
 ## Path Separators
 
 - **Cross-platform behavior:** Paths in OxDock scripts are treated as filesystem paths and are resolved using Rust's `Path`/`PathBuf` APIs. That means you can use either `/`-separated paths or `./`-prefixed relative paths in scripts and they will be interpreted correctly on Windows, macOS, and Linux.
