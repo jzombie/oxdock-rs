@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver};
 #[cfg(windows)]
 use oxdock_fs::command_path;
+use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
