@@ -358,7 +358,6 @@ mod copy;
 mod git;
 mod io;
 mod resolve;
-#[cfg(not(miri))]
 use access::guard_path;
 
 #[cfg(feature = "mock-fs")]
