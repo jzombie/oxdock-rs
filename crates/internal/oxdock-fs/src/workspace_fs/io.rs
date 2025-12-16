@@ -65,8 +65,18 @@ impl PathResolver {
         if guarded.as_path().exists() {
             let entries = fs::read_dir(guarded.as_path())
                 .with_context(|| format!("failed to read dir {}", guarded.display()))?;
-            let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
-            return Ok(vec);
+            let mut out: Vec<super::DirEntry> = Vec::new();
+            for entry in entries {
+                let entry = entry?;
+                let ft = entry.file_type()?;
+                let kind = if ft.is_dir() {
+                    EntryKind::Dir
+                } else {
+                    EntryKind::File
+                };
+                out.push(super::DirEntry::new(entry.path(), kind));
+            }
+            return Ok(out);
         }
 
         let rel = Self::normalize_rel(&guarded);
