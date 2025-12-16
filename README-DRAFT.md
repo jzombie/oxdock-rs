@@ -9,12 +9,9 @@
   <a href="https://docs.rs/oxdock">
     <img src="https://img.shields.io/docsrs/oxdock" alt="docs.rs" />
   </a>
-<<<<<<< HEAD
   <a href="https://github.com/jzombie/oxdock-rs/actions/workflows/rust-tests.yml?query=branch%3Amain+event%3Apush">
     <img src="https://img.shields.io/github/actions/workflow/status/jzombie/oxdock-rs/rust-tests.yml?branch=main&label=Miri&logo=github" alt="Miri status" />
   </a>
-=======
->>>>>>> 08284d507b2fb0c54b97134c01ac926ae9b095f0
   <a href="https://deepwiki.com/jzombie/rust-oxdock">
     <img src="https://deepwiki.com/badge.svg" alt="DeepWiki" />
   </a>
@@ -34,8 +31,7 @@ OxDock has a simple goal to provide a simple language that works the same across
 
 Every internal command is engineered to run the same way across platforms, except for the RUN command, which calls native programs.
 
-<<<<<<< HEAD
-... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor
+... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor.  
 ... TODO: Show example
 
 ## Testing
@@ -44,10 +40,6 @@ Testing is performed across Linux, Mac, and Windows environments, and UB (Undefi
 
 There is strong prioritzation in keeping unit and integration tests compatible with Miri, because doing so also encourages clean separation of process and filesystem modeling from direct OS calls, avoiding scattered filesystem and process usage throughout the codebase.
 
-=======
-... TODO: Show example
-
->>>>>>> 08284d507b2fb0c54b97134c01ac926ae9b095f0
 ## Path Separators
 
 - **Cross-platform behavior:** Paths in OxDock scripts are treated as filesystem paths and are resolved using Rust's `Path`/`PathBuf` APIs. That means you can use either `/`-separated paths or `./`-prefixed relative paths in scripts and they will be interpreted correctly on Windows, macOS, and Linux.
