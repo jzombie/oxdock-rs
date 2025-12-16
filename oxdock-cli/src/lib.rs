@@ -234,16 +234,29 @@ pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
 }
 
 fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
+    #[cfg(windows)]
+    let cwd_disp = command_path(cwd).as_ref().display().to_string();
+    #[cfg(windows)]
+    let workspace_disp = command_path(workspace_root)
+        .as_ref()
+        .display()
+        .to_string();
+
+    #[cfg(not(windows))]
+    let cwd_disp = cwd.display().to_string();
+    #[cfg(not(windows))]
+    let workspace_disp = workspace_root.display().to_string();
+
     let pkg = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "oxdock".to_string());
     indoc::formatdoc! {"
         {pkg} shell workspace
-          cwd: {}
-          source: git HEAD at {}
+          cwd: {cwd_disp}
+          source: git HEAD at {workspace_disp}
           lifetime: temporary directory created for this shell session; it disappears when you exit
           creation: {pkg} archived the repo at HEAD into this temp workspace before launching the shell
 
           WARNING: This shell still runs on your host filesystem and is **not** isolated!
-    ", cwd.display(), workspace_root.display()}
+    "}
 }
 
 #[cfg(windows)]
@@ -254,6 +267,19 @@ fn escape_for_cmd(s: &str) -> String {
         .replace('|', "^|")
         .replace('>', "^>")
         .replace('<', "^<")
+}
+
+#[cfg(windows)]
+fn windows_banner_command(banner: &str, cwd: &std::path::Path) -> String {
+    let mut parts: Vec<String> = banner
+        .lines()
+        .map(|line| format!("echo {}", escape_for_cmd(line)))
+        .collect();
+    parts.push(format!(
+        "cd /d {}",
+        escape_for_cmd(&cwd.display().to_string())
+    ));
+    parts.join(" && ")
 }
 
 fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
@@ -291,6 +317,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         // and also set the parent process working directory to the temp workspace; this avoids
         // start's `/D` parsing quirks on paths with spaces or verbatim prefixes.
         let cwd_path = command_path(cwd);
+        let banner_cmd = windows_banner_command(&banner, cwd_path.as_ref());
         let mut cmd = CommandBuilder::new("cmd");
         cmd.current_dir(cwd_path.as_ref())
             .arg("/C")
@@ -298,10 +325,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
             .arg("oxdock shell")
             .arg("cmd")
             .arg("/K")
-            .arg(format!(
-                "echo {} && cd /d .",
-                escape_for_cmd(&banner)
-            ));
+            .arg(banner_cmd);
 
         // Fire-and-forget so the parent console regains control immediately; the child window is
         // fully interactive. If the launch fails, surface the error right away.
@@ -455,5 +479,17 @@ mod tests {
             "expected non-verbatim path, got {as_str}"
         );
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_banner_command_emits_all_lines() {
+        let banner = "line1\nline2\nline3";
+        let cwd = std::path::Path::new(r"C:\temp\workspace");
+        let cmd = windows_banner_command(banner, cwd);
+        assert!(cmd.contains("line1"));
+        assert!(cmd.contains("line2"));
+        assert!(cmd.contains("line3"));
+        assert!(cmd.contains("cd /d C:\\temp\\workspace"));
     }
 }
