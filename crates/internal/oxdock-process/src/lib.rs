@@ -210,6 +210,11 @@ impl CommandBuilder {
             .with_context(|| format!("failed to spawn {desc}"))?;
         Ok(ChildHandle { child })
     }
+
+    /// Return a debug-friendly representation of the command and its args.
+    pub fn render(&self) -> String {
+        format!("{:?}", self.inner)
+    }
 }
 
 pub struct CommandOutput {

@@ -3,6 +3,8 @@ use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
 #[cfg(windows)]
 use std::borrow::Cow;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 
@@ -329,6 +331,10 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
             cmd.stdin_file(tty);
         }
 
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
+        }
+
         let status = cmd.status()?;
         if !status.success() {
             bail!("shell exited with status {}", status);
@@ -352,6 +358,10 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
             .arg("/K")
             .arg(banner_cmd);
 
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
+        }
+
         // Fire-and-forget so the parent console regains control immediately; the child window is
         // fully interactive. If the launch fails, surface the error right away.
         cmd.spawn()
@@ -366,11 +376,48 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
     }
 }
 fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
+    #[cfg(test)]
+    {
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
+        }
+    }
     let status = cmd.status()?;
     if !status.success() {
         bail!("command returned status {}", status);
     }
     Ok(())
+}
+
+#[cfg(test)]
+static SHELL_CMD_HOOK: Mutex<Option<Box<dyn FnMut(&CommandBuilder) -> Result<()> + Send>>> =
+    Mutex::new(None);
+
+#[cfg(test)]
+fn set_shell_command_hook<F>(hook: F)
+where
+    F: FnMut(&CommandBuilder) -> Result<()> + Send + 'static,
+{
+    *SHELL_CMD_HOOK.lock().unwrap() = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn clear_shell_command_hook() {
+    *SHELL_CMD_HOOK.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+fn try_shell_command_hook(cmd: &mut CommandBuilder) -> Result<bool> {
+    if let Some(hook) = SHELL_CMD_HOOK.lock().unwrap().as_mut() {
+        hook(cmd)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(not(test))]
+fn try_shell_command_hook(_cmd: &mut CommandBuilder) -> Result<bool> {
+    Ok(false)
 }
 
 #[cfg(windows)]
@@ -516,6 +563,36 @@ mod tests {
         );
         Ok(())
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_builds_unix_command() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let cwd = workspace_root.join("subdir")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        resolver.create_dir_all_abs(&cwd)?;
+
+        let rendered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = rendered.clone();
+        set_shell_command_hook(move |cmd| {
+            *captured.lock().unwrap() = cmd.render();
+            Ok(())
+        });
+        run_shell(&cwd, &workspace_root)?;
+        clear_shell_command_hook();
+
+        let desc = rendered.lock().unwrap().clone();
+        assert!(
+            desc.contains(&shell_program()) && desc.contains("-c") && desc.contains("exec"),
+            "expected unix shell command to use shell_program with -c/exec, got {desc}"
+        );
+        assert!(
+            desc.contains("subdir"),
+            "expected shell cwd in command description, got {desc}"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -591,5 +668,40 @@ mod windows_shell_tests {
         assert!(cmd.contains("line2"));
         assert!(cmd.contains("line3"));
         assert!(cmd.contains("cd /d C:\\temp\\workspace"));
+    }
+
+    #[test]
+    fn run_shell_builds_windows_command() -> Result<()> {
+        let workspace = GuardedPath::tempdir_with(|builder| {
+            builder.prefix("oxdock shell win ");
+        })?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let cwd = workspace_root.join("subdir")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        resolver.create_dir_all_abs(&cwd)?;
+
+        let rendered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = rendered.clone();
+        set_shell_command_hook(move |cmd| {
+            *captured.lock().unwrap() = cmd.render();
+            Ok(())
+        });
+        run_shell(&cwd, &workspace_root)?;
+        clear_shell_command_hook();
+
+        let desc = rendered.lock().unwrap().clone();
+        assert!(
+            desc.contains("cmd") && desc.contains("/C") && desc.contains("start"),
+            "expected cmd /C start in windows shell command, got {desc}"
+        );
+        assert!(
+            desc.contains("oxdock shell") && desc.contains("/K"),
+            "expected banner and /K in windows shell command, got {desc}"
+        );
+        assert!(
+            desc.contains("subdir"),
+            "expected cwd path in windows shell command, got {desc}"
+        );
+        Ok(())
     }
 }
