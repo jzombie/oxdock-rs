@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::Path;
 use std::rc::Rc;
 
@@ -108,12 +108,12 @@ impl WorkspaceFs for MockFs {
         Ok(path.clone())
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn metadata_abs(&self, _path: &GuardedPath) -> Result<std::fs::Metadata> {
         bail!("metadata not supported in mock fs");
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn metadata_external(&self, _path: &crate::UnguardedPath) -> Result<std::fs::Metadata> {
         bail!("metadata not supported in mock fs");
     }
@@ -183,7 +183,7 @@ impl WorkspaceFs for MockFs {
         bail!("copy unsupported")
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types))]
+    #[allow(clippy::disallowed_types)]
     fn copy_dir_from_external(
         &self,
         _src: &crate::UnguardedPath,
@@ -192,7 +192,7 @@ impl WorkspaceFs for MockFs {
         bail!("copy unsupported")
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types))]
+    #[allow(clippy::disallowed_types)]
     fn copy_file_from_external(
         &self,
         _src: &crate::UnguardedPath,
@@ -205,7 +205,7 @@ impl WorkspaceFs for MockFs {
         bail!("symlink unsupported")
     }
 
-    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn open_external_file(&self, _path: &crate::UnguardedPath) -> Result<std::fs::File> {
         bail!("open unsupported")
     }
@@ -226,8 +226,8 @@ impl WorkspaceFs for MockFs {
         }
     }
 
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
-        #[cfg_attr(miri, allow(clippy::disallowed_methods, clippy::disallowed_types))]
         let candidate = Path::new(new_dir);
         if candidate.is_absolute() {
             return GuardedPath::new(self.root.root(), candidate);
@@ -239,8 +239,8 @@ impl WorkspaceFs for MockFs {
         self.guard_from_rel(target)
     }
 
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
-        #[cfg_attr(miri, allow(clippy::disallowed_methods, clippy::disallowed_types))]
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
             return GuardedPath::new(self.root.root(), candidate);
@@ -249,8 +249,8 @@ impl WorkspaceFs for MockFs {
         self.guard_from_rel(target)
     }
 
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
-        #[cfg_attr(miri, allow(clippy::disallowed_methods, clippy::disallowed_types))]
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
             return GuardedPath::new(self.root.root(), candidate);
@@ -259,8 +259,8 @@ impl WorkspaceFs for MockFs {
         self.guard_from_rel(target)
     }
 
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
-        #[cfg_attr(miri, allow(clippy::disallowed_methods, clippy::disallowed_types))]
         let candidate = Path::new(from);
         if candidate.is_absolute() {
             return GuardedPath::new(self.root.root(), candidate);
