@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
+use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Read};
 
@@ -286,18 +287,21 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 
     #[cfg(windows)]
     {
-        // Launch via `start` so Windows opens a real interactive console window rooted at the temp
-        // workspace. Using `start` avoids stdin/handle inheritance issues that can make the child
-        // non-interactive when CREATE_NEW_CONSOLE is set.
+        // Launch via `start` so Windows opens a real interactive console window. Normalize the path
+        // and also set the parent process working directory to the temp workspace; this avoids
+        // start's `/D` parsing quirks on paths with spaces or verbatim prefixes.
+        let cwd_path = command_path(cwd);
         let mut cmd = CommandBuilder::new("cmd");
-        cmd.arg("/C")
+        cmd.current_dir(cwd_path.as_ref())
+            .arg("/C")
             .arg("start")
             .arg("oxdock shell")
-            .arg("/D")
-            .arg(cwd.as_path())
             .arg("cmd")
             .arg("/K")
-            .arg(format!("echo {} && cd /d .", escape_for_cmd(&banner)));
+            .arg(format!(
+                "echo {} && cd /d .",
+                escape_for_cmd(&banner)
+            ));
 
         // Fire-and-forget so the parent console regains control immediately; the child window is
         // fully interactive. If the launch fails, surface the error right away.
@@ -320,27 +324,63 @@ fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
     Ok(())
 }
 
+fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, PathBuf, Prefix};
+
+        let mut components = path.as_path().components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => {
+                    let mut buf = PathBuf::from(format!("{}:", char::from(drive)));
+                    buf.extend(components);
+                    return Cow::Owned(buf);
+                }
+                Prefix::VerbatimUNC(server, share) => {
+                    let mut buf = PathBuf::from(r"\\");
+                    buf.push(server);
+                    buf.push(share);
+                    buf.extend(components);
+                    return Cow::Owned(buf);
+                }
+                Prefix::Verbatim(_) => {
+                    let mut buf = PathBuf::new();
+                    buf.push(prefix.as_os_str());
+                    buf.extend(components);
+                    return Cow::Owned(buf);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Cow::Borrowed(path.as_path())
+}
+
 fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result<()> {
     let archive_guard = temp_root
         .join("src.tar")
         .context("failed to create archive path under temp root")?;
-    let archive_str = archive_guard.display().to_string();
+    let archive_path = command_path(&archive_guard);
+    let temp_root_path = command_path(temp_root);
     let mut archive_cmd = CommandBuilder::new("git");
     archive_cmd.current_dir(workspace_root.as_path()).args([
         "archive",
         "--format=tar",
         "--output",
-        &archive_str,
-        "HEAD",
     ]);
+    archive_cmd
+        .arg(archive_path.as_ref())
+        .arg("HEAD");
     run_cmd(archive_cmd)?;
 
     let mut tar_cmd = CommandBuilder::new("tar");
     tar_cmd
         .arg("-xf")
-        .arg(&archive_str)
+        .arg(archive_path.as_ref())
         .arg("-C")
-        .arg(temp_root.as_path());
+        .arg(temp_root_path.as_ref());
     run_cmd(tar_cmd)?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
@@ -350,4 +390,70 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
         .remove_file_abs(&archive_guard)
         .with_context(|| format!("failed to remove {}", archive_guard.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxdock_fs::PathResolver;
+
+    #[cfg(windows)]
+    fn git(
+        workspace_root: &GuardedPath,
+        args: impl IntoIterator<Item = &'static str>,
+    ) -> Result<()> {
+        let mut cmd = CommandBuilder::new("git");
+        cmd.current_dir(workspace_root.as_path()).args(args);
+        run_cmd(cmd)
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
+    )]
+    #[cfg(windows)]
+    #[test]
+    fn archive_head_handles_windows_temp_paths() -> Result<()> {
+        // Use a temp workspace with spaces to mirror common Windows user dirs.
+        let workspace = GuardedPath::tempdir_with(|builder| {
+            builder.prefix("oxdock shell test ");
+        })?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        let readme = workspace_root.join("README.md")?;
+        resolver.write_file(&readme, b"shell workspace")?;
+
+        git(&workspace_root, ["init"])?;
+        git(&workspace_root, ["config", "user.email", "test@example.com"])?;
+        git(&workspace_root, ["config", "user.name", "Test User"])?;
+        git(&workspace_root, ["add", "."])?;
+        git(&workspace_root, ["commit", "-m", "init"])?;
+
+        let archive_temp = GuardedPath::tempdir_with(|builder| {
+            builder.prefix("oxdock shell dst ");
+        })?;
+        let archive_root = archive_temp.as_guarded_path().clone();
+        archive_head(&workspace_root, &archive_root)?;
+
+        let extracted_readme = archive_root.join("README.md")?;
+        let archive_resolver =
+            PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
+        let contents = archive_resolver.read_to_string(&extracted_readme)?;
+        assert_eq!(contents, "shell workspace");
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_path_strips_verbatim_prefix() -> Result<()> {
+        let temp = GuardedPath::tempdir()?;
+        let converted = command_path(temp.as_guarded_path());
+        let as_str = converted.as_ref().display().to_string();
+        assert!(
+            !as_str.starts_with(r"\\?\"),
+            "expected non-verbatim path, got {as_str}"
+        );
+        Ok(())
+    }
 }
