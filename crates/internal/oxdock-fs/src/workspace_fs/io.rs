@@ -86,14 +86,12 @@ impl PathResolver {
     }
 
     pub fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind> {
-        let meta = self.metadata_abs(path)?;
-        if meta.is_dir() {
-            Ok(super::EntryKind::Dir)
-        } else if meta.is_file() {
-            Ok(super::EntryKind::File)
-        } else {
-            bail!("unsupported file type: {}", path.display());
-        }
+        self.backend.entry_kind(path)
+    }
+
+    /// Lightweight existence check that avoids host `stat` calls under Miri.
+    pub fn exists(&self, path: &GuardedPath) -> bool {
+        self.backend.entry_kind(path).is_ok()
     }
 
     #[allow(clippy::disallowed_methods, clippy::disallowed_types)]

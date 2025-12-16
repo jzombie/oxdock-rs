@@ -26,7 +26,7 @@ fn create_dirs(path: &GuardedPath) {
 }
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
-    root.as_path().join(rel).exists()
+    root.join(rel).map(|p| p.exists()).unwrap_or(false)
 }
 
 fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
@@ -677,7 +677,7 @@ fn workdir_creates_missing_dirs_within_root() {
 
     run_steps(&root, &steps).unwrap();
 
-    assert!(root.as_path().join("a/b/c").exists());
+    assert!(root.join("a/b/c").unwrap().exists());
 }
 
 #[test]

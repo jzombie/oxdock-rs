@@ -30,7 +30,7 @@ mod tests {
     }
 
     fn exists(root: &GuardedPath, rel: &str) -> bool {
-        root.as_path().join(rel).exists()
+        root.join(rel).map(|p| p.exists()).unwrap_or(false)
     }
 
     #[cfg_attr(
@@ -430,9 +430,9 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(snapshot_root.as_path().join("snap.txt").exists());
-        assert!(snapshot_root.as_path().join("snap2.txt").exists());
-        assert!(local_root.as_path().join("local.txt").exists());
+        assert!(snapshot_root.join("snap.txt").unwrap().exists());
+        assert!(snapshot_root.join("snap2.txt").unwrap().exists());
+        assert!(local_root.join("local.txt").unwrap().exists());
     }
 
     #[test]
@@ -460,8 +460,8 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(local_root.as_path().join("localroot.txt").exists());
-        assert!(local_client.as_path().join("client.txt").exists());
-        assert!(snapshot_root.as_path().join("snaproot.txt").exists());
+        assert!(local_root.join("localroot.txt").unwrap().exists());
+        assert!(local_client.join("client.txt").unwrap().exists());
+        assert!(snapshot_root.join("snaproot.txt").unwrap().exists());
     }
 }

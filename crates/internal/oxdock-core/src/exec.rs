@@ -436,12 +436,16 @@ fn describe_dir(
                 return;
             }
             *left -= 1;
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
             let p = entry.path();
             let guarded_child = match GuardedPath::new(guard_root.root(), &p) {
                 Ok(child) => child,
                 Err(_) => continue,
             };
-            if p.is_dir() {
+            if file_type.is_dir() {
                 helper(
                     fs,
                     guard_root,

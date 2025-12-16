@@ -1,11 +1,17 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use super::AccessMode;
+use super::PathResolver;
 use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tempfile::{Builder, TempDir};
+#[cfg(miri)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(miri)]
+static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
@@ -48,6 +54,7 @@ impl GuardedPath {
     }
 
     /// Create a guarded temporary directory using `tempfile::Builder`.
+    #[cfg(not(miri))]
     pub fn tempdir() -> Result<GuardedTempDir> {
         Self::tempdir_with(|_| {})
     }
@@ -55,6 +62,7 @@ impl GuardedPath {
     /// Create a guarded temporary directory with a custom `tempfile::Builder`
     /// configuration (e.g., prefixes). The temporary directory is deleted when
     /// the returned `GuardedTempDir` is dropped unless it is persisted.
+    #[cfg(not(miri))]
     pub fn tempdir_with<F>(configure: F) -> Result<GuardedTempDir>
     where
         F: FnOnce(&mut Builder),
@@ -63,11 +71,42 @@ impl GuardedPath {
         configure(&mut builder);
         let tempdir = builder.tempdir()?;
         let guard = GuardedPath::new_root(tempdir.path())?;
-        Ok(GuardedTempDir::new(guard, tempdir))
+        Ok(GuardedTempDir::new(guard, Some(tempdir)))
+    }
+
+    /// Create a synthetic temporary directory when running under Miri.
+    /// No host filesystem operations are performed to keep isolation intact.
+    #[cfg(miri)]
+    pub fn tempdir() -> Result<GuardedTempDir> {
+        Self::tempdir_with(|_| {})
+    }
+
+    /// Miri-safe variant of `tempdir_with` that allocates a synthetic root path
+    /// without touching the host filesystem.
+    #[cfg(miri)]
+    pub fn tempdir_with<F>(_configure: F) -> Result<GuardedTempDir>
+    where
+        F: FnOnce(&mut Builder),
+    {
+        let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = PathBuf::from(format!("/miri/tempdir-{id}"));
+        let guard = GuardedPath {
+            root: path.clone(),
+            path,
+            synthetic: true,
+        };
+        Ok(GuardedTempDir::new(guard, None))
     }
 
     pub fn as_path(&self) -> &Path {
         &self.path
+    }
+
+    /// Backend-aware existence check that avoids host `stat` when running under Miri.
+    pub fn exists(&self) -> bool {
+        PathResolver::new(self.root(), self.root())
+            .map(|resolver| resolver.exists(self))
+            .unwrap_or(false)
     }
 
     pub fn root(&self) -> &Path {
@@ -160,11 +199,8 @@ pub struct GuardedTempDir {
 }
 
 impl GuardedTempDir {
-    fn new(guard: GuardedPath, tempdir: TempDir) -> Self {
-        Self {
-            guard,
-            tempdir: Some(tempdir),
-        }
+    fn new(guard: GuardedPath, tempdir: Option<TempDir>) -> Self {
+        Self { guard, tempdir }
     }
 
     pub fn as_guarded_path(&self) -> &GuardedPath {
