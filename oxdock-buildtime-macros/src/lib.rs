@@ -52,20 +52,19 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    #[cfg(miri)]
-    let _is_primary = false;
-
     #[cfg(not(miri))]
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
-    #[cfg(miri)]
-    let _has_git = false;
 
+    // Under cfg(miri) we still allow building assets when they are missing so
+    // clippy/miri builds do not fail simply because the prebuilt out_dir is
+    // absent in the checkout. This remains guarded by the same PathResolver
+    // used elsewhere, so path checks stay consistent.
+    #[cfg(miri)]
+    let should_build = true;
     #[cfg(not(miri))]
     let should_build = has_git || is_primary;
-    #[cfg(miri)]
-    let should_build = false;
 
     let out_dir_str = input.out_dir.value();
     let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
@@ -291,11 +290,11 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
     #[cfg(not(miri))]
-    let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
     #[cfg(miri)]
-    let _is_primary = false;
+    let is_primary = false;
 
     #[cfg(not(miri))]
     let has_git = manifest_resolver
@@ -311,7 +310,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     #[cfg(not(miri))]
-    let should_build = has_git || _is_primary || force_rebuild;
+    let should_build = has_git || is_primary || force_rebuild;
     #[cfg(miri)]
     let should_build = false;
 
