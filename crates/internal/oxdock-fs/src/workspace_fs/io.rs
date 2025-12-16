@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 
-use super::{AccessMode, EntryKind, PathResolver};
+use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
 #[allow(clippy::disallowed_types)]
@@ -9,114 +9,28 @@ use crate::UnguardedPath;
 
 // Guarded filesystem IO helpers (read/write/metadata etc.).
 impl PathResolver {
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
-        if !self.root.as_path().exists() {
-            fs::create_dir_all(self.root.as_path())
-                .with_context(|| format!("creating resolver root {}", self.root.display()))?;
-        }
-
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
-        fs::create_dir_all(guarded.as_path())
-            .with_context(|| format!("creating dir {}", guarded.display()))?;
-        Ok(())
+        self.backend.create_dir_all_abs(&self.root, &guarded)
     }
 
-    #[cfg(miri)]
-    pub fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Write)
-            .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
-        let state = self.state_for_guard(&guarded);
-        let rel = Self::normalize_rel(&guarded);
-        state.borrow_mut().ensure_dir(&rel);
-        // Mirror to the host filesystem so std::fs queries (e.g., Path::exists) succeed under Miri.
-        if let Some(parent) = guarded.as_path().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating dir {}", parent.display()))?;
-        }
-        fs::create_dir_all(guarded.as_path())
-            .with_context(|| format!("creating dir {}", guarded.display()))?;
-        Ok(())
-    }
-
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<super::DirEntry>> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read_dir denied for {}", path.display()))?;
-        let entries = fs::read_dir(guarded.as_path())
-            .with_context(|| format!("failed to read dir {}", guarded.display()))?;
-        let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
-        Ok(vec)
+        self.backend.read_dir_entries(&guarded)
     }
 
-    #[cfg(miri)]
-    pub fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<super::DirEntry>> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Read)
-            .with_context(|| format!("read_dir denied for {}", path.display()))?;
-        // Prefer real host FS entries if they exist (we mirror writes there),
-        // otherwise fall back to synthetic in-memory entries.
-        if guarded.as_path().exists() {
-            let entries = fs::read_dir(guarded.as_path())
-                .with_context(|| format!("failed to read dir {}", guarded.display()))?;
-            let mut out: Vec<super::DirEntry> = Vec::new();
-            for entry in entries {
-                let entry = entry?;
-                let ft = entry.file_type()?;
-                let kind = if ft.is_dir() {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                };
-                out.push(super::DirEntry::new(entry.path(), kind));
-            }
-            return Ok(out);
-        }
-
-        let rel = Self::normalize_rel(&guarded);
-        let state_ref = self.state_for_guard(&guarded);
-        let state = state_ref.borrow();
-        if !state.dir_exists(&rel) {
-            bail!("directory does not exist: {}", guarded.display());
-        }
-        let children = state.list_children(&rel);
-        Ok(children
-            .into_iter()
-            .map(|(name, kind)| super::DirEntry::new(guarded.as_path().join(name), kind))
-            .collect())
-    }
-
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
             .with_context(|| format!("read denied for {}", path.display()))?;
-        let data = fs::read(guarded.as_path())
-            .with_context(|| format!("failed to read {}", guarded.display()))?;
-        Ok(data)
-    }
-
-    #[cfg(miri)]
-    pub fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Read)
-            .with_context(|| format!("read denied for {}", path.display()))?;
-        // Prefer host file if present (we mirror writes to host), else fall back to synthetic state.
-        if guarded.as_path().exists() {
-            let data = fs::read(guarded.as_path())
-                .with_context(|| format!("failed to read {}", guarded.display()))?;
-            return Ok(data);
-        }
-        let rel = Self::normalize_rel(&guarded);
-        let data = self.state_for_guard(&guarded).borrow().read_file(&rel)?;
-        Ok(data)
+        self.backend.read_file(&guarded)
     }
 
     #[cfg(not(miri))]
@@ -137,40 +51,14 @@ impl PathResolver {
         Ok(s)
     }
 
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("write denied for {}", path.display()))?;
-        if let Some(parent) = guarded.as_path().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating dir {}", parent.display()))?;
-        }
-        fs::write(guarded.as_path(), contents)
-            .with_context(|| format!("writing {}", guarded.display()))?;
-        Ok(())
+        self.backend.write_file(&guarded, contents)
     }
 
-    #[cfg(miri)]
-    pub fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Write)
-            .with_context(|| format!("write denied for {}", path.display()))?;
-        let rel = Self::normalize_rel(&guarded);
-        let binding = self.state_for_guard(&guarded);
-        let mut state = binding.borrow_mut();
-        state.write_file(&rel, contents);
-        if let Some(parent) = guarded.as_path().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating dir {}", parent.display()))?;
-        }
-        fs::write(guarded.as_path(), contents)
-            .with_context(|| format!("writing {}", guarded.display()))?;
-        Ok(())
-    }
-
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self
@@ -183,26 +71,9 @@ impl PathResolver {
                 )
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
-        Ok(cand)
+        self.backend.canonicalize_abs(cand)
     }
 
-    #[cfg(miri)]
-    pub fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
-        let cand = self
-            .check_access(path.as_path(), AccessMode::Passthru)
-            .or_else(|_| {
-                self.check_access_with_root(
-                    &self.build_context,
-                    path.as_path(),
-                    AccessMode::Passthru,
-                )
-            })
-            .with_context(|| format!("canonicalize denied for {}", path.display()))?;
-        let canon = fs::canonicalize(cand.as_path()).unwrap_or_else(|_| cand.to_path_buf());
-        GuardedPath::new(cand.root(), &canon)
-    }
-
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
         let guarded = self
@@ -211,43 +82,15 @@ impl PathResolver {
                 self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
             })
             .with_context(|| format!("metadata denied for {}", path.display()))?;
-        let m = fs::metadata(guarded.as_path())
-            .with_context(|| format!("failed to stat {}", guarded.display()))?;
-        Ok(m)
+        self.backend.metadata_abs(&guarded)
     }
 
-    #[cfg(miri)]
-    pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Read)
-            .or_else(|_| {
-                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
-            })
-            .with_context(|| format!("metadata denied for {}", path.display()))?;
-        let m = fs::metadata(guarded.as_path())
-            .with_context(|| format!("failed to stat {}", guarded.display()))?;
-        Ok(m)
-    }
-
-    #[cfg(not(miri))]
-    pub fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
+    pub fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind> {
         let meta = self.metadata_abs(path)?;
         if meta.is_dir() {
-            Ok(EntryKind::Dir)
+            Ok(super::EntryKind::Dir)
         } else if meta.is_file() {
-            Ok(EntryKind::File)
-        } else {
-            bail!("unsupported file type: {}", path.display());
-        }
-    }
-
-    #[cfg(miri)]
-    pub fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
-        let meta = self.metadata_abs(path)?;
-        if meta.is_dir() {
-            Ok(EntryKind::Dir)
-        } else if meta.is_file() {
-            Ok(EntryKind::File)
+            Ok(super::EntryKind::File)
         } else {
             bail!("unsupported file type: {}", path.display());
         }
@@ -294,66 +137,21 @@ impl PathResolver {
     }
 
     /// Remove a file after validating it is within allowed roots.
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_file denied for {}", path.display()))?;
-        match std::fs::remove_file(guarded.as_path()) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("failed to remove file {}", guarded.display()));
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(miri)]
-    pub fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Write)
-            .with_context(|| format!("remove_file denied for {}", path.display()))?;
-        let rel = Self::normalize_rel(&guarded);
-        self.state_for_guard(&guarded)
-            .borrow_mut()
-            .remove_file(&rel);
-        match std::fs::remove_file(guarded.as_path()) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("failed to remove file {}", guarded.display()));
-            }
-        }
-        Ok(())
+        self.backend.remove_file_abs(&guarded)
     }
 
     /// Remove a directory and its contents after validating it is within allowed roots.
-    #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_dir_all denied for {}", path.display()))?;
-        std::fs::remove_dir_all(guarded.as_path())
-            .with_context(|| format!("failed to remove dir {}", guarded.display()))?;
-        Ok(())
-    }
-
-    #[cfg(miri)]
-    pub fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Write)
-            .with_context(|| format!("remove_dir_all denied for {}", path.display()))?;
-        let rel = Self::normalize_rel(&guarded);
-        self.state_for_guard(&guarded)
-            .borrow_mut()
-            .remove_dir_all(&rel);
-        let _ = std::fs::remove_dir_all(guarded.as_path());
-        Ok(())
+        self.backend.remove_dir_all_abs(&guarded)
     }
 
     #[cfg(not(miri))]

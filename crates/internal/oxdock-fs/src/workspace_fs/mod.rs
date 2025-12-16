@@ -2,12 +2,8 @@
 // Methods are split across submodules by concern (access checks, IO, copy, git, resolve helpers).
 
 use anyhow::{Context, Result};
-#[cfg(miri)]
-use std::cell::RefCell;
-#[cfg(miri)]
-use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(miri)]
-use std::rc::Rc;
+
+use backend::Backend;
 
 #[cfg(not(miri))]
 pub type DirEntry = std::fs::DirEntry;
@@ -129,10 +125,7 @@ impl AccessMode {
 pub struct PathResolver {
     root: GuardedPath,
     build_context: GuardedPath,
-    #[cfg(miri)]
-    root_state: Rc<RefCell<SyntheticRootState>>,
-    #[cfg(miri)]
-    build_state: Rc<RefCell<SyntheticRootState>>,
+    backend: Backend,
 }
 
 impl PathResolver {
@@ -151,80 +144,11 @@ impl PathResolver {
     pub fn new(root: &Path, build_context: &Path) -> Result<Self> {
         let root_guard = GuardedPath::new_root(root)?;
         let build_guard = GuardedPath::new_root(build_context)?;
-        #[cfg(miri)]
-        let (root_state, build_state) = {
-            use std::fs;
-            let root_state = Rc::new(RefCell::new(SyntheticRootState::new()));
-            // Seed synthetic state with any existing host files/dirs under the root so
-            // multiple resolver instances see the same initial contents (we mirror
-            // writes to the host filesystem elsewhere).
-            if root_guard.as_path().exists() {
-                fn walk(dir: &std::path::Path, rel_prefix: &str, state: &mut SyntheticRootState) {
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            let rel = if rel_prefix.is_empty() {
-                                name.clone()
-                            } else {
-                                format!("{}/{}", rel_prefix, name)
-                            };
-                            if let Ok(ft) = entry.file_type() {
-                                if ft.is_dir() {
-                                    state.ensure_dir(&rel);
-                                    walk(&path, &rel, state);
-                                } else if ft.is_file() {
-                                    if let Ok(data) = fs::read(&path) {
-                                        state.write_file(&rel, &data);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                walk(root_guard.as_path(), "", &mut root_state.borrow_mut());
-            }
-
-            if root_guard.as_path() == build_guard.as_path() {
-                (root_state.clone(), root_state)
-            } else {
-                let build_state = Rc::new(RefCell::new(SyntheticRootState::new()));
-                if build_guard.as_path().exists() {
-                    fn walk_build(dir: &std::path::Path, rel_prefix: &str, state: &mut SyntheticRootState) {
-                        if let Ok(entries) = std::fs::read_dir(dir) {
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                let name = entry.file_name().to_string_lossy().to_string();
-                                let rel = if rel_prefix.is_empty() {
-                                    name.clone()
-                                } else {
-                                    format!("{}/{}", rel_prefix, name)
-                                };
-                                if let Ok(ft) = entry.file_type() {
-                                    if ft.is_dir() {
-                                        state.ensure_dir(&rel);
-                                        walk_build(&path, &rel, state);
-                                    } else if ft.is_file() {
-                                        if let Ok(data) = fs::read(&path) {
-                                            state.write_file(&rel, &data);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    walk_build(build_guard.as_path(), "", &mut build_state.borrow_mut());
-                }
-                (root_state, build_state)
-            }
-        };
+        let backend = Backend::new(&root_guard, &build_guard)?;
         Ok(Self {
             root: root_guard,
             build_context: build_guard,
-            #[cfg(miri)]
-            root_state,
-            #[cfg(miri)]
-            build_state,
+            backend,
         })
     }
 
@@ -240,178 +164,9 @@ impl PathResolver {
         self.root = root;
     }
 
-    #[cfg(miri)]
-    fn state_for_guard(&self, guard: &GuardedPath) -> Rc<RefCell<SyntheticRootState>> {
-        if guard.root() == self.root.as_path() {
-            self.root_state.clone()
-        } else {
-            self.build_state.clone()
-        }
-    }
-
-    #[cfg(miri)]
-    fn normalize_rel(guard: &GuardedPath) -> String {
-        let rel = guard
-            .as_path()
-            .strip_prefix(guard.root())
-            .unwrap_or(guard.as_path())
-            .to_path_buf();
-        let mut parts: Vec<String> = Vec::new();
-        for part in rel.components() {
-            use std::path::Component;
-            match part {
-                Component::RootDir | Component::CurDir => {}
-                Component::ParentDir => {
-                    parts.pop();
-                }
-                Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
-                Component::Prefix(p) => parts.push(p.as_os_str().to_string_lossy().to_string()),
-            }
-        }
-        parts.join("/")
-    }
 }
-
-#[cfg(miri)]
-#[derive(Default)]
-struct SyntheticRootState {
-    files: HashMap<String, Vec<u8>>,
-    dirs: HashSet<String>,
-}
-
-#[cfg(miri)]
-impl SyntheticRootState {
-    fn new() -> Self {
-        let mut dirs = HashSet::new();
-        dirs.insert(String::new());
-        Self {
-            files: HashMap::new(),
-            dirs,
-        }
-    }
-
-    fn ensure_dir(&mut self, rel: &str) {
-        self.dirs.insert(String::new());
-        if rel.is_empty() {
-            return;
-        }
-        let mut current = Vec::new();
-        for comp in rel.split('/') {
-            if comp.is_empty() {
-                continue;
-            }
-            current.push(comp.to_string());
-            self.dirs.insert(current.join("/"));
-        }
-    }
-
-    fn write_file(&mut self, rel: &str, contents: &[u8]) {
-        if let Some((parent, _)) = rel.rsplit_once('/') {
-            self.ensure_dir(parent);
-        } else {
-            self.ensure_dir("");
-        }
-        self.files.insert(rel.to_string(), contents.to_vec());
-    }
-
-    fn read_file(&self, rel: &str) -> Result<Vec<u8>> {
-        self.files
-            .get(rel)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("missing file {rel}"))
-    }
-
-    fn remove_file(&mut self, rel: &str) {
-        self.files.remove(rel);
-    }
-
-    fn remove_dir_all(&mut self, rel: &str) {
-        let prefix = if rel.is_empty() {
-            String::new()
-        } else {
-            format!("{rel}/")
-        };
-        self.files
-            .retain(|path, _| !path.eq(rel) && !path.starts_with(&prefix));
-        self.dirs
-            .retain(|dir| !dir.eq(rel) && !dir.starts_with(&prefix));
-    }
-
-    fn dir_exists(&self, rel: &str) -> bool {
-        rel.is_empty() || self.dirs.contains(rel)
-    }
-
-    fn entry_kind(&self, rel: &str) -> Option<EntryKind> {
-        if rel.is_empty() {
-            return Some(EntryKind::Dir);
-        }
-        if self.files.contains_key(rel) {
-            Some(EntryKind::File)
-        } else if self.dirs.contains(rel) {
-            Some(EntryKind::Dir)
-        } else {
-            None
-        }
-    }
-
-    fn list_children(&self, rel: &str) -> Vec<(String, EntryKind)> {
-        let mut entries: BTreeMap<String, EntryKind> = BTreeMap::new();
-        let prefix = if rel.is_empty() {
-            None
-        } else {
-            Some(format!("{rel}/"))
-        };
-
-        let mut push_child = |child: &str, kind: EntryKind| {
-            if child.is_empty() {
-                return;
-            }
-            entries
-                .entry(child.to_string())
-                .and_modify(|existing| {
-                    if matches!(kind, EntryKind::Dir) {
-                        *existing = EntryKind::Dir;
-                    }
-                })
-                .or_insert(kind);
-        };
-
-        for dir in self.dirs.iter() {
-            if rel.is_empty() {
-                if dir.is_empty() {
-                    continue;
-                }
-                if let Some(child) = dir.split('/').next() {
-                    push_child(child, EntryKind::Dir);
-                }
-            } else if let Some(prefix) = prefix.as_ref() {
-                if let Some(rest) = dir.strip_prefix(prefix) {
-                    if let Some(child) = rest.split('/').next() {
-                        push_child(child, EntryKind::Dir);
-                    }
-                }
-            }
-        }
-
-        for file in self.files.keys() {
-            if rel.is_empty() {
-                if let Some(child) = file.split('/').next() {
-                    push_child(child, EntryKind::File);
-                }
-            } else if let Some(prefix) = prefix.as_ref() {
-                if let Some(rest) = file.strip_prefix(prefix) {
-                    if let Some(child) = rest.split('/').next() {
-                        push_child(child, EntryKind::File);
-                    }
-                }
-            }
-        }
-
-        entries.into_iter().collect()
-    }
-}
-
 pub(crate) mod access;
+mod backend;
 mod copy;
 mod git;
 mod io;
