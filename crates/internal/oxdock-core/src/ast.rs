@@ -550,7 +550,7 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{guard_allows, guards_allow_any, parse_script, Guard};
+    use super::{Guard, guard_allows, guards_allow_any, parse_script};
     use std::collections::HashMap;
 
     #[test]
