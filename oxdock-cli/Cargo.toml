@@ -20,5 +20,4 @@ oxdock-buildtime-macros.workspace = true
 oxdock-core.workspace = true
 oxdock-fs.workspace = true
 oxdock-process.workspace = true
-rust-embed.workspace = true
 tempfile.workspace = true

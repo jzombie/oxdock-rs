@@ -19,5 +19,6 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+oxdock-fs = { workspace = true, features = ["embed"] }
 oxdock-process.workspace = true
 serial_test.workspace = true
