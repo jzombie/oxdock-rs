@@ -9,7 +9,9 @@ publish.workspace = true
 
 [features]
 mock-fs = []
+embed = ["dep:rust-embed"]
 
 [dependencies]
 anyhow.workspace = true
+rust-embed = { workspace = true, optional = true }
 tempfile.workspace = true
