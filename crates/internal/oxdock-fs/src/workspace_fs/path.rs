@@ -1,14 +1,14 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-
 use super::AccessMode;
 use super::PathResolver;
 use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::borrow::Cow;
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::{Path, PathBuf};
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg_attr(miri, allow(clippy::disallowed_types))]
 use tempfile::{Builder, TempDir};
 
 #[cfg(miri)]
@@ -18,6 +18,7 @@ static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// resolved absolute path so consumers cannot escape without constructing a new
 /// guard explicitly.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct GuardedPath {
     root: PathBuf,
     path: PathBuf,
@@ -25,6 +26,8 @@ pub struct GuardedPath {
 }
 
 impl GuardedPath {
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub fn new(root: &Path, candidate: &Path) -> Result<Self> {
         let guarded = guard_path(root, candidate, AccessMode::Passthru)?;
         Ok(Self {
@@ -35,11 +38,13 @@ impl GuardedPath {
     }
 
     /// Build a guard from string paths without requiring callers to reference `std::path` types.
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub fn new_from_str(root: &str, candidate: &str) -> Result<Self> {
         Self::new(Path::new(root), Path::new(candidate))
     }
 
     /// Create a guard where the root is the path itself.
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub fn new_root(root: &Path) -> Result<Self> {
         let guarded = guard_path(root, root, AccessMode::Passthru)?;
         Ok(Self {
@@ -50,6 +55,7 @@ impl GuardedPath {
     }
 
     /// Build a root guard from a string path without exposing `std::path` types to callers.
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub fn new_root_from_str(root: &str) -> Result<Self> {
         Self::new_root(Path::new(root))
     }
@@ -64,6 +70,7 @@ impl GuardedPath {
     /// configuration (e.g., prefixes). The temporary directory is deleted when
     /// the returned `GuardedTempDir` is dropped unless it is persisted.
     #[cfg(not(miri))]
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn tempdir_with<F>(configure: F) -> Result<GuardedTempDir>
     where
         F: FnOnce(&mut Builder),
@@ -85,6 +92,7 @@ impl GuardedPath {
     /// Miri-safe variant of `tempdir_with` that allocates a synthetic root path
     /// without touching the host filesystem.
     #[cfg(miri)]
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn tempdir_with<F>(_configure: F) -> Result<GuardedTempDir>
     where
         F: FnOnce(&mut Builder),
@@ -99,6 +107,7 @@ impl GuardedPath {
         Ok(GuardedTempDir::new(guard, None))
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn as_path(&self) -> &Path {
         &self.path
     }
@@ -110,10 +119,12 @@ impl GuardedPath {
             .unwrap_or(false)
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn to_path_buf(&self) -> PathBuf {
         self.path.clone()
     }
@@ -148,6 +159,7 @@ impl GuardedPath {
         }
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
         Self {
             root,
@@ -157,12 +169,14 @@ impl GuardedPath {
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl std::fmt::Display for GuardedPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.path.display().fmt(f)
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl PathLike for GuardedPath {
     fn as_path(&self) -> &Path {
         self.as_path()
@@ -188,6 +202,7 @@ impl PathLike for GuardedPath {
         GuardedPath::new(Path::new(root), Path::new(candidate))
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     fn new_root(root: &Path) -> Result<Self> {
         GuardedPath::new_root(root)
     }
@@ -240,30 +255,37 @@ impl std::fmt::Display for GuardedTempDir {
 /// Path wrapper that intentionally skips guard checks. Use only for paths that
 /// originate outside the guarded workspace (e.g., external file handles).
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct UnguardedPath {
     path: PathBuf,
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl UnguardedPath {
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn as_path(&self) -> &Path {
         &self.path
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types))]
     pub fn to_path_buf(&self) -> PathBuf {
         self.path.clone()
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl std::fmt::Display for UnguardedPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.path.display().fmt(f)
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl PathLike for UnguardedPath {
     fn as_path(&self) -> &Path {
         self.as_path()
@@ -293,6 +315,7 @@ impl PathLike for UnguardedPath {
         Ok(UnguardedPath::new(Path::new(candidate).to_path_buf()))
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     fn new_root(root: &Path) -> Result<Self> {
         Ok(UnguardedPath::new(root.to_path_buf()))
     }
@@ -302,7 +325,7 @@ impl PathLike for UnguardedPath {
 /// passing to system `Command` APIs. This lives in `oxdock-fs` so that
 /// usage of `std::path::Path` stays inside the crate that is allowed to touch
 /// host path types and syscalls.
-#[allow(clippy::disallowed_types)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
     use std::path::{Component, Prefix};
 

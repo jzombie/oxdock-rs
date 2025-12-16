@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+#[cfg_attr(miri, allow(clippy::disallowed_types))]
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -9,6 +10,7 @@ use crate::{BackgroundHandle, CommandContext, ProcessManager};
 
 /// Captured invocation for a foreground run.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(miri, allow(clippy::disallowed_types))]
 pub struct MockRunCall {
     pub script: String,
     pub cwd: PathBuf,
@@ -18,6 +20,7 @@ pub struct MockRunCall {
 
 /// Captured invocation for a background spawn.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(miri, allow(clippy::disallowed_types))]
 pub struct MockSpawnCall {
     pub script: String,
     pub cwd: PathBuf,

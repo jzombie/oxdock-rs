@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::fs::File;
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::process::{Command, ExitStatus, Stdio};
 
 pub fn shell_program() -> String {
@@ -15,6 +16,7 @@ pub fn shell_program() -> String {
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub(crate) fn shell_cmd(cmd: &str) -> Command {
     let program = shell_program();
     let mut c = Command::new(program);
@@ -29,6 +31,7 @@ pub(crate) fn shell_cmd(cmd: &str) -> Command {
 #[derive(Default)]
 pub struct ShellLauncher;
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl ShellLauncher {
     pub fn run(&self, cmd: &mut Command) -> Result<()> {
         let status = cmd

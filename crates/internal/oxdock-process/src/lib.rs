@@ -1,5 +1,3 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-
 #[cfg(feature = "mock-process")]
 mod mock;
 mod shell;
@@ -9,8 +7,11 @@ use oxdock_fs::GuardedPath;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::fs::File;
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::{Path, PathBuf};
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
 use std::{
     ffi::{OsStr, OsString},
@@ -95,17 +96,20 @@ pub trait ProcessManager: Clone {
 
 /// Default process manager that shells out using the system shell.
 #[derive(Clone, Default)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct ShellProcessManager;
 
 impl ProcessManager for ShellProcessManager {
     type Handle = ChildHandle;
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
         run_cmd(&mut command)
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
@@ -119,6 +123,7 @@ impl ProcessManager for ShellProcessManager {
         Ok(output.stdout)
     }
 
+    #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
     fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
@@ -129,6 +134,7 @@ impl ProcessManager for ShellProcessManager {
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     command.current_dir(ctx.cwd().as_path());
     command.envs(ctx.envs());
@@ -136,6 +142,7 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
 }
 
 #[derive(Debug)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct ChildHandle {
     child: Child,
 }
@@ -577,6 +584,7 @@ pub fn default_process_manager() -> DefaultProcessManager {
     DefaultProcessManager::default()
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
     let status = cmd
         .status()
@@ -588,6 +596,7 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
 }
 
 /// Builder wrapper that centralizes direct usages of `std::process::Command`.
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct CommandBuilder {
     inner: ProcessCommand,
     program: OsString,
@@ -595,6 +604,7 @@ pub struct CommandBuilder {
     cwd: Option<PathBuf>,
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl CommandBuilder {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         let prog = program.as_ref().to_os_string();
@@ -705,6 +715,7 @@ impl CommandBuilder {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 pub struct CommandSnapshot {
     pub program: OsString,
     pub args: Vec<OsString>,
@@ -723,6 +734,7 @@ impl CommandOutput {
     }
 }
 
+#[cfg_attr(miri, allow(clippy::disallowed_types))]
 impl From<StdOutput> for CommandOutput {
     fn from(value: StdOutput) -> Self {
         Self {

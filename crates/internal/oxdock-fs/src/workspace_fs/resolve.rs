@@ -1,12 +1,12 @@
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-
 use anyhow::{Context, Result, bail};
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::Path;
 
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
 // Path resolution helpers (WORKDIR, READ/WRITE, COPY sources).
+#[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 impl PathResolver {
     pub fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         if new_dir == "/" {
