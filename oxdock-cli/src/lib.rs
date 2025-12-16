@@ -1,13 +1,20 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
+#[cfg(test)]
+use oxdock_process::CommandSnapshot;
+#[cfg(windows)]
 use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Read};
+#[cfg(test)]
+use std::sync::Mutex;
 
 pub use oxdock_core::{
-    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context, shell_program,
+    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context,
+    run_steps_with_context_result,
 };
+pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
     let workspace_root = GuardedPath::new_root_from_str(&discover_workspace_root()?)
@@ -70,6 +77,19 @@ impl Options {
 }
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
+    execute_with_shell_runner(opts, workspace_root, run_shell, true, true)
+}
+
+fn execute_with_shell_runner<F>(
+    opts: Options,
+    workspace_root: GuardedPath,
+    shell_runner: F,
+    require_tty: bool,
+    prepare_snapshot: bool,
+) -> Result<()>
+where
+    F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
+{
     #[cfg(windows)]
     maybe_reexec_shell_to_temp(&opts)?;
 
@@ -77,7 +97,9 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     let temp_root = tempdir.as_guarded_path().clone();
 
     // Materialize source tree without .git
-    archive_head(&workspace_root, &temp_root)?;
+    if prepare_snapshot {
+        archive_head(&workspace_root, &temp_root)?;
+    }
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
@@ -116,22 +138,32 @@ pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
 
     // Parse and run steps if we have a non-empty script. Empty scripts are
     // valid when `--shell` is requested and the caller didn't pipe a script.
+    let mut final_cwd = temp_root.clone();
     if !script.trim().is_empty() {
         let steps = parse_script(&script)?;
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
-        // can source from the original tree if needed.
-        run_steps_with_context(&temp_root, &workspace_root, &steps)?;
+        // can source from the original tree if needed. Capture the final working directory so shells
+        // inherit whatever WORKDIR the script ended on.
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
     }
 
     // If requested, drop into an interactive shell after running the script.
     if opts.shell {
-        if !has_controlling_tty() {
+        if require_tty && !has_controlling_tty() {
             bail!("--shell requires a tty (no controlling tty available)");
         }
-        return run_shell(&temp_root, &workspace_root);
+        return shell_runner(&final_cwd, &workspace_root);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+fn execute_for_test<F>(opts: Options, workspace_root: GuardedPath, shell_runner: F) -> Result<()>
+where
+    F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
+{
+    execute_with_shell_runner(opts, workspace_root, shell_runner, false, false)
 }
 
 fn has_controlling_tty() -> bool {
@@ -237,10 +269,7 @@ fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     #[cfg(windows)]
     let cwd_disp = command_path(cwd).as_ref().display().to_string();
     #[cfg(windows)]
-    let workspace_disp = command_path(workspace_root)
-        .as_ref()
-        .display()
-        .to_string();
+    let workspace_disp = command_path(workspace_root).as_ref().display().to_string();
 
     #[cfg(not(windows))]
     let cwd_disp = cwd.display().to_string();
@@ -282,6 +311,7 @@ fn windows_banner_command(banner: &str, cwd: &std::path::Path) -> String {
     parts.join(" && ")
 }
 
+// TODO: Migrate to oxdock-process crate so that Miri flags don't need to be handled here.
 fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
     let banner = shell_banner(cwd, workspace_root);
 
@@ -296,12 +326,20 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
-        #[allow(clippy::disallowed_types)]
-        let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
-        if let Ok(resolver) = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
-            && let Ok(tty) = resolver.open_external_file(&tty_path)
+        #[cfg(not(miri))]
         {
-            cmd.stdin_file(tty);
+            #[allow(clippy::disallowed_types)]
+            let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
+            if let Ok(resolver) =
+                PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
+                && let Ok(tty) = resolver.open_external_file(&tty_path)
+            {
+                cmd.stdin_file(tty);
+            }
+        }
+
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
         }
 
         let status = cmd.status()?;
@@ -327,6 +365,10 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
             .arg("/K")
             .arg(banner_cmd);
 
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
+        }
+
         // Fire-and-forget so the parent console regains control immediately; the child window is
         // fully interactive. If the launch fails, surface the error right away.
         cmd.spawn()
@@ -341,6 +383,12 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
     }
 }
 fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
+    #[cfg(test)]
+    {
+        if try_shell_command_hook(&mut cmd)? {
+            return Ok(());
+        }
+    }
     let status = cmd.status()?;
     if !status.success() {
         bail!("command returned status {}", status);
@@ -348,6 +396,41 @@ fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+type ShellCmdHook = dyn FnMut(&CommandSnapshot) -> Result<()> + Send;
+
+#[cfg(test)]
+static SHELL_CMD_HOOK: Mutex<Option<Box<ShellCmdHook>>> = Mutex::new(None);
+
+#[cfg(test)]
+fn set_shell_command_hook<F>(hook: F)
+where
+    F: FnMut(&CommandSnapshot) -> Result<()> + Send + 'static,
+{
+    *SHELL_CMD_HOOK.lock().unwrap() = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn clear_shell_command_hook() {
+    *SHELL_CMD_HOOK.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+fn try_shell_command_hook(cmd: &mut CommandBuilder) -> Result<bool> {
+    if let Some(hook) = SHELL_CMD_HOOK.lock().unwrap().as_mut() {
+        let snap = cmd.snapshot();
+        hook(&snap)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(not(test))]
+fn try_shell_command_hook(_cmd: &mut CommandBuilder) -> Result<bool> {
+    Ok(false)
+}
+
+#[cfg(windows)]
 fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
     #[cfg(windows)]
     {
@@ -386,25 +469,38 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
     let archive_guard = temp_root
         .join("src.tar")
         .context("failed to create archive path under temp root")?;
-    let archive_path = command_path(&archive_guard);
-    let temp_root_path = command_path(temp_root);
+    #[cfg(windows)]
+    let archive_path_buf = command_path(&archive_guard);
+    #[cfg(windows)]
+    let archive_path = archive_path_buf.as_ref();
+    #[cfg(not(windows))]
+    let archive_path = archive_guard.as_path();
+
+    #[cfg(windows)]
+    let temp_root_path_buf = command_path(temp_root);
+    #[cfg(windows)]
+    let temp_root_path = temp_root_path_buf.as_ref();
+    #[cfg(not(windows))]
+    let temp_root_path = temp_root.as_path();
     let mut archive_cmd = CommandBuilder::new("git");
-    archive_cmd.current_dir(workspace_root.as_path()).args([
-        "archive",
-        "--format=tar",
-        "--output",
-    ]);
     archive_cmd
-        .arg(archive_path.as_ref())
-        .arg("HEAD");
+        .current_dir(workspace_root.as_path())
+        .args(["archive", "--format=tar", "--output"]);
+    archive_cmd.arg(archive_path).arg("HEAD");
     run_cmd(archive_cmd)?;
 
     let mut tar_cmd = CommandBuilder::new("tar");
+    #[cfg(unix)]
+    {
+        // The temp workspace often inherits mtimes newer than the host clock (e.g. containerized builds),
+        // which makes GNU tar print noisy "timestamp is in the future" diagnostics. Silence just that warning.
+        tar_cmd.arg("--warning=no-timestamp");
+    }
     tar_cmd
         .arg("-xf")
-        .arg(archive_path.as_ref())
+        .arg(archive_path)
         .arg("-C")
-        .arg(temp_root_path.as_ref());
+        .arg(temp_root_path);
     run_cmd(tar_cmd)?;
 
     // Drop the intermediate archive to keep the temp workspace clean.
@@ -419,9 +515,154 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
+    use oxdock_fs::PathResolver;
+    use std::cell::Cell;
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn shell_runner_receives_final_workdir() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let script_path = workspace_root.join("script.ox")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        let script = indoc! {"
+            WRITE temp.txt 123
+            WORKDIR sub
+        "};
+        resolver.write_file(&script_path, script.as_bytes())?;
+
+        let opts = Options {
+            script: ScriptSource::Path(script_path),
+            shell: true,
+        };
+
+        let observed = Cell::new(false);
+        execute_for_test(opts, workspace_root.clone(), |cwd, _| {
+            assert!(
+                cwd.as_path().ends_with("sub"),
+                "final cwd should end in WORKDIR target, got {}",
+                cwd.display()
+            );
+
+            let temp_root = GuardedPath::new_root(cwd.root())
+                .context("construct guard for temp workspace root")?;
+            let sub_dir = temp_root.join("sub")?;
+            assert_eq!(
+                cwd.as_path(),
+                sub_dir.as_path(),
+                "shell runner cwd should match guarded sub dir"
+            );
+            let temp_file = temp_root.join("temp.txt")?;
+            let temp_resolver = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
+            let contents = temp_resolver.read_to_string(&temp_file)?;
+            assert!(
+                contents.contains("123"),
+                "expected WRITE command to materialize temp file"
+            );
+            observed.set(true);
+            Ok(())
+        })?;
+
+        assert!(
+            observed.into_inner(),
+            "shell runner closure should have been invoked"
+        );
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn run_shell_builds_command_for_platform() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let cwd = workspace_root.join("subdir")?;
+        #[cfg(not(miri))]
+        {
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+            resolver.create_dir_all_abs(&cwd)?;
+        }
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let guard = captured.clone();
+        set_shell_command_hook(move |cmd| {
+            *guard.lock().unwrap() = Some(cmd.clone());
+            Ok(())
+        });
+        run_shell(&cwd, &workspace_root)?;
+        clear_shell_command_hook();
+
+        let snap = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("hook should capture snapshot");
+        let cwd_path = snap.cwd.expect("cwd should be set");
+        assert!(
+            cwd_path.ends_with("subdir"),
+            "expected cwd to include subdir, got {}",
+            cwd_path.display()
+        );
+
+        #[cfg(unix)]
+        {
+            let program = snap.program.to_string_lossy();
+            assert_eq!(program, shell_program(), "expected shell program name");
+            let args: Vec<_> = snap
+                .args
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
+            assert_eq!(
+                args.len(),
+                2,
+                "expected two args (-c script), got {:?}",
+                args
+            );
+            assert_eq!(args[0], "-c");
+            assert!(
+                args[1].contains("exec"),
+                "expected script to exec the shell, got {:?}",
+                args[1]
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            let program = snap.program.to_string_lossy().to_string();
+            assert_eq!(program, "cmd", "expected cmd.exe launcher");
+            let args: Vec<_> = snap
+                .args
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
+            let banner_cmd = windows_banner_command(
+                &shell_banner(&cwd, &workspace_root),
+                command_path(&cwd).as_ref(),
+            );
+            let expected = vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "oxdock shell".to_string(),
+                "cmd".to_string(),
+                "/K".to_string(),
+                banner_cmd,
+            ];
+            assert_eq!(args, expected, "expected exact windows shell argv");
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_shell_tests {
+    use super::*;
     use oxdock_fs::PathResolver;
 
-    #[cfg(windows)]
     fn git(
         workspace_root: &GuardedPath,
         args: impl IntoIterator<Item = &'static str>,
@@ -435,7 +676,6 @@ mod tests {
         miri,
         ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
     )]
-    #[cfg(windows)]
     #[test]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
@@ -448,7 +688,10 @@ mod tests {
         resolver.write_file(&readme, b"shell workspace")?;
 
         git(&workspace_root, ["init"])?;
-        git(&workspace_root, ["config", "user.email", "test@example.com"])?;
+        git(
+            &workspace_root,
+            ["config", "user.email", "test@example.com"],
+        )?;
         git(&workspace_root, ["config", "user.name", "Test User"])?;
         git(&workspace_root, ["add", "."])?;
         git(&workspace_root, ["commit", "-m", "init"])?;
@@ -460,15 +703,13 @@ mod tests {
         archive_head(&workspace_root, &archive_root)?;
 
         let extracted_readme = archive_root.join("README.md")?;
-        let archive_resolver =
-            PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
+        let archive_resolver = PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
         let contents = archive_resolver.read_to_string(&extracted_readme)?;
         assert_eq!(contents, "shell workspace");
 
         Ok(())
     }
 
-    #[cfg(windows)]
     #[test]
     fn command_path_strips_verbatim_prefix() -> Result<()> {
         let temp = GuardedPath::tempdir()?;
@@ -481,7 +722,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(windows)]
     #[test]
     fn windows_banner_command_emits_all_lines() {
         let banner = "line1\nline2\nline3";
@@ -491,5 +731,58 @@ mod tests {
         assert!(cmd.contains("line2"));
         assert!(cmd.contains("line3"));
         assert!(cmd.contains("cd /d C:\\temp\\workspace"));
+    }
+
+    #[test]
+    fn run_shell_builds_windows_command() -> Result<()> {
+        let workspace = GuardedPath::tempdir_with(|builder| {
+            builder.prefix("oxdock shell win ");
+        })?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let cwd = workspace_root.join("subdir")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        resolver.create_dir_all_abs(&cwd)?;
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let guard = captured.clone();
+        set_shell_command_hook(move |cmd| {
+            *guard.lock().unwrap() = Some(cmd.clone());
+            Ok(())
+        });
+        run_shell(&cwd, &workspace_root)?;
+        clear_shell_command_hook();
+
+        let snap = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("hook should capture snapshot");
+        let program = snap.program.to_string_lossy().to_string();
+        assert_eq!(program, "cmd", "expected cmd.exe launcher");
+        let args: Vec<_> = snap
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        let banner_cmd = windows_banner_command(
+            &shell_banner(&cwd, &workspace_root),
+            command_path(&cwd).as_ref(),
+        );
+        let expected = vec![
+            "/C".to_string(),
+            "start".to_string(),
+            "oxdock shell".to_string(),
+            "cmd".to_string(),
+            "/K".to_string(),
+            banner_cmd,
+        ];
+        assert_eq!(args, expected, "expected exact windows shell argv");
+        let cwd_path = snap.cwd.expect("cwd should be set");
+        assert!(
+            cwd_path.ends_with("subdir"),
+            "expected cwd to include subdir, got {}",
+            cwd_path.display()
+        );
+        Ok(())
     }
 }

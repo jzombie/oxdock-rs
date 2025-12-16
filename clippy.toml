@@ -1,3 +1,6 @@
+# TODO: If possible, gate this so that #[cfg(miri)] is mostly only contained within oxdock-fs
+# and oxdock-process crates, where the other crates are agnostic to the test runner.
+
 # TODO: Update this description to cover "types" and "processes"
 # Disallowed methods to ensure filesystem access in `oxdock-core` goes through PathResolver.
 # Clippy will emit the `disallowed_methods` lint for any exact matches.
@@ -6,6 +9,7 @@
 
 # The list below was provided by the user; each entry includes a short note.
 disallowed-methods = [
+  "std::boxed::Box::leak",
   "std::fs::read",
   "std::fs::read_to_string",
   "std::fs::read_dir",

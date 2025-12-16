@@ -19,5 +19,5 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-serial_test.workspace = true
 oxdock-process.workspace = true
+serial_test.workspace = true

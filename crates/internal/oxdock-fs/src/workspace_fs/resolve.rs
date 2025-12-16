@@ -1,7 +1,6 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use anyhow::{Context, Result, bail};
-use std::fs;
 use std::path::Path;
 
 use super::{AccessMode, PathResolver};
@@ -23,21 +22,7 @@ impl PathResolver {
         let resolved = self
             .check_access(&candidate, AccessMode::Passthru)
             .with_context(|| format!("WORKDIR {} escapes root", candidate.display()))?;
-
-        if let Ok(meta) = fs::metadata(resolved.as_path()) {
-            if meta.is_dir() {
-                let canon =
-                    fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
-                return GuardedPath::new(resolved.root(), &canon);
-            }
-            bail!("WORKDIR path is not a directory: {}", resolved.display());
-        }
-
-        fs::create_dir_all(resolved.as_path())
-            .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
-        let final_abs =
-            fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
-        GuardedPath::new(resolved.root(), &final_abs)
+        self.backend.resolve_workdir(resolved)
     }
 
     pub fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
@@ -53,18 +38,35 @@ impl PathResolver {
             bail!("COPY source must be relative to build context");
         }
         let candidate = self.build_context.as_path().join(from);
-        let guarded = self
-            .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
-            .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
 
-        if !guarded.as_path().exists() {
-            bail!(
-                "COPY source missing in build context: {}",
-                guarded.display()
-            );
+        #[cfg(miri)]
+        {
+            // Ensure the candidate stays within the declared build context, but use the
+            // resolver root for guard tracking so synthetic state remains consistent even
+            // when the build context is a subdir.
+            let _ = self
+                .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
+            let guarded = self
+                .check_access_with_root(&self.root, &candidate, AccessMode::Read)
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
+            return self.backend.resolve_copy_source(guarded);
         }
 
-        Ok(guarded)
+        #[cfg(not(miri))]
+        {
+            let guarded = self
+                .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
+                .with_context(|| {
+                    format!("failed to resolve COPY source {}", candidate.display())
+                })?;
+
+            self.backend.resolve_copy_source(guarded)
+        }
     }
 
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {

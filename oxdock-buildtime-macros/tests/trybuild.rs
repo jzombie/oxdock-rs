@@ -1,7 +1,3 @@
-#[cfg_attr(
-    miri,
-    ignore = "spawns cargo subprocess; process spawning not supported under Miri"
-)]
 #[test]
 fn trybuild_manifest_dir() {
     use oxdock_process::CommandBuilder;
@@ -19,10 +15,6 @@ fn trybuild_manifest_dir() {
     );
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "spawns cargo subprocess; process spawning not supported under Miri"
-)]
 #[test]
 fn trybuild_exit_fail() {
     use oxdock_process::CommandBuilder;

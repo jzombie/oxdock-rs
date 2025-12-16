@@ -3,6 +3,98 @@
 
 use anyhow::{Context, Result};
 
+use backend::Backend;
+
+#[cfg(not(miri))]
+pub type DirEntry = std::fs::DirEntry;
+#[cfg(not(miri))]
+pub type FileType = std::fs::FileType;
+
+#[cfg(miri)]
+mod synthetic_entry {
+    use super::EntryKind;
+    use std::ffi::OsString;
+    use std::io;
+    use std::path::PathBuf;
+
+    #[derive(Clone, Copy)]
+    pub struct FileType {
+        kind: EntryKind,
+    }
+
+    impl FileType {
+        pub fn is_dir(&self) -> bool {
+            matches!(self.kind, EntryKind::Dir)
+        }
+
+        pub fn is_file(&self) -> bool {
+            matches!(self.kind, EntryKind::File)
+        }
+
+        pub fn is_symlink(&self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct DirEntry {
+        path: PathBuf,
+        file_name: OsString,
+        file_type: FileType,
+    }
+
+    impl DirEntry {
+        pub(crate) fn new(path: PathBuf, kind: EntryKind) -> Self {
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| OsString::new());
+            Self {
+                path,
+                file_name,
+                file_type: FileType { kind },
+            }
+        }
+
+        pub fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+
+        pub fn file_name(&self) -> OsString {
+            self.file_name.clone()
+        }
+
+        pub fn file_type(&self) -> io::Result<FileType> {
+            Ok(self.file_type)
+        }
+    }
+
+    impl std::fmt::Debug for DirEntry {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DirEntry")
+                .field("path", &self.path)
+                .finish()
+        }
+    }
+
+    impl std::fmt::Debug for FileType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FileType")
+                .field("kind", &self.kind)
+                .finish()
+        }
+    }
+}
+
+#[cfg(miri)]
+pub use synthetic_entry::{DirEntry, FileType};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EntryKind {
+    File,
+    Dir,
+}
+
 pub mod path;
 pub use path::{GuardedPath, GuardedTempDir};
 
@@ -33,6 +125,7 @@ impl AccessMode {
 pub struct PathResolver {
     root: GuardedPath,
     build_context: GuardedPath,
+    backend: Backend,
 }
 
 impl PathResolver {
@@ -49,9 +142,13 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_types)]
     pub fn new(root: &Path, build_context: &Path) -> Result<Self> {
+        let root_guard = GuardedPath::new_root(root)?;
+        let build_guard = GuardedPath::new_root(build_context)?;
+        let backend = Backend::new(&root_guard, &build_guard)?;
         Ok(Self {
-            root: GuardedPath::new_root(root)?,
-            build_context: GuardedPath::new_root(build_context)?,
+            root: root_guard,
+            build_context: build_guard,
+            backend,
         })
     }
 
@@ -67,12 +164,13 @@ impl PathResolver {
         self.root = root;
     }
 }
-
 pub(crate) mod access;
+mod backend;
 mod copy;
 mod git;
 mod io;
 mod resolve;
 use access::guard_path;
 
-// PathResolver is exported at crate root via `lib.rs` re-export.
+#[cfg(feature = "mock-fs")]
+pub mod mock;

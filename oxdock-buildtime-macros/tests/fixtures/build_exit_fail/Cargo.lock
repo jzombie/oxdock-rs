@@ -191,7 +191,6 @@ name = "oxdock-fs"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
- "oxdock-process",
  "tempfile",
 ]
 
@@ -200,6 +199,7 @@ name = "oxdock-process"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "oxdock-fs",
 ]
 
 [[package]]

@@ -30,13 +30,9 @@ mod tests {
     }
 
     fn exists(root: &GuardedPath, rel: &str) -> bool {
-        root.as_path().join(rel).exists()
+        root.join(rel).map(|p| p.exists()).unwrap_or(false)
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -64,10 +60,6 @@ mod tests {
         );
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn guard_skips_when_env_missing() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -94,10 +86,6 @@ mod tests {
         assert!(exists(&root, "kept.txt"), "unguarded WRITE should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn guard_sees_env_set_by_env_step() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -121,10 +109,6 @@ mod tests {
         assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn echo_runs_and_allows_subsequent_steps() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -143,10 +127,6 @@ mod tests {
         assert!(exists(&root, "always.txt"), "WRITE after ECHO should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn guard_on_previous_line_applies_to_next_command() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -171,10 +151,6 @@ mod tests {
         assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn guard_respects_platform_negation() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -199,10 +175,6 @@ mod tests {
         assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn guard_matches_profile_env() {
         // Cargo sets PROFILE during builds/tests; verify guards see it.
@@ -236,10 +208,6 @@ mod tests {
         );
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn multiple_guards_all_must_pass() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -269,10 +237,6 @@ mod tests {
         assert!(exists(&root, "always.txt"), "unguarded step should run");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn multiple_guards_skip_when_one_fails() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -303,10 +267,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_exits_success_and_stops_pipeline() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -320,10 +280,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_failure_bubbles_status() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -340,10 +296,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -375,17 +327,16 @@ mod tests {
             !exists(&root, "two.txt"),
             "second background should be terminated once the first exits"
         );
+
+        // TODO: Migrate this so we don't need cfg(miri) here.
+        let upper = if cfg!(miri) { 2.5 } else { 0.45 };
         assert!(
-            elapsed.as_secs_f32() < 0.45 && elapsed.as_secs_f32() > 0.15,
+            elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
             "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
         );
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn exit_terminates_backgrounds_and_returns_code() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -408,10 +359,6 @@ mod tests {
         );
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN and RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn env_applies_to_run_and_background() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -442,10 +389,6 @@ mod tests {
         assert_eq!(read_trimmed(&root.join("bg.txt").unwrap()), "bar");
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn workspace_switches_between_snapshot_and_local() {
         let snapshot = GuardedPath::tempdir().unwrap();
@@ -466,15 +409,11 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(snapshot_root.as_path().join("snap.txt").exists());
-        assert!(snapshot_root.as_path().join("snap2.txt").exists());
-        assert!(local_root.as_path().join("local.txt").exists());
+        assert!(snapshot_root.join("snap.txt").unwrap().exists());
+        assert!(snapshot_root.join("snap2.txt").unwrap().exists());
+        assert!(local_root.join("local.txt").unwrap().exists());
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
     #[test]
     fn workspace_root_changes_where_slash_points() {
         let snapshot = GuardedPath::tempdir().unwrap();
@@ -500,8 +439,8 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(local_root.as_path().join("localroot.txt").exists());
-        assert!(local_client.as_path().join("client.txt").exists());
-        assert!(snapshot_root.as_path().join("snaproot.txt").exists());
+        assert!(local_root.join("localroot.txt").unwrap().exists());
+        assert!(local_client.join("client.txt").unwrap().exists());
+        assert!(snapshot_root.join("snaproot.txt").unwrap().exists());
     }
 }

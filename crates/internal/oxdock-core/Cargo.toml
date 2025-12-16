@@ -15,3 +15,5 @@ oxdock-process.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+oxdock-fs = { workspace = true, features = ["mock-fs"] }
+oxdock-process = { workspace = true, features = ["mock-process"] }

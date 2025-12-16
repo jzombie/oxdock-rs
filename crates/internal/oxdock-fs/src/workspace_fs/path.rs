@@ -1,10 +1,17 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use super::{AccessMode, guard_path};
+use super::AccessMode;
+use super::PathResolver;
+use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+#[cfg(miri)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::{Builder, TempDir};
+
+#[cfg(miri)]
+static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
@@ -13,6 +20,7 @@ use tempfile::{Builder, TempDir};
 pub struct GuardedPath {
     root: PathBuf,
     path: PathBuf,
+    synthetic: bool,
 }
 
 impl GuardedPath {
@@ -21,6 +29,7 @@ impl GuardedPath {
         Ok(Self {
             root: root.to_path_buf(),
             path: guarded,
+            synthetic: false,
         })
     }
 
@@ -35,6 +44,7 @@ impl GuardedPath {
         Ok(Self {
             root: guarded.clone(),
             path: guarded,
+            synthetic: false,
         })
     }
 
@@ -44,6 +54,7 @@ impl GuardedPath {
     }
 
     /// Create a guarded temporary directory using `tempfile::Builder`.
+    #[cfg(not(miri))]
     pub fn tempdir() -> Result<GuardedTempDir> {
         Self::tempdir_with(|_| {})
     }
@@ -51,6 +62,7 @@ impl GuardedPath {
     /// Create a guarded temporary directory with a custom `tempfile::Builder`
     /// configuration (e.g., prefixes). The temporary directory is deleted when
     /// the returned `GuardedTempDir` is dropped unless it is persisted.
+    #[cfg(not(miri))]
     pub fn tempdir_with<F>(configure: F) -> Result<GuardedTempDir>
     where
         F: FnOnce(&mut Builder),
@@ -59,11 +71,42 @@ impl GuardedPath {
         configure(&mut builder);
         let tempdir = builder.tempdir()?;
         let guard = GuardedPath::new_root(tempdir.path())?;
-        Ok(GuardedTempDir::new(guard, tempdir))
+        Ok(GuardedTempDir::new(guard, Some(tempdir)))
+    }
+
+    /// Create a synthetic temporary directory when running under Miri.
+    /// No host filesystem operations are performed to keep isolation intact.
+    #[cfg(miri)]
+    pub fn tempdir() -> Result<GuardedTempDir> {
+        Self::tempdir_with(|_| {})
+    }
+
+    /// Miri-safe variant of `tempdir_with` that allocates a synthetic root path
+    /// without touching the host filesystem.
+    #[cfg(miri)]
+    pub fn tempdir_with<F>(_configure: F) -> Result<GuardedTempDir>
+    where
+        F: FnOnce(&mut Builder),
+    {
+        let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = PathBuf::from(format!("/miri/tempdir-{id}"));
+        let guard = GuardedPath {
+            root: path.clone(),
+            path,
+            synthetic: true,
+        };
+        Ok(GuardedTempDir::new(guard, None))
     }
 
     pub fn as_path(&self) -> &Path {
         &self.path
+    }
+
+    /// Backend-aware existence check that avoids host `stat` when running under Miri.
+    pub fn exists(&self) -> bool {
+        PathResolver::new(self.root(), self.root())
+            .map(|resolver| resolver.exists(self))
+            .unwrap_or(false)
     }
 
     pub fn root(&self) -> &Path {
@@ -79,18 +122,37 @@ impl GuardedPath {
     }
 
     pub fn join(&self, rel: &str) -> Result<Self> {
-        GuardedPath::new(&self.root, &self.path.join(rel))
+        if self.synthetic {
+            Ok(Self {
+                root: self.root.clone(),
+                path: self.path.join(rel),
+                synthetic: true,
+            })
+        } else {
+            GuardedPath::new(&self.root, &self.path.join(rel))
+        }
     }
 
     /// Return the parent directory as a guarded path, if it exists within the same root.
     pub fn parent(&self) -> Option<Self> {
-        self.path
-            .parent()
-            .and_then(|p| GuardedPath::new(&self.root, p).ok())
+        let parent = self.path.parent()?.to_path_buf();
+        if self.synthetic {
+            Some(Self {
+                root: self.root.clone(),
+                path: parent,
+                synthetic: true,
+            })
+        } else {
+            GuardedPath::new(&self.root, &parent).ok()
+        }
     }
 
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
-        Self { root, path }
+        Self {
+            root,
+            path,
+            synthetic: false,
+        }
     }
 }
 
@@ -133,11 +195,11 @@ impl PathLike for GuardedPath {
 /// Temporary directory that cleans itself up on drop while exposing the guarded path.
 pub struct GuardedTempDir {
     guard: GuardedPath,
-    tempdir: TempDir,
+    tempdir: Option<TempDir>,
 }
 
 impl GuardedTempDir {
-    fn new(guard: GuardedPath, tempdir: TempDir) -> Self {
+    fn new(guard: GuardedPath, tempdir: Option<TempDir>) -> Self {
         Self { guard, tempdir }
     }
 
@@ -148,15 +210,15 @@ impl GuardedTempDir {
     /// Prevent automatic cleanup and return the guarded path rooted at the
     /// temporary directory.
     #[allow(deprecated)]
-    pub fn persist(self) -> GuardedPath {
-        let GuardedTempDir { guard, tempdir } = self;
-        let _ = tempdir.into_path();
-        guard
+    pub fn persist(mut self) -> GuardedPath {
+        if let Some(tempdir) = self.tempdir.take() {
+            let _ = tempdir.into_path();
+        }
+        self.guard
     }
 
-    pub fn into_parts(self) -> (TempDir, GuardedPath) {
-        let GuardedTempDir { guard, tempdir } = self;
-        (tempdir, guard)
+    pub fn into_parts(self) -> (Option<TempDir>, GuardedPath) {
+        (self.tempdir, self.guard)
     }
 }
 
