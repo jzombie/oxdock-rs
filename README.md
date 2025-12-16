@@ -31,6 +31,7 @@ OxDock has a simple goal to provide a simple language that works the same across
 
 Every internal command is engineered to run the same way across platforms, except for the RUN command, which calls native programs.
 
+... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor
 ... TODO: Show example
 
 ## Path Separators
