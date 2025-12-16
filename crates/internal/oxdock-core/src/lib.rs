@@ -327,8 +327,11 @@ mod tests {
             !exists(&root, "two.txt"),
             "second background should be terminated once the first exits"
         );
+
+        // TODO: Migrate this so we don't need cfg(miri) here.
+        let upper = if cfg!(miri) { 2.5 } else { 0.45 };
         assert!(
-            elapsed.as_secs_f32() < 0.45 && elapsed.as_secs_f32() > 0.15,
+            elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
             "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
         );
     }
