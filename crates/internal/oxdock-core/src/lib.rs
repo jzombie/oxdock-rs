@@ -33,10 +33,6 @@ mod tests {
         root.join(rel).map(|p| p.exists()).unwrap_or(false)
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_sets_cargo_target_dir_to_fs_root() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -271,10 +267,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_exits_success_and_stops_pipeline() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -288,10 +280,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_failure_bubbles_status() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -308,10 +296,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -350,10 +334,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn exit_terminates_backgrounds_and_returns_code() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -376,10 +356,6 @@ mod tests {
         );
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "uses RUN and RUN_BG to spawn subprocess; Miri does not support process spawning"
-    )]
     #[test]
     fn env_applies_to_run_and_background() {
         let temp = GuardedPath::tempdir().unwrap();

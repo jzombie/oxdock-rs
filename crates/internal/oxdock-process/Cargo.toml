@@ -12,3 +12,4 @@ mock-process = []
 
 [dependencies]
 anyhow.workspace = true
+oxdock-fs.workspace = true

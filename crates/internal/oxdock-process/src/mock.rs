@@ -57,7 +57,7 @@ impl MockProcessManager {
 impl ProcessManager for MockProcessManager {
     type Handle = MockHandle;
 
-    fn run(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<()> {
+    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
         self.runs.borrow_mut().push(MockRunCall {
             script: script.to_string(),
             cwd: ctx.cwd().to_path_buf(),
@@ -67,12 +67,12 @@ impl ProcessManager for MockProcessManager {
         Ok(())
     }
 
-    fn run_capture(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<Vec<u8>> {
+    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
         self.run(ctx, script)?;
         Ok(Vec::new())
     }
 
-    fn spawn_bg(&mut self, ctx: &CommandContext<'_>, script: &str) -> Result<Self::Handle> {
+    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
         self.spawns.borrow_mut().push(MockSpawnCall {
             script: script.to_string(),
             cwd: ctx.cwd().to_path_buf(),

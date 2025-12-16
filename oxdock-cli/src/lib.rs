@@ -311,6 +311,7 @@ fn windows_banner_command(banner: &str, cwd: &std::path::Path) -> String {
     parts.join(" && ")
 }
 
+// TODO: Migrate to oxdock-process crate so that Miri flags don't need to be handled here.
 fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
     let banner = shell_banner(cwd, workspace_root);
 

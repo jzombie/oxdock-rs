@@ -35,10 +35,6 @@ fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
     cmd
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses RUN and RUN_BG to spawn subprocess; Miri does not support process spawning"
-)]
 #[test]
 fn commands_behave_cross_platform() {
     let snapshot_dir = GuardedPath::tempdir().unwrap();
@@ -254,10 +250,6 @@ fn accepts_semicolon_separated_commands() {
     assert_eq!(read_trimmed(&root.join("two.txt").unwrap()), "2");
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses RUN to spawn subprocess; Miri does not support process spawning"
-)]
 #[test]
 fn write_cmd_captures_output() {
     let temp = GuardedPath::tempdir().unwrap();
@@ -389,10 +381,6 @@ fn capture_cwd_canonicalizes_and_writes() {
     assert_eq!(read_trimmed(&root.join("a/b/pwd.txt").unwrap()), expected);
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses std::process::Command to run git; Miri does not support process spawning"
-)]
 #[test]
 fn copy_git_via_script_simple() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
@@ -450,10 +438,6 @@ fn copy_git_via_script_simple() {
     );
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses std::process::Command to run git; Miri does not support process spawning"
-)]
 #[test]
 fn copy_git_directory_via_script() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
@@ -596,10 +580,6 @@ fn read_cannot_escape_root() {
     let _ = parent_fs.remove_file_abs(&secret);
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-)]
 #[test]
 fn read_symlink_escape_is_blocked() {
     let temp = GuardedPath::tempdir().unwrap();

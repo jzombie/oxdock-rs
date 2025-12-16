@@ -5,7 +5,7 @@ use std::process::ExitStatus;
 
 use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
-use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, ShellProcessManager};
+use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, default_process_manager};
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -16,11 +16,13 @@ struct ExecState<P: ProcessManager> {
 }
 
 impl<P: ProcessManager> ExecState<P> {
-    fn command_ctx(&self) -> CommandContext<'_> {
+    fn command_ctx(&self) -> CommandContext {
         CommandContext::new(
-            self.cwd.as_path(),
+            &self.cwd,
             &self.envs,
-            self.cargo_target_dir.as_path(),
+            &self.cargo_target_dir,
+            self.fs.root(),
+            self.fs.build_context(),
         )
     }
 }
@@ -81,7 +83,7 @@ fn run_steps_inner(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<GuardedPath> {
-    run_steps_with_manager(fs_root, build_context, steps, ShellProcessManager)
+    run_steps_with_manager(fs_root, build_context, steps, default_process_manager())
 }
 
 fn run_steps_with_manager<P: ProcessManager>(
