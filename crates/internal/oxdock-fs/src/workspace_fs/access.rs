@@ -1,25 +1,25 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use anyhow::{Context, Result, bail};
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
+#[cfg(not(miri))]
 pub(crate) fn guard_path(
     root: &Path,
     candidate: &Path,
     mode: AccessMode,
 ) -> Result<std::path::PathBuf> {
     if !root.exists() {
-        fs::create_dir_all(root)
+        std::fs::create_dir_all(root)
             .with_context(|| format!("failed to create root {}", root.display()))?;
     }
-    let root_abs = fs::canonicalize(root)
+    let root_abs = std::fs::canonicalize(root)
         .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
 
-    if let Ok(cand_abs) = fs::canonicalize(candidate) {
+    if let Ok(cand_abs) = std::fs::canonicalize(candidate) {
         if !cand_abs.starts_with(&root_abs) {
             bail!(
                 "{} access to {} escapes allowed root {}",
@@ -41,7 +41,7 @@ pub(crate) fn guard_path(
         }
     }
 
-    let ancestor_abs = fs::canonicalize(ancestor)
+    let ancestor_abs = std::fs::canonicalize(ancestor)
         .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
 
     let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
@@ -90,6 +90,25 @@ pub(crate) fn guard_path(
     }
 
     Ok(cand_abs)
+}
+
+#[cfg(miri)]
+pub(crate) fn guard_path(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
+    let root = root.to_path_buf();
+    let resolved = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    if !resolved.starts_with(&root) {
+        bail!(
+            "{} access to {} escapes allowed root {}",
+            mode.name(),
+            resolved.display(),
+            root.display()
+        );
+    }
+    Ok(resolved)
 }
 
 // Guard and canonicalize paths under the configured roots.
