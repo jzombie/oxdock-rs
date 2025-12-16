@@ -152,8 +152,8 @@ jobs:
         run: cargo miri setup
 
       - name: Run Miri (unit tests only)
-        env:
-          # TODO: This should no longer be needed once we have isolated Miri runs.
+        # TODO: This should no longer be needed once we have isolated Miri runs.
+        # env:
           # Enable file open operations
           # MIRIFLAGS: -Zmiri-disable-isolation
         run: cargo miri test --workspace --all-features --lib --tests
