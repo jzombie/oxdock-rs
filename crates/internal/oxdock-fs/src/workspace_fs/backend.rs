@@ -47,8 +47,26 @@ impl BackendImpl for HostBackend {
     fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>> {
         let entries = fs::read_dir(path.as_path())
             .with_context(|| format!("failed to read dir {}", path.display()))?;
-        let vec: Vec<std::fs::DirEntry> = entries.collect::<Result<_, _>>()?;
-        Ok(vec)
+
+        let mut result = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            #[cfg(not(miri))]
+            result.push(entry);
+
+            #[cfg(miri)]
+            {
+                let entry_path = entry.path();
+                let file_type = entry.file_type()?;
+                let kind = if file_type.is_dir() {
+                    super::EntryKind::Dir
+                } else {
+                    super::EntryKind::File
+                };
+                result.push(DirEntry::new(entry_path, kind));
+            }
+        }
+        Ok(result)
     }
 
     fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {

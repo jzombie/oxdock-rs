@@ -25,6 +25,9 @@ impl PathResolver {
     pub fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<super::DirEntry>> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
+            })
             .with_context(|| format!("read_dir denied for {}", path.display()))?;
         self.backend.read_dir_entries(&guarded)
     }
@@ -33,6 +36,9 @@ impl PathResolver {
     pub fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
+            })
             .with_context(|| format!("read denied for {}", path.display()))?;
         self.backend.read_file(&guarded)
     }

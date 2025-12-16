@@ -83,19 +83,23 @@ fn run_steps_inner(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<GuardedPath> {
-    run_steps_with_manager(fs_root, build_context, steps, default_process_manager())
+    let resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
+    run_steps_with_fs(Box::new(resolver), steps)
+}
+
+pub fn run_steps_with_fs(fs: Box<dyn WorkspaceFs>, steps: &[Step]) -> Result<GuardedPath> {
+    run_steps_with_manager(fs, steps, default_process_manager())
 }
 
 fn run_steps_with_manager<P: ProcessManager>(
-    fs_root: &GuardedPath,
-    build_context: &GuardedPath,
+    fs: Box<dyn WorkspaceFs>,
     steps: &[Step],
     process: P,
 ) -> Result<GuardedPath> {
-    let resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
-    let cwd = resolver.root().clone();
+    let fs_root = fs.root().clone();
+    let cwd = fs.root().clone();
     let mut state = ExecState {
-        fs: Box::new(resolver),
+        fs,
         cargo_target_dir: fs_root.join(".cargo-target")?,
         cwd,
         envs: HashMap::new(),
@@ -565,7 +569,8 @@ mod tests {
             },
         ];
         let mock = MockProcessManager::default();
-        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         let MockRunCall {
@@ -598,7 +603,8 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         mock.push_bg_plan(0, success_status());
-        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
         assert!(
             mock.recorded_runs().is_empty(),
             "foreground run should not execute when RUN_BG completes early"
@@ -623,7 +629,8 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         mock.push_bg_plan(usize::MAX, success_status());
-        let err = run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap_err();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        let err = run_steps_with_manager(fs, &steps, mock.clone()).unwrap_err();
         assert!(
             err.to_string().contains("EXIT requested with code 5"),
             "unexpected error: {err}"
@@ -657,7 +664,8 @@ mod tests {
             },
         ];
         let mock = MockProcessManager::default();
-        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo second");
@@ -690,7 +698,8 @@ mod tests {
             },
         ];
         let mock = MockProcessManager::default();
-        run_steps_with_manager(&root, &root, &steps, mock.clone()).unwrap();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo guarded");
@@ -707,7 +716,8 @@ mod tests {
             },
         };
         let mock = MockProcessManager::default();
-        let err = run_steps_with_manager(&root, &root, &[capture], mock).unwrap_err();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        let err = run_steps_with_manager(fs, &[capture], mock).unwrap_err();
         assert!(
             err.to_string()
                 .contains("CAPTURE expects exactly one instruction"),

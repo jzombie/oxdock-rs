@@ -204,16 +204,16 @@ mod tests {
     use super::*;
     use anyhow::Result;
 
-    fn resolver() -> Result<PathResolver> {
+    fn resolver() -> Result<(PathResolver, crate::GuardedTempDir)> {
         let temp = GuardedPath::tempdir()?;
         let guard = temp.as_guarded_path().clone();
-        std::mem::forget(temp);
-        PathResolver::new_guarded(guard.clone(), guard)
+        let resolver = PathResolver::new_guarded(guard.clone(), guard)?;
+        Ok((resolver, temp))
     }
 
     #[test]
     fn copy_file_writes_data_in_synthetic_fs() -> Result<()> {
-        let resolver = resolver()?;
+        let (resolver, _temp) = resolver()?;
         let src = resolver.root().join("input.txt")?;
         resolver.write_file(&src, b"hello world")?;
         let dst = resolver.root().join("output.txt")?;
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn copy_dir_recursive_clones_nested_structure() -> Result<()> {
-        let resolver = resolver()?;
+        let (resolver, _temp) = resolver()?;
         let src_dir = resolver.root().join("src")?;
         let nested_file = src_dir.join("nested").and_then(|n| n.join("file.txt"))?;
         resolver.write_file(&nested_file, b"data")?;

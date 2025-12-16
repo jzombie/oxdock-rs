@@ -439,10 +439,8 @@ fn build_assets(
     out_dir: &GuardedPath,
 ) -> syn::Result<GuardedPath> {
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
-    let tempdir = GuardedPath::tempdir_with(|builder| {
-        builder.prefix("oxdock_");
-    })
-    .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
+    let tempdir = GuardedPath::tempdir()
+        .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     let temp_root_guard = tempdir.as_guarded_path().clone();
 
     let steps = oxdock_core::parse_script(script)
@@ -452,9 +450,12 @@ fn build_assets(
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let build_context = resolver.build_context().clone();
 
-    let final_cwd =
-        oxdock_core::run_steps_with_context_result(&temp_root_guard, &build_context, &steps)
-            .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+    let host_resolver =
+        PathResolver::new_guarded(temp_root_guard.clone(), build_context.clone())
+            .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
+
+    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps)
+        .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
 
     #[allow(clippy::disallowed_types)]
     let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
