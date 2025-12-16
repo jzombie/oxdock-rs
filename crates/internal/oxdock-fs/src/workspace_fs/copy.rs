@@ -47,13 +47,8 @@ impl PathResolver {
                 self.check_access_with_root(&self.build_context, src.as_path(), AccessMode::Read)
             })
             .with_context(|| format!("copy source denied for {}", src.display()))?;
-        let data = self
-            .state_for_guard(&guarded_src)
-            .borrow()
-            .read_file(&Self::normalize_rel(&guarded_src))?;
-        self.state_for_guard(&guarded_dst)
-            .borrow_mut()
-            .write_file(&Self::normalize_rel(&guarded_dst), &data);
+        let data = self.read_file(&guarded_src)?;
+        self.write_file(&guarded_dst, &data)?;
         Ok(data.len() as u64)
     }
 

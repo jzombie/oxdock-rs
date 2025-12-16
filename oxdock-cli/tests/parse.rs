@@ -83,10 +83,6 @@ fn parse_cat() {
     }
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses GuardedPath::tempdir which relies on OS mkdir; blocked by Miri isolation"
-)]
 #[test]
 fn parse_options_accepts_stdin_dash() {
     let mut args = "--script -".split_whitespace().map(String::from);
@@ -99,10 +95,6 @@ fn parse_options_accepts_stdin_dash() {
     assert!(!opts.shell);
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses GuardedPath::tempdir which relies on OS mkdir; blocked by Miri isolation"
-)]
 #[test]
 fn parse_options_defaults_to_stdin() {
     let mut args = std::iter::empty();
@@ -115,10 +107,6 @@ fn parse_options_defaults_to_stdin() {
     assert!(!opts.shell);
 }
 
-#[cfg_attr(
-    miri,
-    ignore = "uses GuardedPath::tempdir which relies on OS mkdir; blocked by Miri isolation"
-)]
 #[test]
 fn parse_options_accepts_shell_flag() {
     let mut args = "--shell".split_whitespace().map(String::from);

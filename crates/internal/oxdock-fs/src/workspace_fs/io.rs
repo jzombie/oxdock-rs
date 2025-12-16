@@ -33,6 +33,13 @@ impl PathResolver {
         let state = self.state_for_guard(&guarded);
         let rel = Self::normalize_rel(&guarded);
         state.borrow_mut().ensure_dir(&rel);
+        // Mirror to the host filesystem so std::fs queries (e.g., Path::exists) succeed under Miri.
+        if let Some(parent) = guarded.as_path().parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        fs::create_dir_all(guarded.as_path())
+            .with_context(|| format!("creating dir {}", guarded.display()))?;
         Ok(())
     }
 
@@ -129,6 +136,12 @@ impl PathResolver {
         let binding = self.state_for_guard(&guarded);
         let mut state = binding.borrow_mut();
         state.write_file(&rel, contents);
+        if let Some(parent) = guarded.as_path().parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating dir {}", parent.display()))?;
+        }
+        fs::write(guarded.as_path(), contents)
+            .with_context(|| format!("writing {}", guarded.display()))?;
         Ok(())
     }
 
@@ -160,7 +173,8 @@ impl PathResolver {
                 )
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
-        Ok(cand)
+        let canon = fs::canonicalize(cand.as_path()).unwrap_or_else(|_| cand.to_path_buf());
+        GuardedPath::new(cand.root(), &canon)
     }
 
     #[cfg(not(miri))]
@@ -179,8 +193,15 @@ impl PathResolver {
 
     #[cfg(miri)]
     pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
-        let _ = path;
-        bail!("metadata not available under miri synthetic filesystem");
+        let guarded = self
+            .check_access(path.as_path(), AccessMode::Read)
+            .or_else(|_| {
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
+            })
+            .with_context(|| format!("metadata denied for {}", path.display()))?;
+        let m = fs::metadata(guarded.as_path())
+            .with_context(|| format!("failed to stat {}", guarded.display()))?;
+        Ok(m)
     }
 
     #[cfg(not(miri))]
@@ -197,18 +218,14 @@ impl PathResolver {
 
     #[cfg(miri)]
     pub fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
-        let guarded = self
-            .check_access(path.as_path(), AccessMode::Read)
-            .or_else(|_| {
-                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
-            })
-            .with_context(|| format!("entry_kind denied for {}", path.display()))?;
-        let rel = Self::normalize_rel(&guarded);
-        let state = self.state_for_guard(&guarded);
-        state
-            .borrow()
-            .entry_kind(&rel)
-            .ok_or_else(|| anyhow::anyhow!("missing path {}", guarded.display()))
+        let meta = self.metadata_abs(path)?;
+        if meta.is_dir() {
+            Ok(EntryKind::Dir)
+        } else if meta.is_file() {
+            Ok(EntryKind::File)
+        } else {
+            bail!("unsupported file type: {}", path.display());
+        }
     }
 
     #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
@@ -278,6 +295,14 @@ impl PathResolver {
         self.state_for_guard(&guarded)
             .borrow_mut()
             .remove_file(&rel);
+        match std::fs::remove_file(guarded.as_path()) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("failed to remove file {}", guarded.display()));
+            }
+        }
         Ok(())
     }
 
@@ -302,6 +327,7 @@ impl PathResolver {
         self.state_for_guard(&guarded)
             .borrow_mut()
             .remove_dir_all(&rel);
+        let _ = std::fs::remove_dir_all(guarded.as_path());
         Ok(())
     }
 

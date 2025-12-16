@@ -1,16 +1,11 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use anyhow::{Result, bail};
-#[cfg(not(miri))]
-use anyhow::Context;
-#[cfg(miri)]
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
 /// Ensure `candidate` stays within `root`, even if parts of the path do not yet exist.
-#[cfg(not(miri))]
 pub(crate) fn guard_path(
     root: &Path,
     candidate: &Path,
@@ -94,25 +89,6 @@ pub(crate) fn guard_path(
     }
 
     Ok(cand_abs)
-}
-
-#[cfg(miri)]
-pub(crate) fn guard_path(root: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
-    let root = root.to_path_buf();
-    let resolved = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        root.join(candidate)
-    };
-    if !resolved.starts_with(&root) {
-        bail!(
-            "{} access to {} escapes allowed root {}",
-            mode.name(),
-            resolved.display(),
-            root.display()
-        );
-    }
-    Ok(resolved)
 }
 
 // Guard and canonicalize paths under the configured roots.
