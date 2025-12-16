@@ -293,8 +293,6 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    #[cfg(miri)]
-    let is_primary = false;
 
     #[cfg(not(miri))]
     let has_git = manifest_resolver
