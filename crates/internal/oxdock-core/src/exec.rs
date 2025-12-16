@@ -812,7 +812,6 @@ mod tests {
     struct MemoryWorkspaceFs {
         root: GuardedPath,
         build_context: GuardedPath,
-        root_prefix: String,
         state: Rc<RefCell<MemoryState>>,
     }
 
@@ -825,16 +824,11 @@ mod tests {
         fn new() -> Self {
             let root = GuardedPath::new_root_from_str(".").unwrap();
             let build_context = root.clone();
-            let mut prefix = root.as_path().display().to_string();
-            if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
-                prefix.push(std::path::MAIN_SEPARATOR);
-            }
             let mut dirs = HashSet::new();
             dirs.insert(String::new());
             Self {
                 root,
                 build_context,
-                root_prefix: prefix,
                 state: Rc::new(RefCell::new(MemoryState {
                     files: StdHashMap::new(),
                     dirs,
@@ -875,12 +869,15 @@ mod tests {
         }
 
         fn relative_path(&self, path: &GuardedPath) -> String {
-            let full = path.as_path().display().to_string();
-            let stripped = full
-                .strip_prefix(&self.root_prefix)
-                .unwrap_or(&full)
-                .trim_start_matches(std::path::MAIN_SEPARATOR);
-            stripped.replace('\\', "/")
+            let rel = path
+                .as_path()
+                .strip_prefix(self.root.as_path())
+                .unwrap_or_else(|_| path.as_path());
+            let trimmed = rel
+                .to_string_lossy()
+                .trim_start_matches(std::path::MAIN_SEPARATOR)
+                .to_string();
+            trimmed.replace('\\', "/")
         }
 
         fn split_components(&self, input: &str) -> Vec<String> {
