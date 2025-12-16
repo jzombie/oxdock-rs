@@ -567,9 +567,9 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
-    fn run_shell_builds_unix_command() -> Result<()> {
+    fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
         let cwd = workspace_root.join("subdir")?;
@@ -586,22 +586,50 @@ mod tests {
         clear_shell_command_hook();
 
         let snap = captured.lock().unwrap().clone().expect("hook should capture snapshot");
-        let program = snap.program.to_string_lossy();
-        assert_eq!(program, shell_program(), "expected shell program name");
-        let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
-        assert_eq!(args.len(), 2, "expected two args (-c script), got {:?}", args);
-        assert_eq!(args[0], "-c");
-        assert!(
-            args[1].contains("exec"),
-            "expected script to exec the shell, got {:?}",
-            args[1]
-        );
         let cwd_path = snap.cwd.expect("cwd should be set");
         assert!(
             cwd_path.ends_with("subdir"),
             "expected cwd to include subdir, got {}",
             cwd_path.display()
         );
+
+        #[cfg(unix)]
+        {
+            let program = snap.program.to_string_lossy();
+            assert_eq!(program, shell_program(), "expected shell program name");
+            let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+            assert_eq!(args.len(), 2, "expected two args (-c script), got {:?}", args);
+            assert_eq!(args[0], "-c");
+            assert!(
+                args[1].contains("exec"),
+                "expected script to exec the shell, got {:?}",
+                args[1]
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            let program = snap.program.to_string_lossy().to_string();
+            assert_eq!(program, "cmd", "expected cmd.exe launcher");
+            let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+            let banner_cmd = windows_banner_command(
+                &shell_banner(&cwd, &workspace_root),
+                command_path(&cwd).as_ref(),
+            );
+            let expected = vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "oxdock shell".to_string(),
+                "cmd".to_string(),
+                "/K".to_string(),
+                banner_cmd,
+            ];
+            assert_eq!(
+                args, expected,
+                "expected exact windows shell argv"
+            );
+        }
+
         Ok(())
     }
 }
