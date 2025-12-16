@@ -153,14 +153,16 @@ jobs:
 
       - name: Run Miri (unit tests only)
         env:
+          # TODO: This should no longer be needed once we have isolated Miri runs.
           # Enable file open operations
-          MIRIFLAGS: -Zmiri-disable-isolation
+          # MIRIFLAGS: -Zmiri-disable-isolation
         run: cargo miri test --workspace --all-features --lib --tests
 
       - name: Report Miri coverage
         shell: bash
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
+        # TODO: This should no longer be needed once we have isolated Miri runs.
+        # env:
+        #   MIRIFLAGS: -Zmiri-disable-isolation
         run: |
           set -euo pipefail
           list_cmd="cargo miri test --workspace --all-features --lib --tests"
