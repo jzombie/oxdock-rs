@@ -1,10 +1,16 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-use super::{AccessMode, guard_path};
+use super::AccessMode;
+#[cfg(not(miri))]
+use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tempfile::{Builder, TempDir};
+#[cfg(miri)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(not(miri))]
+use tempfile::Builder;
+use tempfile::TempDir;
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
@@ -13,15 +19,28 @@ use tempfile::{Builder, TempDir};
 pub struct GuardedPath {
     root: PathBuf,
     path: PathBuf,
+    synthetic: bool,
 }
 
 impl GuardedPath {
+    #[cfg(not(miri))]
     pub fn new(root: &Path, candidate: &Path) -> Result<Self> {
         let guarded = guard_path(root, candidate, AccessMode::Passthru)?;
         Ok(Self {
             root: root.to_path_buf(),
             path: guarded,
+            synthetic: false,
         })
+    }
+
+    #[cfg(miri)]
+    pub fn new(root: &Path, candidate: &Path) -> Result<Self> {
+        let abs = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            root.join(candidate)
+        };
+        Ok(GuardedPath::synthetic(root.to_path_buf(), abs))
     }
 
     /// Build a guard from string paths without requiring callers to reference `std::path` types.
@@ -30,12 +49,22 @@ impl GuardedPath {
     }
 
     /// Create a guard where the root is the path itself.
+    #[cfg(not(miri))]
     pub fn new_root(root: &Path) -> Result<Self> {
         let guarded = guard_path(root, root, AccessMode::Passthru)?;
         Ok(Self {
             root: guarded.clone(),
             path: guarded,
+            synthetic: false,
         })
+    }
+
+    #[cfg(miri)]
+    pub fn new_root(root: &Path) -> Result<Self> {
+        Ok(GuardedPath::synthetic(
+            root.to_path_buf(),
+            root.to_path_buf(),
+        ))
     }
 
     /// Build a root guard from a string path without exposing `std::path` types to callers.
@@ -51,6 +80,7 @@ impl GuardedPath {
     /// Create a guarded temporary directory with a custom `tempfile::Builder`
     /// configuration (e.g., prefixes). The temporary directory is deleted when
     /// the returned `GuardedTempDir` is dropped unless it is persisted.
+    #[cfg(not(miri))]
     pub fn tempdir_with<F>(configure: F) -> Result<GuardedTempDir>
     where
         F: FnOnce(&mut Builder),
@@ -60,6 +90,14 @@ impl GuardedPath {
         let tempdir = builder.tempdir()?;
         let guard = GuardedPath::new_root(tempdir.path())?;
         Ok(GuardedTempDir::new(guard, tempdir))
+    }
+
+    #[cfg(miri)]
+    pub fn tempdir_with<F>(_configure: F) -> Result<GuardedTempDir>
+    where
+        F: FnOnce(&mut tempfile::Builder),
+    {
+        Ok(miri_tempdir())
     }
 
     pub fn as_path(&self) -> &Path {
@@ -79,18 +117,46 @@ impl GuardedPath {
     }
 
     pub fn join(&self, rel: &str) -> Result<Self> {
-        GuardedPath::new(&self.root, &self.path.join(rel))
+        if self.synthetic {
+            Ok(Self {
+                root: self.root.clone(),
+                path: self.path.join(rel),
+                synthetic: true,
+            })
+        } else {
+            GuardedPath::new(&self.root, &self.path.join(rel))
+        }
     }
 
     /// Return the parent directory as a guarded path, if it exists within the same root.
     pub fn parent(&self) -> Option<Self> {
-        self.path
-            .parent()
-            .and_then(|p| GuardedPath::new(&self.root, p).ok())
+        let parent = self.path.parent()?.to_path_buf();
+        if self.synthetic {
+            Some(Self {
+                root: self.root.clone(),
+                path: parent,
+                synthetic: true,
+            })
+        } else {
+            GuardedPath::new(&self.root, &parent).ok()
+        }
     }
 
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
-        Self { root, path }
+        Self {
+            root,
+            path,
+            synthetic: false,
+        }
+    }
+
+    #[cfg(miri)]
+    pub(crate) fn synthetic(root: PathBuf, path: PathBuf) -> Self {
+        Self {
+            root,
+            path,
+            synthetic: true,
+        }
     }
 }
 
@@ -133,12 +199,16 @@ impl PathLike for GuardedPath {
 /// Temporary directory that cleans itself up on drop while exposing the guarded path.
 pub struct GuardedTempDir {
     guard: GuardedPath,
-    tempdir: TempDir,
+    tempdir: Option<TempDir>,
 }
 
 impl GuardedTempDir {
+    #[cfg(not(miri))]
     fn new(guard: GuardedPath, tempdir: TempDir) -> Self {
-        Self { guard, tempdir }
+        Self {
+            guard,
+            tempdir: Some(tempdir),
+        }
     }
 
     pub fn as_guarded_path(&self) -> &GuardedPath {
@@ -148,15 +218,23 @@ impl GuardedTempDir {
     /// Prevent automatic cleanup and return the guarded path rooted at the
     /// temporary directory.
     #[allow(deprecated)]
-    pub fn persist(self) -> GuardedPath {
-        let GuardedTempDir { guard, tempdir } = self;
-        let _ = tempdir.into_path();
-        guard
+    pub fn persist(mut self) -> GuardedPath {
+        if let Some(tempdir) = self.tempdir.take() {
+            let _ = tempdir.into_path();
+        }
+        self.guard
     }
 
-    pub fn into_parts(self) -> (TempDir, GuardedPath) {
-        let GuardedTempDir { guard, tempdir } = self;
-        (tempdir, guard)
+    pub fn into_parts(self) -> (Option<TempDir>, GuardedPath) {
+        (self.tempdir, self.guard)
+    }
+
+    #[cfg(miri)]
+    fn synthetic(guard: GuardedPath) -> Self {
+        Self {
+            guard,
+            tempdir: None,
+        }
     }
 }
 
@@ -172,6 +250,15 @@ impl std::fmt::Display for GuardedTempDir {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.guard.fmt(f)
     }
+}
+
+#[cfg(miri)]
+fn miri_tempdir() -> GuardedTempDir {
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let root = PathBuf::from(format!("/oxdock-miri-temp-{id}"));
+    let guard = GuardedPath::synthetic(root.clone(), root);
+    GuardedTempDir::synthetic(guard)
 }
 
 /// Path wrapper that intentionally skips guard checks. Use only for paths that

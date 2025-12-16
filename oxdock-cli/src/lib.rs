@@ -5,10 +5,10 @@ use oxdock_process::CommandBuilder;
 use oxdock_process::CommandSnapshot;
 #[cfg(windows)]
 use std::borrow::Cow;
-#[cfg(test)]
-use std::sync::Mutex;
 use std::env;
 use std::io::{self, IsTerminal, Read};
+#[cfg(test)]
+use std::sync::Mutex;
 
 pub use oxdock_core::{
     Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context,
@@ -325,12 +325,16 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 
         // Reattach stdin to the controlling TTY so a piped-in script can still open an interactive shell.
         // Use `PathResolver::open_external_file` to centralize raw `File::open` usage.
-        #[allow(clippy::disallowed_types)]
-        let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
-        if let Ok(resolver) = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
-            && let Ok(tty) = resolver.open_external_file(&tty_path)
+        #[cfg(not(miri))]
         {
-            cmd.stdin_file(tty);
+            #[allow(clippy::disallowed_types)]
+            let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
+            if let Ok(resolver) =
+                PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
+                && let Ok(tty) = resolver.open_external_file(&tty_path)
+            {
+                cmd.stdin_file(tty);
+            }
         }
 
         if try_shell_command_hook(&mut cmd)? {
@@ -573,8 +577,11 @@ mod tests {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
         let cwd = workspace_root.join("subdir")?;
-        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
-        resolver.create_dir_all_abs(&cwd)?;
+        #[cfg(not(miri))]
+        {
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+            resolver.create_dir_all_abs(&cwd)?;
+        }
 
         let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
         let guard = captured.clone();
@@ -585,7 +592,11 @@ mod tests {
         run_shell(&cwd, &workspace_root)?;
         clear_shell_command_hook();
 
-        let snap = captured.lock().unwrap().clone().expect("hook should capture snapshot");
+        let snap = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("hook should capture snapshot");
         let cwd_path = snap.cwd.expect("cwd should be set");
         assert!(
             cwd_path.ends_with("subdir"),
@@ -597,8 +608,17 @@ mod tests {
         {
             let program = snap.program.to_string_lossy();
             assert_eq!(program, shell_program(), "expected shell program name");
-            let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
-            assert_eq!(args.len(), 2, "expected two args (-c script), got {:?}", args);
+            let args: Vec<_> = snap
+                .args
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
+            assert_eq!(
+                args.len(),
+                2,
+                "expected two args (-c script), got {:?}",
+                args
+            );
             assert_eq!(args[0], "-c");
             assert!(
                 args[1].contains("exec"),
@@ -611,7 +631,11 @@ mod tests {
         {
             let program = snap.program.to_string_lossy().to_string();
             assert_eq!(program, "cmd", "expected cmd.exe launcher");
-            let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+            let args: Vec<_> = snap
+                .args
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
             let banner_cmd = windows_banner_command(
                 &shell_banner(&cwd, &workspace_root),
                 command_path(&cwd).as_ref(),
@@ -624,10 +648,7 @@ mod tests {
                 "/K".to_string(),
                 banner_cmd,
             ];
-            assert_eq!(
-                args, expected,
-                "expected exact windows shell argv"
-            );
+            assert_eq!(args, expected, "expected exact windows shell argv");
         }
 
         Ok(())
@@ -728,12 +749,22 @@ mod windows_shell_tests {
         run_shell(&cwd, &workspace_root)?;
         clear_shell_command_hook();
 
-        let snap = captured.lock().unwrap().clone().expect("hook should capture snapshot");
+        let snap = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("hook should capture snapshot");
         let program = snap.program.to_string_lossy().to_string();
         assert_eq!(program, "cmd", "expected cmd.exe launcher");
-        let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
-        let banner_cmd =
-            windows_banner_command(&shell_banner(&cwd, &workspace_root), command_path(&cwd).as_ref());
+        let args: Vec<_> = snap
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        let banner_cmd = windows_banner_command(
+            &shell_banner(&cwd, &workspace_root),
+            command_path(&cwd).as_ref(),
+        );
         let expected = vec![
             "/C".to_string(),
             "start".to_string(),
@@ -742,10 +773,7 @@ mod windows_shell_tests {
             "/K".to_string(),
             banner_cmd,
         ];
-        assert_eq!(
-            args, expected,
-            "expected exact windows shell argv"
-        );
+        assert_eq!(args, expected, "expected exact windows shell argv");
         let cwd_path = snap.cwd.expect("cwd should be set");
         assert!(
             cwd_path.ends_with("subdir"),

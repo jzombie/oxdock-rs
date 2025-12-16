@@ -1,8 +1,8 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
-mod shell;
 #[cfg(feature = "mock-process")]
 mod mock;
+mod shell;
 
 use anyhow::{Context, Result, bail};
 use shell::shell_cmd;
@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
-use std::{ffi::{OsStr, OsString}, iter::IntoIterator};
+use std::{
+    ffi::{OsStr, OsString},
+    iter::IntoIterator,
+};
 
 #[cfg(feature = "mock-process")]
 pub use mock::{MockHandle, MockProcessManager, MockRunCall, MockSpawnCall};

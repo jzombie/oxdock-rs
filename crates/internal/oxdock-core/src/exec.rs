@@ -570,7 +570,10 @@ mod tests {
         } = &runs[0];
         assert_eq!(script, "echo hi");
         assert_eq!(cwd, root.as_path());
-        assert_eq!(cargo_target_dir, &root.join(".cargo-target").unwrap().to_path_buf());
+        assert_eq!(
+            cargo_target_dir,
+            &root.join(".cargo-target").unwrap().to_path_buf()
+        );
         assert_eq!(envs.get("FOO"), Some(&"bar".into()));
     }
 
