@@ -405,6 +405,12 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
     run_cmd(archive_cmd)?;
 
     let mut tar_cmd = CommandBuilder::new("tar");
+    #[cfg(unix)]
+    {
+        // The temp workspace often inherits mtimes newer than the host clock (e.g. containerized builds),
+        // which makes GNU tar print noisy "timestamp is in the future" diagnostics. Silence just that warning.
+        tar_cmd.arg("--warning=no-timestamp");
+    }
     tar_cmd
         .arg("-xf")
         .arg(archive_path)
