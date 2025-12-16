@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "crates/internal/oxdock-core",
-    "crates/internal/oxdock-fs", "crates/internal/oxdock-process",
+    "crates/internal/oxdock-fs",
+    "crates/internal/oxdock-process",
     "oxdock-buildtime-macros",
     # Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
     "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
