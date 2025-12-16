@@ -9,9 +9,9 @@ use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
-use std::{ffi::OsStr, iter::IntoIterator};
+use std::{ffi::{OsStr, OsString}, iter::IntoIterator};
 
 #[cfg(feature = "mock-process")]
 pub use mock::{MockHandle, MockProcessManager, MockRunCall, MockSpawnCall};
@@ -146,17 +146,26 @@ fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
 /// Builder wrapper that centralizes direct usages of `std::process::Command`.
 pub struct CommandBuilder {
     inner: ProcessCommand,
+    program: OsString,
+    args: Vec<OsString>,
+    cwd: Option<PathBuf>,
 }
 
 impl CommandBuilder {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
+        let prog = program.as_ref().to_os_string();
         Self {
-            inner: ProcessCommand::new(program),
+            inner: ProcessCommand::new(&prog),
+            program: prog,
+            args: Vec::new(),
+            cwd: None,
         }
     }
 
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
-        self.inner.arg(arg);
+        let val = arg.as_ref().to_os_string();
+        self.inner.arg(&val);
+        self.args.push(val);
         self
     }
 
@@ -165,7 +174,9 @@ impl CommandBuilder {
         S: AsRef<OsStr>,
         I: IntoIterator<Item = S>,
     {
-        self.inner.args(args);
+        for arg in args {
+            self.arg(arg);
+        }
         self
     }
 
@@ -180,7 +191,9 @@ impl CommandBuilder {
     }
 
     pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
-        self.inner.current_dir(dir);
+        let path = dir.as_ref();
+        self.inner.current_dir(path);
+        self.cwd = Some(path.to_path_buf());
         self
     }
 
@@ -211,10 +224,21 @@ impl CommandBuilder {
         Ok(ChildHandle { child })
     }
 
-    /// Return a debug-friendly representation of the command and its args.
-    pub fn render(&self) -> String {
-        format!("{:?}", self.inner)
+    /// Return a lightweight snapshot of the command configuration for testing.
+    pub fn snapshot(&self) -> CommandSnapshot {
+        CommandSnapshot {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            cwd: self.cwd.clone(),
+        }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandSnapshot {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+    pub cwd: Option<PathBuf>,
 }
 
 pub struct CommandOutput {

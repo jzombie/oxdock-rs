@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_process::CommandBuilder;
+#[cfg(test)]
+use oxdock_process::CommandSnapshot;
 #[cfg(windows)]
 use std::borrow::Cow;
 #[cfg(test)]
@@ -390,13 +392,13 @@ fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
 }
 
 #[cfg(test)]
-static SHELL_CMD_HOOK: Mutex<Option<Box<dyn FnMut(&CommandBuilder) -> Result<()> + Send>>> =
+static SHELL_CMD_HOOK: Mutex<Option<Box<dyn FnMut(&CommandSnapshot) -> Result<()> + Send>>> =
     Mutex::new(None);
 
 #[cfg(test)]
 fn set_shell_command_hook<F>(hook: F)
 where
-    F: FnMut(&CommandBuilder) -> Result<()> + Send + 'static,
+    F: FnMut(&CommandSnapshot) -> Result<()> + Send + 'static,
 {
     *SHELL_CMD_HOOK.lock().unwrap() = Some(Box::new(hook));
 }
@@ -409,7 +411,8 @@ fn clear_shell_command_hook() {
 #[cfg(test)]
 fn try_shell_command_hook(cmd: &mut CommandBuilder) -> Result<bool> {
     if let Some(hook) = SHELL_CMD_HOOK.lock().unwrap().as_mut() {
-        hook(cmd)?;
+        let snap = cmd.snapshot();
+        hook(&snap)?;
         return Ok(true);
     }
     Ok(false)
@@ -573,23 +576,31 @@ mod tests {
         let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
         resolver.create_dir_all_abs(&cwd)?;
 
-        let rendered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let captured = rendered.clone();
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let guard = captured.clone();
         set_shell_command_hook(move |cmd| {
-            *captured.lock().unwrap() = cmd.render();
+            *guard.lock().unwrap() = Some(cmd.clone());
             Ok(())
         });
         run_shell(&cwd, &workspace_root)?;
         clear_shell_command_hook();
 
-        let desc = rendered.lock().unwrap().clone();
+        let snap = captured.lock().unwrap().clone().expect("hook should capture snapshot");
+        let program = snap.program.to_string_lossy();
+        assert_eq!(program, shell_program(), "expected shell program name");
+        let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+        assert_eq!(args.len(), 2, "expected two args (-c script), got {:?}", args);
+        assert_eq!(args[0], "-c");
         assert!(
-            desc.contains(&shell_program()) && desc.contains("-c") && desc.contains("exec"),
-            "expected unix shell command to use shell_program with -c/exec, got {desc}"
+            args[1].contains("exec"),
+            "expected script to exec the shell, got {:?}",
+            args[1]
         );
+        let cwd_path = snap.cwd.expect("cwd should be set");
         assert!(
-            desc.contains("subdir"),
-            "expected shell cwd in command description, got {desc}"
+            cwd_path.ends_with("subdir"),
+            "expected cwd to include subdir, got {}",
+            cwd_path.display()
         );
         Ok(())
     }
@@ -680,27 +691,38 @@ mod windows_shell_tests {
         let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
         resolver.create_dir_all_abs(&cwd)?;
 
-        let rendered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let captured = rendered.clone();
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let guard = captured.clone();
         set_shell_command_hook(move |cmd| {
-            *captured.lock().unwrap() = cmd.render();
+            *guard.lock().unwrap() = Some(cmd.clone());
             Ok(())
         });
         run_shell(&cwd, &workspace_root)?;
         clear_shell_command_hook();
 
-        let desc = rendered.lock().unwrap().clone();
-        assert!(
-            desc.contains("cmd") && desc.contains("/C") && desc.contains("start"),
-            "expected cmd /C start in windows shell command, got {desc}"
+        let snap = captured.lock().unwrap().clone().expect("hook should capture snapshot");
+        let program = snap.program.to_string_lossy().to_string();
+        assert_eq!(program, "cmd", "expected cmd.exe launcher");
+        let args: Vec<_> = snap.args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+        let banner_cmd =
+            windows_banner_command(&shell_banner(&cwd, &workspace_root), command_path(&cwd).as_ref());
+        let expected = vec![
+            "/C".to_string(),
+            "start".to_string(),
+            "oxdock shell".to_string(),
+            "cmd".to_string(),
+            "/K".to_string(),
+            banner_cmd,
+        ];
+        assert_eq!(
+            args, expected,
+            "expected exact windows shell argv"
         );
+        let cwd_path = snap.cwd.expect("cwd should be set");
         assert!(
-            desc.contains("oxdock shell") && desc.contains("/K"),
-            "expected banner and /K in windows shell command, got {desc}"
-        );
-        assert!(
-            desc.contains("subdir"),
-            "expected cwd path in windows shell command, got {desc}"
+            cwd_path.ends_with("subdir"),
+            "expected cwd to include subdir, got {}",
+            cwd_path.display()
         );
         Ok(())
     }
