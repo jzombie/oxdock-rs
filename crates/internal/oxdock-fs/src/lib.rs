@@ -1,5 +1,11 @@
 use anyhow::Result;
 
+/// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
+/// where access to the host filesystem is restricted.
+pub fn is_isolated() -> bool {
+    cfg!(miri)
+}
+
 pub mod workspace_fs;
 pub use workspace_fs::command_path;
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};

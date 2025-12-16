@@ -302,6 +302,33 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
 
     let name = &input.name;
 
+    // If the filesystem is isolated (e.g. under Miri), we cannot safely access the host filesystem.
+    // In this case, we skip the build process to avoid errors.
+    if oxdock_fs::is_isolated() {
+        eprintln!("embed: skipping build under isolated fs");
+        let mod_ident = syn::Ident::new(
+            &format!("__oxdock_embed_{}", name),
+            proc_macro2::Span::call_site(),
+        );
+        
+        // Emit a dummy struct that matches the public API but has no assets.
+        return Ok(quote! {
+            #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+            mod #mod_ident {
+                pub struct #name;
+                impl #name {
+                    pub fn get(_file: &str) -> Option<rust_embed::EmbeddedFile> {
+                        None
+                    }
+                    pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
+                        std::iter::empty()
+                    }
+                }
+            }
+            pub use #mod_ident::#name;
+        });
+    }
+
     let out_dir_str = input.out_dir.value();
     let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
 
