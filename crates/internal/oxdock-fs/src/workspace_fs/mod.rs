@@ -49,7 +49,7 @@ mod synthetic_entry {
             let file_name = path
                 .file_name()
                 .map(|n| n.to_os_string())
-                    .unwrap_or_default();
+                .unwrap_or_default();
             Self {
                 path,
                 file_name,
@@ -97,8 +97,8 @@ pub enum EntryKind {
 }
 
 pub mod path;
-pub use path::{GuardedPath, GuardedTempDir};
 pub use path::command_path;
+pub use path::{GuardedPath, GuardedTempDir};
 
 #[allow(clippy::disallowed_types)]
 pub use path::UnguardedPath;

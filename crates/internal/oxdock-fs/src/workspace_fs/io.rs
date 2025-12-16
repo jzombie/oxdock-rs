@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
 #[cfg(not(miri))]
 use anyhow::bail;
+use anyhow::{Context, Result};
 use std::fs;
 
 #[cfg(miri)]

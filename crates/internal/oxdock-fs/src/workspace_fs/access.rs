@@ -143,7 +143,9 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
             std::path::Component::RootDir => parts.clear(),
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                if let Some(last) = parts.last() && !last.as_os_str().is_empty() {
+                if let Some(last) = parts.last()
+                    && !last.as_os_str().is_empty()
+                {
                     parts.pop();
                 }
             }

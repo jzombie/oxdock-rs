@@ -5,8 +5,8 @@ use super::PathResolver;
 use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::{Builder, TempDir};

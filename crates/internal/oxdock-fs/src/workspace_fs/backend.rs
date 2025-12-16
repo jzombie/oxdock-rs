@@ -135,7 +135,13 @@ impl BackendImpl for HostBackend {
 
 // Miri implementation (keeps synthetic state + mirrors to host)
 #[cfg(miri)]
-#[allow(clippy::disallowed_methods, clippy::disallowed_types, clippy::collapsible_if, clippy::needless_return, clippy::duplicated_attributes)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::collapsible_if,
+    clippy::needless_return,
+    clippy::duplicated_attributes
+)]
 mod miri_backend {
     use super::super::EntryKind;
     use super::*;
@@ -317,7 +323,8 @@ mod miri_backend {
             // Use a stable FD (/dev/null) to obtain metadata without path-based statx.
             let f = fs::File::open("/dev/null")
                 .with_context(|| "failed to open /dev/null for synthetic metadata")?;
-            f.metadata().with_context(|| "failed to fetch synthetic metadata")
+            f.metadata()
+                .with_context(|| "failed to fetch synthetic metadata")
         }
 
         #[cfg(not(unix))]
@@ -460,7 +467,9 @@ mod miri_backend {
                     if let Some(child) = dir.split('/').next() {
                         push_child(child, EntryKind::Dir);
                     }
-                } else if let Some(prefix) = prefix.as_ref() && let Some(rest) = dir.strip_prefix(prefix) {
+                } else if let Some(prefix) = prefix.as_ref()
+                    && let Some(rest) = dir.strip_prefix(prefix)
+                {
                     if let Some(child) = rest.split('/').next() {
                         push_child(child, EntryKind::Dir);
                     }
@@ -472,7 +481,9 @@ mod miri_backend {
                     if let Some(child) = file.split('/').next() {
                         push_child(child, EntryKind::File);
                     }
-                } else if let Some(prefix) = prefix.as_ref() && let Some(rest) = file.strip_prefix(prefix) {
+                } else if let Some(prefix) = prefix.as_ref()
+                    && let Some(rest) = file.strip_prefix(prefix)
+                {
                     if let Some(child) = rest.split('/').next() {
                         push_child(child, EntryKind::File);
                     }

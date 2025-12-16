@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 pub mod workspace_fs;
-pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::command_path;
+pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;

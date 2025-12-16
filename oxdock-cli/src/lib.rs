@@ -267,7 +267,10 @@ fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     #[cfg(windows)]
     let cwd_disp = oxdock_fs::command_path(cwd).as_ref().display().to_string();
     #[cfg(windows)]
-    let workspace_disp = oxdock_fs::command_path(workspace_root).as_ref().display().to_string();
+    let workspace_disp = oxdock_fs::command_path(workspace_root)
+        .as_ref()
+        .display()
+        .to_string();
 
     #[cfg(not(windows))]
     let cwd_disp = cwd.display().to_string();
@@ -728,7 +731,7 @@ mod windows_shell_tests {
             .iter()
             .map(|s| s.to_string_lossy().to_string())
             .collect();
-            let banner_cmd = windows_banner_command(&shell_banner(&cwd, &workspace_root), &cwd);
+        let banner_cmd = windows_banner_command(&shell_banner(&cwd, &workspace_root), &cwd);
         let expected = vec![
             "/C".to_string(),
             "start".to_string(),
