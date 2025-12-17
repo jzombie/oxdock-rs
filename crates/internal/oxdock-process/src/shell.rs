@@ -20,6 +20,7 @@ pub fn shell_program() -> String {
 pub(crate) fn shell_cmd(cmd: &str) -> Command {
     let program = shell_program();
     let mut c = Command::new(program);
+    #[allow(clippy::disallowed_macros)]
     if cfg!(windows) {
         c.arg("/C").arg(cmd);
     } else {

@@ -41,6 +41,7 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 fn platform_matches(target: PlatformGuard) -> bool {
+    #[allow(clippy::disallowed_macros)]
     match target {
         PlatformGuard::Unix => cfg!(unix),
         PlatformGuard::Windows => cfg!(windows),

@@ -42,3 +42,9 @@ tempfile = "3.23.0"
 
 # Logging/tracing
 tracing = "0.1.43"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+

@@ -49,6 +49,7 @@ fn commands_behave_cross_platform() {
     create_dirs(&target_dir);
     write_text(&target_dir.join("inner.txt").unwrap(), "symlink target");
 
+    #[allow(clippy::disallowed_macros)]
     let run_cmd = if cfg!(windows) {
         "echo %FOO%> run.txt"
     } else {
@@ -56,9 +57,10 @@ fn commands_behave_cross_platform() {
     };
 
     // Background command should stay alive long enough for the foreground steps to complete.
+    #[allow(clippy::disallowed_macros)]
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
-    } else if cfg!(miri) {
+    } else if oxdock_fs::is_isolated() {
         "sleep 1; printf %s \"$FOO\" > bg.txt"
     } else {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
@@ -265,6 +267,7 @@ fn accepts_semicolon_separated_commands() {
 fn write_cmd_captures_output() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
+    #[allow(clippy::disallowed_macros)]
     let cmd = if cfg!(windows) {
         "RUN echo hello"
     } else {

@@ -2,6 +2,7 @@ use anyhow::Result;
 
 /// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
 /// where access to the host filesystem is restricted.
+#[allow(clippy::disallowed_macros)]
 pub fn is_isolated() -> bool {
     cfg!(miri)
 }
