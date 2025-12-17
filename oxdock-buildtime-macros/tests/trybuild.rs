@@ -1,15 +1,11 @@
-// TODO: Replace this ad-hoc repo-side cleanup with an isolated test harness
-// (e.g. run fixtures in temporary directories) to avoid mutating the repo.
+// TODO: A better fixture should be used instead of this, especially one that auto-cleans
+// up after itself. A previous version did try to clean up after itself but was disabled
+// due to flakiness.
 
 #[test]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_manifest_dir() {
     use oxdock_process::CommandBuilder;
-    // use std::path::Path;
-
-    // Ensure any previously generated prebuilt* dirs are removed so tests start clean.
-    // let manifest = Path::new("tests/fixtures/build_from_manifest/Cargo.toml");
-    // clean_prebuilt_dirs(manifest);
 
     let mut cmd = CommandBuilder::new("cargo");
     cmd.arg("run")
@@ -28,11 +24,6 @@ fn trybuild_manifest_dir() {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_exit_fail() {
     use oxdock_process::CommandBuilder;
-    // use std::path::Path;
-
-    // Clean previously generated prebuilt* dirs for this fixture
-    // let manifest = Path::new("tests/fixtures/build_exit_fail/Cargo.toml");
-    // clean_prebuilt_dirs(manifest);
 
     let mut cmd = CommandBuilder::new("cargo");
     cmd.arg("run")
