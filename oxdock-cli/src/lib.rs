@@ -548,6 +548,9 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
@@ -648,6 +651,9 @@ mod windows_shell_tests {
         ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
     )]
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
@@ -707,6 +713,9 @@ mod windows_shell_tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn run_shell_builds_windows_command() -> Result<()> {
         let workspace = GuardedPath::tempdir_with(|builder| {
