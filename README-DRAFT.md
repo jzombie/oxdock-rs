@@ -123,7 +123,14 @@ cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
 ### Miri coverage
 
-The CI `miri` job monitors how many workspace unit tests can run under [`cargo miri`](https://github.com/rust-lang/miri). On pushes to `main`, the job publishes a badge description (`badges/miri-coverage.json` on the `badges` branch) that backs the Miri coverage badge above. This ratio is a quick signal for how well guarded components execute inside the interpreter; increasing it tends to surface isolation gaps early.
+The CI `miri` job monitors how many workspace unit tests can run under [`cargo miri`](https://github.com/rust-lang/miri). On pushes to `main`, the job publishes a badge description (`badges/miri-coverage.json` on the `badges` branch) that backs the Miri coverage badge above.
+
+To keep the badge grounded in real coverage reporting, the workflow multiplies two signals:
+
+1. **Runnable test ratio:** how many workspace tests are runnable under Miri vs. the total (`cargo miri test -- --list`).
+2. **LLVM line coverage baseline:** the percent reported by `cargo llvm-cov --summary-only` (the same value sent to Coveralls).
+
+The badge therefore shows an approximate “effective Miri coverage” (baseline coverage × runnable ratio), which can never exceed the standard coverage percentage but gives a tangible sense of how much of the tested surface area is validated under the interpreter.
 
 If you run new tests under Miri locally, you can sanity-check parity with CI via:
 
