@@ -1,9 +1,12 @@
-# TODO: If possible, gate this so that #[cfg(miri)] is mostly only contained within oxdock-fs
-# and oxdock-process crates, where the other crates are agnostic to the test runner.
+# This configuration enforces the usage of `oxdock-fs` and `oxdock-process` abstractions
+# by disallowing raw `std::fs` and `std::process` usage.
+#
+# Exceptions for the implementation crates (`oxdock-fs`, `oxdock-process`) are handled
+# via `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]` in their respective source files.
 
-# TODO: Update this description to cover "types" and "processes"
-# Disallowed methods to ensure filesystem access in `oxdock-core` goes through PathResolver.
-# Clippy will emit the `disallowed_methods` lint for any exact matches.
+# Disallowed methods and types to ensure filesystem and process access goes through
+# `PathResolver` and `oxdock-process` abstractions.
+# Clippy will emit the `disallowed_methods` or `disallowed_types` lint for any exact matches.
 # Note: this configuration works with Clippy (cargo clippy). It will not by itself
 # make `cargo build` fail unless `cargo clippy` is run and the lint is denied.
 
