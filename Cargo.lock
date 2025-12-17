@@ -305,6 +305,7 @@ dependencies = [
  "anyhow",
  "rust-embed",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
