@@ -27,17 +27,21 @@ pub use workspace_fs::mock::MockFs;
 /// rely on a consistent set of path helper methods. This includes a small set
 /// of constructors and a `root` accessor so code that needs to treat either
 /// type homogenously can do so without ad-hoc helper functions.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub trait PathLike: Sized + std::fmt::Display {
+    #[allow(clippy::disallowed_types)]
     fn as_path(&self) -> &std::path::Path;
+    #[allow(clippy::disallowed_types)]
     fn root(&self) -> &std::path::Path;
+    #[allow(clippy::disallowed_types)]
     fn to_path_buf(&self) -> std::path::PathBuf;
     fn join(&self, rel: &str) -> Result<Self>;
     fn parent(&self) -> Option<Self>;
     // Constructors analogous to those on `GuardedPath`.
     fn new_from_str(root: &str, candidate: &str) -> Result<Self>;
+    #[allow(clippy::disallowed_types)]
     fn new_root(root: &std::path::Path) -> Result<Self>;
     fn new_root_from_str(root: &str) -> Result<Self> {
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
         Self::new_root(std::path::Path::new(root))
     }
 }
@@ -48,9 +52,11 @@ pub trait PathLike: Sized + std::fmt::Display {
 /// depend on the abstraction rather than the concrete type.
 pub trait WorkspaceFs {
     fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath>;
+    #[allow(clippy::disallowed_types)]
     fn canonicalize_unguarded(&self, path: &UnguardedPath) -> Result<UnguardedPath>;
 
     fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata>;
+    #[allow(clippy::disallowed_types)]
     fn metadata_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::Metadata>;
 
     fn root(&self) -> &GuardedPath;
@@ -58,38 +64,51 @@ pub trait WorkspaceFs {
     fn set_root(&mut self, root: GuardedPath);
 
     fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>>;
+    #[allow(clippy::disallowed_types)]
     fn read_file_unguarded(&self, path: &UnguardedPath) -> Result<Vec<u8>>;
 
     fn read_to_string(&self, path: &GuardedPath) -> Result<String>;
+    #[allow(clippy::disallowed_types)]
     fn read_to_string_unguarded(&self, path: &UnguardedPath) -> Result<String>;
 
     fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>>;
+    #[allow(clippy::disallowed_types)]
     fn read_dir_entries_unguarded(&self, path: &UnguardedPath) -> Result<Vec<DirEntry>>;
 
     fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn write_file_unguarded(&self, path: &UnguardedPath, contents: &[u8]) -> Result<()>;
 
     fn create_dir_all(&self, path: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn create_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()>;
 
     fn remove_file(&self, path: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn remove_file_unguarded(&self, path: &UnguardedPath) -> Result<()>;
 
     fn remove_dir_all(&self, path: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn remove_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()>;
 
     fn copy_file(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<u64>;
+    #[allow(clippy::disallowed_types)]
     fn copy_file_unguarded(&self, src: &UnguardedPath, dst: &UnguardedPath) -> Result<u64>;
+    #[allow(clippy::disallowed_types)]
     fn copy_file_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64>;
+    #[allow(clippy::disallowed_types)]
     fn copy_file_to_unguarded(&self, src: &GuardedPath, dst: &UnguardedPath) -> Result<u64>;
 
     fn copy_dir_recursive(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn copy_dir_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()>;
 
     fn symlink(&self, src: &GuardedPath, dst: &GuardedPath) -> Result<()>;
 
+    #[allow(clippy::disallowed_types)]
     fn open_file_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::File>;
     fn set_permissions_mode_unix(&self, path: &GuardedPath, mode: u32) -> Result<()>;
+    #[allow(clippy::disallowed_types)]
     fn set_permissions_mode_unix_unguarded(&self, path: &UnguardedPath, mode: u32) -> Result<()>;
 
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath>;
@@ -98,6 +117,7 @@ pub trait WorkspaceFs {
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath>;
 
     fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind>;
+    #[allow(clippy::disallowed_types)]
     fn entry_kind_unguarded(&self, path: &UnguardedPath) -> Result<EntryKind>;
 
     fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()>;
@@ -108,6 +128,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::canonicalize(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn canonicalize_unguarded(&self, path: &UnguardedPath) -> Result<UnguardedPath> {
         #[allow(clippy::disallowed_methods)]
         Ok(UnguardedPath::new(std::fs::canonicalize(path.as_path())?))
@@ -117,6 +138,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::metadata(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn metadata_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
         PathResolver::metadata_unguarded(self, path)
     }
@@ -137,6 +159,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::read_file(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn read_file_unguarded(&self, path: &UnguardedPath) -> Result<Vec<u8>> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::read(path.as_path())?)
@@ -146,6 +169,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::read_to_string(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn read_to_string_unguarded(&self, path: &UnguardedPath) -> Result<String> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::read_to_string(path.as_path())?)
@@ -155,6 +179,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::read_dir_entries(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn read_dir_entries_unguarded(&self, path: &UnguardedPath) -> Result<Vec<DirEntry>> {
         #[cfg(not(miri))]
         {
@@ -173,6 +198,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::write_file(self, path, contents)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn write_file_unguarded(&self, path: &UnguardedPath, contents: &[u8]) -> Result<()> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::write(path.as_path(), contents)?)
@@ -182,6 +208,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::create_dir_all(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn create_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::create_dir_all(path.as_path())?)
@@ -191,6 +218,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::remove_file(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn remove_file_unguarded(&self, path: &UnguardedPath) -> Result<()> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::remove_file(path.as_path())?)
@@ -200,6 +228,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::remove_dir_all(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn remove_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::remove_dir_all(path.as_path())?)
@@ -209,15 +238,18 @@ impl WorkspaceFs for PathResolver {
         PathResolver::copy_file(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_file_unguarded(&self, src: &UnguardedPath, dst: &UnguardedPath) -> Result<u64> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::copy(src.as_path(), dst.as_path())?)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_file_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64> {
         PathResolver::copy_file_from_unguarded(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_file_to_unguarded(&self, src: &GuardedPath, dst: &UnguardedPath) -> Result<u64> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::copy(src.as_path(), dst.as_path())?)
@@ -227,6 +259,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::copy_dir_recursive(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn copy_dir_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()> {
         PathResolver::copy_dir_from_unguarded(self, src, dst)
     }
@@ -235,6 +268,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::symlink(self, src, dst)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn open_file_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::File> {
         PathResolver::open_file_unguarded(self, path)
     }
@@ -243,6 +277,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::set_permissions_mode_unix(self, path, mode)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn set_permissions_mode_unix_unguarded(&self, path: &UnguardedPath, mode: u32) -> Result<()> {
         #[cfg(unix)]
         {
@@ -279,6 +314,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::entry_kind(self, path)
     }
 
+    #[allow(clippy::disallowed_types)]
     fn entry_kind_unguarded(&self, path: &UnguardedPath) -> Result<EntryKind> {
         #[allow(clippy::disallowed_methods)]
         let metadata = std::fs::metadata(path.as_path())?;

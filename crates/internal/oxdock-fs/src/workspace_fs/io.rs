@@ -105,7 +105,7 @@ impl PathResolver {
         self.backend.entry_kind(path).is_ok()
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
     pub fn metadata_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
         #[cfg(not(miri))]
         {
