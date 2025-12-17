@@ -100,3 +100,34 @@ COPY_GIT release path/to/config.toml app/config/config.toml
 # copy a directory from a specific commit
 COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
 ```
+# OxDock
+
+[![Coverage Status](https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main)](https://coveralls.io/github/jzombie/oxdock-rs?branch=main)
+[![Miri Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjzombie%2Foxdock-rs%2Fbadges%2Fmiri-coverage.json)](#miri-coverage)
+
+OxDock is a Rust workspace that explores guarded filesystem access, process isolation, and deterministic tooling. The project is still evolving and its README will grow as more components are documented.
+
+## Coverage reporting
+
+### LLVM line coverage (cargo-llvm-cov)
+
+The `coverage (cargo-llvm-cov)` GitHub Actions job installs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and publishes [`lcov`](https://github.com/linux-test-project/lcov) data to Coveralls. Once the repository is enabled on Coveralls, pushes and pull requests to `main` automatically update the badge above.
+
+To reproduce the report locally (requires the nightly LLVM tools component):
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+```
+
+### Miri coverage
+
+The CI `miri` job monitors how many workspace unit tests can run under [`cargo miri`](https://github.com/rust-lang/miri). On pushes to `main`, the job publishes a badge description (`badges/miri-coverage.json` on the `badges` branch) that backs the Miri coverage badge above. This ratio is a quick signal for how well guarded components execute inside the interpreter; increasing it tends to surface isolation gaps early.
+
+If you run new tests under Miri locally, you can sanity-check parity with CI via:
+
+```bash
+cargo +nightly miri setup
+cargo +nightly miri test --workspace --all-features --lib --tests
+```
