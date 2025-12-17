@@ -488,6 +488,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::PathResolver;
+    #[cfg(not(miri))]
     use serial_test::serial;
     use std::cell::Cell;
 
@@ -551,7 +552,7 @@ mod tests {
     // [serial] is required because this test interacts with global state (filesystem/env)
     // which causes race conditions on high-core-count machines. CI runners often have
     // fewer cores, masking this issue not apparent there.
-    #[serial]
+    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
@@ -654,7 +655,7 @@ mod windows_shell_tests {
     // [serial] is required because this test interacts with global state (filesystem/env)
     // which causes race conditions on high-core-count machines. CI runners often have
     // fewer cores, masking this issue not apparent there.
-    #[serial]
+    #[cfg_attr(not(miri), serial)]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
         let workspace = GuardedPath::tempdir_with(|builder| {
@@ -716,7 +717,7 @@ mod windows_shell_tests {
     // [serial] is required because this test interacts with global state (filesystem/env)
     // which causes race conditions on high-core-count machines. CI runners often have
     // fewer cores, masking this issue not apparent there.
-    #[serial]
+    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_windows_command() -> Result<()> {
         let workspace = GuardedPath::tempdir_with(|builder| {
             builder.prefix("oxdock shell win ");
