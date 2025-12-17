@@ -3,6 +3,11 @@
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn clean_prebuilt_dirs(manifest: &std::path::Path) {
     use std::fs;
+    // Under Miri we must not touch the host filesystem; skip cleanup there.
+    if oxdock_fs::is_isolated() {
+        return;
+    }
+
     if let Some(base) = manifest.parent()
         && let Ok(entries) = fs::read_dir(base)
     {
