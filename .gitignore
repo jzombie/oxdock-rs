@@ -1,3 +1,8 @@
 **/target
 **/prebuilt_assets/**
 **/prebuilt/**
+
+# Ignore generated embed output directories produced by tests/examples.
+# These are regenerated during tests and should not be committed.
+/oxdock-buildtime-macros/tests/fixtures/**/prebuilt*
+/oxdock-buildtime-macros/examples/prebuilt_assets*

@@ -10,6 +10,8 @@ macro_rules! define_embed {
         #[cfg(not(miri))]
         #[derive($crate::embed::rust_embed::RustEmbed)]
         #[folder = $folder]
+        // Force inclusion of all files, overriding .gitignore which might ignore the generated folder
+        #[include = "**/*"]
         pub struct $name;
 
         #[cfg(miri)]
