@@ -46,7 +46,7 @@ impl PathResolver {
             let source = self.resolve_copy_source(from)?;
             if let Some(parent) = to.as_path().parent() {
                 let parent_guard = GuardedPath::new(to.root(), parent)?;
-                self.create_dir_all_abs(&parent_guard)
+                self.create_dir_all(&parent_guard)
                     .with_context(|| format!("creating parent {}", parent.display()))?;
             }
             match self.entry_kind(&source)? {
@@ -99,7 +99,7 @@ impl PathResolver {
                     if show.status.success() {
                         if let Some(parent) = to.as_path().parent() {
                             let parent_guard = GuardedPath::new(to.root(), parent)?;
-                            self.create_dir_all_abs(&parent_guard)
+                            self.create_dir_all(&parent_guard)
                                 .with_context(|| format!("creating parent {}", parent.display()))?;
                         }
                         self.write_file(to, &show.stdout)
@@ -160,7 +160,7 @@ impl PathResolver {
 
                     if let Some(parent) = dest.as_path().parent() {
                         let parent_guard = GuardedPath::new(dest.root(), parent)?;
-                        self.create_dir_all_abs(&parent_guard)
+                        self.create_dir_all(&parent_guard)
                             .with_context(|| format!("creating parent {}", parent.display()))?;
                     }
 

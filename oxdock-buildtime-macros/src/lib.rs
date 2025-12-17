@@ -420,7 +420,7 @@ fn preflight_out_dir_for_build(
             ));
         }
     } else {
-        resolver.create_dir_all_abs(out_dir).map_err(|e| {
+        resolver.create_dir_all(out_dir).map_err(|e| {
             syn::Error::new(
                 out_dir_span,
                 format!(
@@ -437,7 +437,7 @@ fn preflight_out_dir_for_build(
         .map_err(|e| syn::Error::new(out_dir_span, e.to_string()))?;
     match resolver.write_file(&probe, b"") {
         Ok(_) => {
-            let _ = resolver.remove_file_abs(&probe);
+            let _ = resolver.remove_file(&probe);
             Ok(())
         }
         Err(e) => Err(syn::Error::new(
@@ -493,7 +493,7 @@ fn build_assets(
     );
 
     let meta = resolver
-        .metadata_external(&final_cwd_external)
+        .metadata_unguarded(&final_cwd_external)
         .map_err(|e| {
             syn::Error::new(
                 span,
@@ -514,7 +514,7 @@ fn build_assets(
     if out_dir.as_path().exists() {
         clear_dir(out_dir, span)?;
     } else {
-        resolver.create_dir_all_abs(out_dir).map_err(|e| {
+        resolver.create_dir_all(out_dir).map_err(|e| {
             syn::Error::new(
                 span,
                 format!("failed to create out_dir {}: {e}", out_dir.display()),
@@ -523,7 +523,7 @@ fn build_assets(
     }
 
     resolver
-        .copy_dir_from_external(&final_cwd_external, out_dir)
+        .copy_dir_from_unguarded(&final_cwd_external, out_dir)
         .map_err(|e| {
             syn::Error::new(
                 span,
@@ -580,14 +580,14 @@ fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
             .file_type()
             .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
         if ft.is_dir() {
-            resolver.remove_dir_all_abs(&guarded).map_err(|e| {
+            resolver.remove_dir_all(&guarded).map_err(|e| {
                 syn::Error::new(
                     span,
                     format!("failed to remove dir {}: {e}", path.display()),
                 )
             })?;
         } else {
-            resolver.remove_file_abs(&guarded).map_err(|e| {
+            resolver.remove_file(&guarded).map_err(|e| {
                 syn::Error::new(
                     span,
                     format!("failed to remove file {}: {e}", path.display()),
@@ -637,7 +637,7 @@ mod tests {
         // Create .git dir via PathResolver to centralize filesystem access.
         let resolver = resolver_for(&manifest_dir);
         resolver
-            .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
+            .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
 
         let assets_rel = "prebuilt";
@@ -682,13 +682,13 @@ mod tests {
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
-            .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
+            .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
 
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         resolver
-            .create_dir_all_abs(&assets_abs)
+            .create_dir_all(&assets_abs)
             .expect("mkdir out_dir");
         resolver
             .set_permissions_mode_unix(&assets_abs, 0o555)
@@ -755,7 +755,7 @@ mod tests {
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         let resolver = resolver_for(&manifest_dir);
         resolver
-            .create_dir_all_abs(&assets_abs)
+            .create_dir_all(&assets_abs)
             .expect("mkdir out_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
@@ -863,7 +863,7 @@ mod tests {
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
-            .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
+            .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
 
         // Source file only exists under the provided manifest dir; COPY should succeed from there.
@@ -918,7 +918,7 @@ mod tests {
         let manifest_dir = guard_root(&temp_root);
         let resolver = resolver_for(&manifest_dir);
         resolver
-            .create_dir_all_abs(&manifest_dir.join(".git").unwrap())
+            .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
         let assets_rel = "prebuilt";
 

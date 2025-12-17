@@ -3,7 +3,7 @@ mod mock;
 mod shell;
 
 use anyhow::{Context, Result, bail};
-use oxdock_fs::GuardedPath;
+use oxdock_fs::{GuardedPath, PolicyPath};
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ pub use mock::{MockHandle, MockProcessManager, MockRunCall, MockSpawnCall};
 /// their working roots without juggling lifetimes.
 #[derive(Clone, Debug)]
 pub struct CommandContext {
-    cwd: GuardedPath,
+    cwd: PolicyPath,
     envs: HashMap<String, String>,
     cargo_target_dir: GuardedPath,
     workspace_root: GuardedPath,
@@ -39,7 +39,7 @@ pub struct CommandContext {
 impl CommandContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        cwd: &GuardedPath,
+        cwd: &PolicyPath,
         envs: &HashMap<String, String>,
         cargo_target_dir: &GuardedPath,
         workspace_root: &GuardedPath,
@@ -54,7 +54,7 @@ impl CommandContext {
         }
     }
 
-    pub fn cwd(&self) -> &GuardedPath {
+    pub fn cwd(&self) -> &PolicyPath {
         &self.cwd
     }
 
@@ -141,7 +141,11 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     // environment variables are passed as-is. If we pass a verbatim path in CARGO_TARGET_DIR,
     // tools that don't understand it (or shell scripts echoing it) might misbehave or produce
     // unexpected output. Normalizing here ensures consistency.
-    command.current_dir(oxdock_fs::command_path(ctx.cwd()));
+    let cwd_path: std::borrow::Cow<std::path::Path> = match ctx.cwd() {
+        PolicyPath::Guarded(p) => oxdock_fs::command_path(p),
+        PolicyPath::Unguarded(p) => std::borrow::Cow::Borrowed(p.as_path()),
+    };
+    command.current_dir(cwd_path);
     command.envs(ctx.envs());
     command.env(
         "CARGO_TARGET_DIR",
@@ -299,7 +303,7 @@ fn execute_sync(
                 CommandAction::Write { target, data } => {
                     if let Some(parent) = target.as_path().parent() {
                         let parent_guard = GuardedPath::new(target.root(), parent)?;
-                        resolver.create_dir_all_abs(&parent_guard)?;
+                        resolver.create_dir_all(&parent_guard)?;
                     }
                     resolver.write_file(&target, &data)?;
                 }
@@ -446,7 +450,10 @@ fn parse_command(
 
 #[cfg(miri)]
 fn resolve_write(resolver: &PathResolver, ctx: &CommandContext, path: &str) -> Result<GuardedPath> {
-    resolver.resolve_write(ctx.cwd(), path)
+    match ctx.cwd() {
+        PolicyPath::Guarded(p) => resolver.resolve_write(p, path),
+        PolicyPath::Unguarded(_) => bail!("unguarded writes not supported in Miri"),
+    }
 }
 
 #[cfg(miri)]
@@ -559,7 +566,7 @@ fn apply_actions(ctx: &CommandContext, actions: &[Action]) -> Result<()> {
             Action::WriteFile { target, data } => {
                 if let Some(parent) = target.as_path().parent() {
                     let parent_guard = GuardedPath::new(target.root(), parent)?;
-                    resolver.create_dir_all_abs(&parent_guard)?;
+                    resolver.create_dir_all(&parent_guard)?;
                 }
                 resolver.write_file(target, data)?;
             }

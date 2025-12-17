@@ -1,6 +1,7 @@
 #[cfg(not(miri))]
 use anyhow::bail;
 use anyhow::{Context, Result};
+#[cfg(not(miri))]
 use std::fs;
 
 #[cfg(miri)]
@@ -14,11 +15,11 @@ use crate::UnguardedPath;
 // Guarded filesystem IO helpers (read/write/metadata etc.).
 impl PathResolver {
     #[allow(clippy::disallowed_methods)]
-    pub fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+    pub fn create_dir_all(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("create_dir_all denied for {}", path.display()))?;
-        self.backend.create_dir_all_abs(&self.root, &guarded)
+        self.backend.create_dir_all(&self.root, &guarded)
     }
 
     #[allow(clippy::disallowed_methods)]
@@ -70,7 +71,7 @@ impl PathResolver {
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
+    pub fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self
             .check_access(path.as_path(), AccessMode::Passthru)
             .or_else(|_| {
@@ -81,18 +82,18 @@ impl PathResolver {
                 )
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
-        self.backend.canonicalize_abs(cand)
+        self.backend.canonicalize(cand)
     }
 
     #[allow(clippy::disallowed_methods)]
-    pub fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
+    pub fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Read)
             .or_else(|_| {
                 self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
             })
             .with_context(|| format!("metadata denied for {}", path.display()))?;
-        self.backend.metadata_abs(&guarded)
+        self.backend.metadata(&guarded)
     }
 
     pub fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind> {
@@ -104,14 +105,20 @@ impl PathResolver {
         self.backend.entry_kind(path).is_ok()
     }
 
-    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-    pub fn metadata_external(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
-        let m = fs::metadata(path.as_path()).with_context(|| {
-            format!("failed to stat external path {}", path.as_path().display())
-        })?;
-        Ok(m)
+    #[allow(clippy::disallowed_methods)]
+    pub fn metadata_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::Metadata> {
+        #[cfg(not(miri))]
+        {
+            let meta = std::fs::metadata(path.as_path())
+                .with_context(|| format!("failed to stat external {}", path.as_path().display()))?;
+            Ok(meta)
+        }
+        #[cfg(miri)]
+        {
+            let _ = path;
+            anyhow::bail!("metadata_unguarded not supported on Miri")
+        }
     }
-
     #[cfg(not(miri))]
     #[allow(clippy::disallowed_methods)]
     pub fn set_permissions_mode_unix(&self, path: &GuardedPath, mode: u32) -> Result<()> {
@@ -138,28 +145,36 @@ impl PathResolver {
     }
 
     #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-    pub fn open_external_file(&self, path: &UnguardedPath) -> Result<std::fs::File> {
-        let f = fs::File::open(path.as_path())
-            .with_context(|| format!("failed to open {}", path.as_path().display()))?;
-        Ok(f)
+    pub fn open_file_unguarded(&self, path: &UnguardedPath) -> Result<std::fs::File> {
+        #[cfg(not(miri))]
+        {
+            let f = fs::File::open(path.as_path())
+                .with_context(|| format!("failed to open {}", path.as_path().display()))?;
+            Ok(f)
+        }
+        #[cfg(miri)]
+        {
+            let _ = path;
+            anyhow::bail!("open_file_unguarded not supported on Miri")
+        }
     }
 
     /// Remove a file after validating it is within allowed roots.
     #[allow(clippy::disallowed_methods)]
-    pub fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
+    pub fn remove_file(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_file denied for {}", path.display()))?;
-        self.backend.remove_file_abs(&guarded)
+        self.backend.remove_file(&guarded)
     }
 
     /// Remove a directory and its contents after validating it is within allowed roots.
     #[allow(clippy::disallowed_methods)]
-    pub fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+    pub fn remove_dir_all(&self, path: &GuardedPath) -> Result<()> {
         let guarded = self
             .check_access(path.as_path(), AccessMode::Write)
             .with_context(|| format!("remove_dir_all denied for {}", path.display()))?;
-        self.backend.remove_dir_all_abs(&guarded)
+        self.backend.remove_dir_all(&guarded)
     }
 
     #[cfg(not(miri))]

@@ -219,7 +219,7 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     #[allow(clippy::disallowed_types)]
     let source = oxdock_fs::UnguardedPath::new(self_path);
     resolver_temp
-        .copy_file_from_external(&source, &dest)
+        .copy_file_from_unguarded(&source, &dest)
         .with_context(|| format!("failed to copy shell runner to {}", dest.display()))?;
 
     let mut cmd = CommandBuilder::new(dest.as_path());
@@ -336,7 +336,7 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
             let tty_path = oxdock_fs::UnguardedPath::new("/dev/tty");
             if let Ok(resolver) =
                 PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
-                && let Ok(tty) = resolver.open_external_file(&tty_path)
+                && let Ok(tty) = resolver.open_file_unguarded(&tty_path)
             {
                 cmd.stdin_file(tty);
             }
@@ -478,7 +478,7 @@ fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result
     // Remove intermediate archive via a resolver rooted at the temp root.
     let resolver_temp = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
     resolver_temp
-        .remove_file_abs(&archive_guard)
+        .remove_file(&archive_guard)
         .with_context(|| format!("failed to remove {}", archive_guard.display()))?;
     Ok(())
 }
@@ -560,7 +560,7 @@ mod tests {
         #[cfg(not(miri))]
         {
             let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
-            resolver.create_dir_all_abs(&cwd)?;
+            resolver.create_dir_all(&cwd)?;
         }
 
         let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
@@ -725,7 +725,7 @@ mod windows_shell_tests {
         let workspace_root = workspace.as_guarded_path().clone();
         let cwd = workspace_root.join("subdir")?;
         let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
-        resolver.create_dir_all_abs(&cwd)?;
+        resolver.create_dir_all(&cwd)?;
 
         let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
         let guard = captured.clone();
