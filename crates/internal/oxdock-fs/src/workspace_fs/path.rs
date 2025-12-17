@@ -184,12 +184,14 @@ impl PathLike for GuardedPath {
 }
 
 /// Temporary directory that cleans itself up on drop while exposing the guarded path.
+#[allow(clippy::disallowed_types)]
 pub struct GuardedTempDir {
     guard: Option<GuardedPath>,
     tempdir: Option<TempDir>,
 }
 
 impl GuardedTempDir {
+    #[allow(clippy::disallowed_types)]
     fn new(guard: GuardedPath, tempdir: Option<TempDir>) -> Self {
         Self {
             guard: Some(guard),
@@ -211,6 +213,7 @@ impl GuardedTempDir {
         self.guard.take().unwrap()
     }
 
+    #[allow(clippy::disallowed_types)]
     pub fn into_parts(mut self) -> (Option<TempDir>, GuardedPath) {
         (self.tempdir.take(), self.guard.take().unwrap())
     }

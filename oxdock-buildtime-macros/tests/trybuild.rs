@@ -1,5 +1,6 @@
 // TODO: Replace this ad-hoc repo-side cleanup with an isolated test harness
 // (e.g. run fixtures in temporary directories) to avoid mutating the repo.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn clean_prebuilt_dirs(manifest: &std::path::Path) {
     use std::fs;
     if let Some(base) = manifest.parent() {
@@ -20,6 +21,7 @@ fn clean_prebuilt_dirs(manifest: &std::path::Path) {
 }
 
 #[test]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_manifest_dir() {
     use oxdock_process::CommandBuilder;
     use std::path::Path;
@@ -42,6 +44,7 @@ fn trybuild_manifest_dir() {
 }
 
 #[test]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_exit_fail() {
     use oxdock_process::CommandBuilder;
     use std::path::Path;
