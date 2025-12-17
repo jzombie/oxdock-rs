@@ -349,3 +349,17 @@ pub fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
 
     Cow::Borrowed(path.as_path())
 }
+
+/// Convert a guarded path into a string with forward slashes, suitable for
+/// use with `rust-embed` or other tools that require normalized paths.
+/// This strips Windows verbatim prefixes and ensures separators are `/`.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+pub fn embed_path(path: &GuardedPath) -> String {
+    let cmd = command_path(path);
+    let s = cmd.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
+    }
+}

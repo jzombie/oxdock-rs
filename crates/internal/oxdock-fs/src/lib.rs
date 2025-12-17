@@ -10,7 +10,7 @@ pub fn is_isolated() -> bool {
 pub mod embed;
 
 pub mod workspace_fs;
-pub use workspace_fs::command_path;
+pub use workspace_fs::{command_path, embed_path};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 
 #[allow(clippy::disallowed_types)]

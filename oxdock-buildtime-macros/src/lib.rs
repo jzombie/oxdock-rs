@@ -107,6 +107,13 @@ fn join_guard(base: &GuardedPath, rel: &str, span: proc_macro2::Span) -> syn::Re
         .map_err(|e| syn::Error::new(span, e.to_string()))
 }
 
+/// Produce a rust-embed-friendly literal path by reusing the shared
+/// path normalizer in oxdock-fs (it strips Windows verbatim prefixes).
+fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<syn::LitStr> {
+    let forward = oxdock_fs::embed_path(path);
+    Ok(syn::LitStr::new(&forward, span))
+}
+
 impl Parse for EmbedDslInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let name_label: Ident = input.parse()?;
@@ -338,13 +345,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        let folder_lit = syn::LitStr::new(
-            out_dir_abs
-                .as_path()
-                .to_str()
-                .ok_or_else(|| syn::Error::new(span, "out_dir path is not valid UTF-8"))?,
-            span,
-        );
+        let folder_lit = embed_path_lit(&out_dir_abs, span)?;
 
         // Wrap the generated struct in a private module annotated with an
         // allow, then re-export it. This keeps the lint suppression scoped to
@@ -375,12 +376,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
             ));
         }
         tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
-        let out_dir_lit = syn::LitStr::new(
-            out_dir_abs.as_path().to_str().ok_or_else(|| {
-                syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
-            })?,
-            input.out_dir.span(),
-        );
+        let out_dir_lit = embed_path_lit(&out_dir_abs, input.out_dir.span())?;
         let mod_ident = syn::Ident::new(
             &format!("__oxdock_embed_{}", name),
             proc_macro2::Span::call_site(),
@@ -456,6 +452,10 @@ fn build_assets(
     span: proc_macro2::Span,
     out_dir: &GuardedPath,
 ) -> syn::Result<GuardedPath> {
+    let debug_embed = std::env::var("OXDOCK_EMBED_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
     let tempdir = GuardedPath::tempdir()
         .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
@@ -474,6 +474,14 @@ fn build_assets(
 
     let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps)
         .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+
+    if debug_embed {
+        eprintln!(
+            "oxdock: build_assets script ok; final_cwd={}, out_dir={}",
+            final_cwd.display(),
+            out_dir.display()
+        );
+    }
 
     #[allow(clippy::disallowed_types)]
     let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
@@ -522,6 +530,13 @@ fn build_assets(
                 format!("failed to copy final workdir into out_dir: {e}"),
             )
         })?;
+    if debug_embed {
+        eprintln!(
+            "oxdock: build_assets copied into out_dir={}, entries={:?}",
+            out_dir.display(),
+            resolver.read_dir_entries(out_dir).ok().map(|v| v.len())
+        );
+    }
     tracing::info!(
         "embed: populated out_dir from final workdir; entries now: {}",
         count_entries(out_dir, span)?

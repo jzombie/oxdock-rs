@@ -488,6 +488,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::PathResolver;
+    use serial_test::serial;
     use std::cell::Cell;
 
     #[cfg_attr(
@@ -547,6 +548,7 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
+    #[serial]
     fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
@@ -630,6 +632,7 @@ mod tests {
 mod windows_shell_tests {
     use super::*;
     use oxdock_fs::PathResolver;
+    use serial_test::serial;
 
     fn git(
         workspace_root: &GuardedPath,
@@ -703,6 +706,7 @@ mod windows_shell_tests {
     }
 
     #[test]
+    #[serial]
     fn run_shell_builds_windows_command() -> Result<()> {
         let workspace = GuardedPath::tempdir_with(|builder| {
             builder.prefix("oxdock shell win ");
