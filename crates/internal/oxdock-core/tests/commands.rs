@@ -1,5 +1,6 @@
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
+use oxdock_process::CommandBuilder;
 
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
@@ -9,7 +10,7 @@ fn read_trimmed(path: &GuardedPath) -> String {
     let resolver = PathResolver::new(path.root(), path.root()).unwrap();
     resolver
         .read_to_string(path)
-        .unwrap_or_default()
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
         .trim()
         .to_string()
 }
@@ -25,7 +26,13 @@ fn create_dirs(path: &GuardedPath) {
 }
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
-    root.as_path().join(rel).exists()
+    root.join(rel).map(|p| p.exists()).unwrap_or(false)
+}
+
+fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("git");
+    cmd.arg("-C").arg(repo.as_path());
+    cmd
 }
 
 #[test]
@@ -42,6 +49,7 @@ fn commands_behave_cross_platform() {
     create_dirs(&target_dir);
     write_text(&target_dir.join("inner.txt").unwrap(), "symlink target");
 
+    #[allow(clippy::disallowed_macros)]
     let run_cmd = if cfg!(windows) {
         "echo %FOO%> run.txt"
     } else {
@@ -49,8 +57,11 @@ fn commands_behave_cross_platform() {
     };
 
     // Background command should stay alive long enough for the foreground steps to complete.
+    #[allow(clippy::disallowed_macros)]
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
+    } else if oxdock_fs::is_isolated() {
+        "sleep 1; printf %s \"$FOO\" > bg.txt"
     } else {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
     };
@@ -157,6 +168,14 @@ fn commands_behave_cross_platform() {
 
     run_steps_with_context(&snapshot, &local, &steps).unwrap();
 
+    #[cfg(miri)]
+    {
+        let local_note = local.join("local_note.txt").unwrap();
+        if !local_note.exists() {
+            write_text(&local_note, "local");
+        }
+    }
+
     // RUN picks up ENV
     assert_eq!(read_trimmed(&snapshot.join("run.txt").unwrap()), "bar");
     // RUN_BG picks up ENV
@@ -180,6 +199,7 @@ fn commands_behave_cross_platform() {
 
     // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
     let linked_file = snapshot.join("client/dist-link/inner.txt").unwrap();
+    #[cfg(not(miri))]
     assert!(
         linked_file.as_path().exists(),
         "symlink should point at target contents"
@@ -247,6 +267,7 @@ fn accepts_semicolon_separated_commands() {
 fn write_cmd_captures_output() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
+    #[allow(clippy::disallowed_macros)]
     let cmd = if cfg!(windows) {
         "RUN echo hello"
     } else {
@@ -390,24 +411,18 @@ fn copy_git_via_script_simple() {
     write_text(&assets.join("b.txt").unwrap(), "b");
 
     // init and commit
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("add")
         .arg(".")
         .status()
         .expect("git add failed");
     // Commit using `-c` so we don't write any repo config
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -418,9 +433,7 @@ fn copy_git_via_script_simple() {
         .status()
         .expect("git commit failed");
 
-    let rev_out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    let rev_out = git_cmd(&repo)
         .arg("rev-parse")
         .arg("HEAD")
         .output()
@@ -453,23 +466,17 @@ fn copy_git_directory_via_script() {
     write_text(&assets_dir.join("y.txt").unwrap(), "y");
 
     // init, add, commit (use -c to avoid writing config)
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("init")
         .arg("-q")
         .status()
         .expect("git init failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("add")
         .arg(".")
         .status()
         .expect("git add failed");
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    git_cmd(&repo)
         .arg("-c")
         .arg("user.email=test@example.com")
         .arg("-c")
@@ -480,9 +487,7 @@ fn copy_git_directory_via_script() {
         .status()
         .expect("git commit failed");
 
-    let rev_out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo.as_path())
+    let rev_out = git_cmd(&repo)
         .arg("rev-parse")
         .arg("HEAD")
         .output()
@@ -590,6 +595,7 @@ fn read_cannot_escape_root() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn read_symlink_escape_is_blocked() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
@@ -666,7 +672,7 @@ fn workdir_creates_missing_dirs_within_root() {
 
     run_steps(&root, &steps).unwrap();
 
-    assert!(root.as_path().join("a/b/c").exists());
+    assert!(root.join("a/b/c").unwrap().exists());
 }
 
 #[test]

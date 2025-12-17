@@ -1,10 +1,24 @@
 use anyhow::Result;
 
+/// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
+/// where access to the host filesystem is restricted.
+#[allow(clippy::disallowed_macros)]
+pub fn is_isolated() -> bool {
+    cfg!(miri)
+}
+
+#[cfg(feature = "embed")]
+pub mod embed;
+
 pub mod workspace_fs;
-pub use workspace_fs::{GuardedPath, GuardedTempDir, PathResolver};
+pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
+pub use workspace_fs::{command_path, embed_path, to_forward_slashes};
 
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
+
+#[cfg(feature = "mock-fs")]
+pub use workspace_fs::mock::MockFs;
 
 /// Trait implemented by both `GuardedPath` and `UnguardedPath` so callers can
 /// rely on a consistent set of path helper methods. This includes a small set
@@ -40,7 +54,7 @@ pub trait WorkspaceFs {
 
     fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>>;
     fn read_to_string(&self, path: &GuardedPath) -> Result<String>;
-    fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>>;
+    fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>>;
 
     fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()>;
     fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()>;
@@ -64,6 +78,8 @@ pub trait WorkspaceFs {
     fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath>;
     fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath>;
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath>;
+
+    fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind>;
 
     fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()>;
 }
@@ -102,7 +118,7 @@ impl WorkspaceFs for PathResolver {
         PathResolver::read_to_string(self, path)
     }
 
-    fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<std::fs::DirEntry>> {
+    fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>> {
         PathResolver::read_dir_entries(self, path)
     }
 
@@ -167,6 +183,10 @@ impl WorkspaceFs for PathResolver {
 
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         PathResolver::resolve_copy_source(self, from)
+    }
+
+    fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
+        PathResolver::entry_kind(self, path)
     }
 
     fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {

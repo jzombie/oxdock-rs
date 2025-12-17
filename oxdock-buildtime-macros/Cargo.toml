@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[package.metadata.cargo-udeps.ignore]
+# List dependency names to ignore for this package
+normal = ["tracing"]
+development = []
+build = []
+
 [lib]
 proc-macro = true
 
@@ -17,6 +23,9 @@ oxdock-fs.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+tracing = { workspace = true }
 
 [dev-dependencies]
+oxdock-fs = { workspace = true, features = ["embed"] }
+oxdock-process.workspace = true
 serial_test.workspace = true

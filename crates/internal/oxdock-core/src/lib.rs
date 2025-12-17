@@ -30,7 +30,7 @@ mod tests {
     }
 
     fn exists(root: &GuardedPath, rel: &str) -> bool {
-        root.as_path().join(rel).exists()
+        root.join(rel).map(|p| p.exists()).unwrap_or(false)
     }
 
     #[test]
@@ -38,6 +38,7 @@ mod tests {
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
+        #[allow(clippy::disallowed_macros)]
         let cmd = if cfg!(windows) {
             "echo %CARGO_TARGET_DIR% > seen.txt"
         } else {
@@ -53,6 +54,7 @@ mod tests {
 
         let seen = read_trimmed(&root.join("seen.txt").unwrap());
         let expected = root.join(".cargo-target").unwrap();
+
         assert_eq!(
             seen.trim(),
             expected.display().to_string(),
@@ -166,6 +168,7 @@ mod tests {
 
         run_steps(&root, &steps).unwrap();
 
+        #[allow(clippy::disallowed_macros)]
         let expect_skipped = cfg!(unix);
         assert_eq!(
             exists(&root, "platform.txt"),
@@ -327,8 +330,10 @@ mod tests {
             !exists(&root, "two.txt"),
             "second background should be terminated once the first exits"
         );
+
+        let upper = if oxdock_fs::is_isolated() { 2.5 } else { 0.45 };
         assert!(
-            elapsed.as_secs_f32() < 0.45 && elapsed.as_secs_f32() > 0.15,
+            elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
             "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
         );
     }
@@ -361,6 +366,7 @@ mod tests {
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
+        #[allow(clippy::disallowed_macros)]
         let script = if cfg!(windows) {
             indoc! {
                 r#"
@@ -406,9 +412,9 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(snapshot_root.as_path().join("snap.txt").exists());
-        assert!(snapshot_root.as_path().join("snap2.txt").exists());
-        assert!(local_root.as_path().join("local.txt").exists());
+        assert!(snapshot_root.join("snap.txt").unwrap().exists());
+        assert!(snapshot_root.join("snap2.txt").unwrap().exists());
+        assert!(local_root.join("local.txt").unwrap().exists());
     }
 
     #[test]
@@ -436,8 +442,8 @@ mod tests {
         let steps = parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
-        assert!(local_root.as_path().join("localroot.txt").exists());
-        assert!(local_client.as_path().join("client.txt").exists());
-        assert!(snapshot_root.as_path().join("snaproot.txt").exists());
+        assert!(local_root.join("localroot.txt").unwrap().exists());
+        assert!(local_client.join("client.txt").unwrap().exists());
+        assert!(snapshot_root.join("snaproot.txt").unwrap().exists());
     }
 }

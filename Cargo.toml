@@ -2,6 +2,7 @@
 members = [
     "crates/internal/oxdock-core",
     "crates/internal/oxdock-fs",
+    "crates/internal/oxdock-process",
     "oxdock-buildtime-macros",
     # Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
     "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
@@ -31,9 +32,19 @@ oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-a
 # Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.1.0-alpha" }
 oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }
+oxdock-process = { path = "crates/internal/oxdock-process", version = "0.1.0-alpha" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 rust-embed = { version = "8.9.0", features = ["include-exclude"] }
 serial_test = "3.2.0"
 syn = { version = "2.0", features = ["full"] }
 tempfile = "3.23.0"
+
+# Logging/tracing
+tracing = "0.1.43"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+

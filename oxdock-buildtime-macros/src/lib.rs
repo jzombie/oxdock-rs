@@ -4,6 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, parse_macro_input};
 
+// TODO: Update example and don't ignore
 /// Macro that runs the DSL at compile-time, materializes assets into a temp
 /// dir, and emits a rust-embed struct pointing at that dir.
 ///
@@ -47,12 +48,14 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
     let manifest_resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
+
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
+
     let should_build = has_git || is_primary;
 
     let out_dir_str = input.out_dir.value();
@@ -60,7 +63,7 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
 
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
-        eprintln!("prepare: rebuilding assets into {}", out_dir_abs.display());
+        tracing::info!("prepare: rebuilding assets into {}", out_dir_abs.display());
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
         return Ok(());
     }
@@ -75,7 +78,7 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
                 ),
             ));
         }
-        eprintln!("prepare: reusing assets at {}", out_dir_abs.display());
+        tracing::info!("prepare: reusing assets at {}", out_dir_abs.display());
         return Ok(());
     }
 
@@ -102,6 +105,13 @@ enum ScriptSource {
 fn join_guard(base: &GuardedPath, rel: &str, span: proc_macro2::Span) -> syn::Result<GuardedPath> {
     base.join(rel)
         .map_err(|e| syn::Error::new(span, e.to_string()))
+}
+
+/// Produce a rust-embed-friendly literal path by reusing the shared
+/// path normalizer in oxdock-fs (it strips Windows verbatim prefixes).
+fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<syn::LitStr> {
+    let forward = oxdock_fs::embed_path(path);
+    Ok(syn::LitStr::new(&forward, span))
 }
 
 impl Parse for EmbedDslInput {
@@ -278,12 +288,15 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let manifest_resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
-    let _is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+
+    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
+
     let has_git = manifest_resolver
         .has_git_dir()
         .map_err(|e| syn::Error::new(span, e.to_string()))?;
+
     // Allow building whenever the crate is the primary package or a Git checkout is present.
     // In a crates.io tarball (no .git) or when compiling as a non-primary package, we
     // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
@@ -291,9 +304,32 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let should_build = has_git || _is_primary || force_rebuild;
+
+    let should_build = has_git || is_primary || force_rebuild;
 
     let name = &input.name;
+
+    // If the filesystem is isolated (e.g. under Miri), we cannot safely access the host filesystem.
+    // In this case, we skip the build process to avoid errors.
+    if oxdock_fs::is_isolated() {
+        tracing::info!("embed: skipping build under isolated fs");
+        let mod_ident = syn::Ident::new(
+            &format!("__oxdock_embed_{}", name),
+            proc_macro2::Span::call_site(),
+        );
+
+        // Emit a dummy struct that matches the public API but has no assets.
+        // We use the oxdock_fs::define_embed macro to handle the struct definition
+        // and ensure the correct cfg(miri) behavior is applied in the generated code.
+        // Note: We pass a dummy folder path because the macro requires it, but it won't be used under Miri.
+        return Ok(quote! {
+            #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+            mod #mod_ident {
+                oxdock_fs::define_embed!(#name, ".");
+            }
+            pub use #mod_ident::#name;
+        });
+    }
 
     let out_dir_str = input.out_dir.value();
     let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
@@ -301,21 +337,15 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
         if force_rebuild {
-            eprintln!(
+            tracing::info!(
                 "embed: force rebuilding assets into {}",
                 out_dir_abs.display()
             );
         } else {
-            eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
+            tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        let folder_lit = syn::LitStr::new(
-            out_dir_abs
-                .as_path()
-                .to_str()
-                .ok_or_else(|| syn::Error::new(span, "out_dir path is not valid UTF-8"))?,
-            span,
-        );
+        let folder_lit = embed_path_lit(&out_dir_abs, span)?;
 
         // Wrap the generated struct in a private module annotated with an
         // allow, then re-export it. This keeps the lint suppression scoped to
@@ -329,9 +359,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         return Ok(quote! {
             #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
             mod #mod_ident {
-                #[derive(::rust_embed::RustEmbed)]
-                #[folder = #folder_lit]
-                pub struct #name;
+                oxdock_fs::define_embed!(#name, #folder_lit);
             }
             pub use #mod_ident::#name;
         });
@@ -347,13 +375,8 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
                 ),
             ));
         }
-        eprintln!("embed: reusing assets at {}", out_dir_abs.display());
-        let out_dir_lit = syn::LitStr::new(
-            out_dir_abs.as_path().to_str().ok_or_else(|| {
-                syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
-            })?,
-            input.out_dir.span(),
-        );
+        tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
+        let out_dir_lit = embed_path_lit(&out_dir_abs, input.out_dir.span())?;
         let mod_ident = syn::Ident::new(
             &format!("__oxdock_embed_{}", name),
             proc_macro2::Span::call_site(),
@@ -362,9 +385,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
             mod #mod_ident {
-                #[derive(::rust_embed::RustEmbed)]
-                #[folder = #out_dir_lit]
-                pub struct #name;
+                oxdock_fs::define_embed!(#name, #out_dir_lit);
             }
             pub use #mod_ident::#name;
         });
@@ -431,11 +452,13 @@ fn build_assets(
     span: proc_macro2::Span,
     out_dir: &GuardedPath,
 ) -> syn::Result<GuardedPath> {
+    let debug_embed = std::env::var("OXDOCK_EMBED_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
-    let tempdir = GuardedPath::tempdir_with(|builder| {
-        builder.prefix("oxdock_");
-    })
-    .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
+    let tempdir = GuardedPath::tempdir()
+        .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     let temp_root_guard = tempdir.as_guarded_path().clone();
 
     let steps = oxdock_core::parse_script(script)
@@ -445,14 +468,25 @@ fn build_assets(
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let build_context = resolver.build_context().clone();
 
-    let final_cwd =
-        oxdock_core::run_steps_with_context_result(&temp_root_guard, &build_context, &steps)
-            .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+    let host_resolver =
+        PathResolver::new_guarded(temp_root_guard.clone(), build_context.clone())
+            .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
+
+    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps)
+        .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+
+    if debug_embed {
+        eprintln!(
+            "oxdock: build_assets script ok; final_cwd={}, out_dir={}",
+            final_cwd.display(),
+            out_dir.display()
+        );
+    }
 
     #[allow(clippy::disallowed_types)]
     let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
 
-    eprintln!(
+    tracing::info!(
         "embed: final workdir {} (temp root {})",
         final_cwd.display(),
         temp_root_guard.display()
@@ -496,7 +530,14 @@ fn build_assets(
                 format!("failed to copy final workdir into out_dir: {e}"),
             )
         })?;
-    eprintln!(
+    if debug_embed {
+        eprintln!(
+            "oxdock: build_assets copied into out_dir={}, entries={:?}",
+            out_dir.display(),
+            resolver.read_dir_entries(out_dir).ok().map(|v| v.len())
+        );
+    }
+    tracing::info!(
         "embed: populated out_dir from final workdir; entries now: {}",
         count_entries(out_dir, span)?
     );
@@ -574,6 +615,7 @@ mod tests {
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
     use std::env;
+    use syn::parse::Parser;
 
     fn guard_root(path: &UnguardedPath) -> GuardedPath {
         GuardedPath::new_root(path.as_path()).unwrap()
@@ -584,6 +626,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn errors_when_out_dir_is_file_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -627,6 +672,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -695,6 +743,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -739,6 +790,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn prepare_errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -768,6 +822,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -796,6 +853,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -848,6 +908,9 @@ mod tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
     #[serial]
     fn uses_final_workdir_for_folder() {
         let temp = GuardedPath::tempdir().expect("tempdir");
@@ -906,41 +969,45 @@ mod tests {
     }
 
     fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {
-        // The macro now emits a module wrapping the derived struct. Support
-        // both direct structs and module-wrapped structs for robustness.
+        // The macro now emits a call to oxdock_fs::define_embed!(Name, "path").
+        // We need to parse this macro call and extract the second argument.
         let file: syn::File = syn::parse2(ts.clone()).expect("parse output as file");
 
-        // Helper to extract folder attribute from a struct item
-        fn folder_from_struct(item: &syn::ItemStruct) -> Option<String> {
-            item.attrs.iter().find_map(|a| {
-                if a.path().is_ident("folder")
-                    && let syn::Meta::NameValue(ref nv) = a.meta
-                    && let syn::Expr::Lit(expr_lit) = &nv.value
+        fn extract_folder_from_macro(m: &syn::ItemMacro) -> Option<String> {
+            if m.mac.path.segments.last().unwrap().ident == "define_embed" {
+                let tokens = &m.mac.tokens;
+                // Parse the tokens as a comma-separated list of expressions
+                let parser =
+                    syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+                let args = parser.parse2(tokens.clone()).ok()?;
+
+                if args.len() >= 2
+                    && let syn::Expr::Lit(expr_lit) = &args[1]
                     && let syn::Lit::Str(ref litstr) = expr_lit.lit
                 {
                     return Some(litstr.value());
                 }
-                None
-            })
+            }
+            None
         }
 
-        // Search top-level items first
+        // Search top-level items
         for item in &file.items {
-            if let syn::Item::Struct(s) = item
-                && let Some(f) = folder_from_struct(s)
+            if let syn::Item::Macro(m) = item
+                && let Some(f) = extract_folder_from_macro(m)
             {
                 return f;
             }
         }
 
-        // Then look for the wrapped module and extract the struct inside
+        // Search inside modules
         for item in &file.items {
             if let syn::Item::Mod(m) = item
                 && let Some((_, items)) = &m.content
             {
                 for inner in items {
-                    if let syn::Item::Struct(s) = inner
-                        && let Some(f) = folder_from_struct(s)
+                    if let syn::Item::Macro(inner_macro) = inner
+                        && let Some(f) = extract_folder_from_macro(inner_macro)
                     {
                         return f;
                     }
@@ -948,6 +1015,6 @@ mod tests {
             }
         }
 
-        panic!("folder attribute not found");
+        panic!("folder attribute or define_embed! macro not found");
     }
 }

@@ -1,10 +1,18 @@
-# Disallowed methods to ensure filesystem access in `oxdock-core` goes through PathResolver.
-# Clippy will emit the `disallowed_methods` lint for any exact matches.
+# This configuration enforces the usage of `oxdock-fs` and `oxdock-process` abstractions
+# by disallowing raw `std::fs` and `std::process` usage.
+#
+# Exceptions for the implementation crates (`oxdock-fs`, `oxdock-process`) are handled
+# via `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]` in their respective source files.
+
+# Disallowed methods and types to ensure filesystem and process access goes through
+# `PathResolver` and `oxdock-process` abstractions.
+# Clippy will emit the `disallowed_methods` or `disallowed_types` lint for any exact matches.
 # Note: this configuration works with Clippy (cargo clippy). It will not by itself
 # make `cargo build` fail unless `cargo clippy` is run and the lint is denied.
 
 # The list below was provided by the user; each entry includes a short note.
 disallowed-methods = [
+  "std::boxed::Box::leak",
   "std::fs::read",
   "std::fs::read_to_string",
   "std::fs::read_dir",
@@ -22,6 +30,13 @@ disallowed-methods = [
   "std::fs::write",
   "std::path::Path::canonicalize",
   "std::path::Path::new",
+  "std::process::Command::new",
+  "std::process::Command::spawn",
+  "std::process::Command::status",
+  "std::process::Command::output",
+  "std::process::Command::arg",
+  "std::process::Command::args",
+  "std::process::Command::current_dir",
   "tempfile::tempdir",
   "tempfile::Builder::tempdir",
 ]
@@ -32,5 +47,16 @@ disallowed-types = [
   "std::path::PathBuf",
   "std::fs::OpenOptions",
   "oxdock_fs::UnguardedPath",
-  "tempfile::Builder"
+  "std::process::Command",
+  "std::process::Child",
+  "std::process::Stdio",
+  "std::process::Output",
+  "tempfile::Builder",
+  "tempfile::TempDir",
+]
+
+# Disallow direct usage of `cfg!` macro to encourage using `oxdock_fs::is_isolated()`
+# or other abstractions.
+disallowed-macros = [
+  "std::cfg",
 ]
