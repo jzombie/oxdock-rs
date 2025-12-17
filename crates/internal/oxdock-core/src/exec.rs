@@ -18,7 +18,7 @@ struct ExecState<P: ProcessManager> {
 impl<P: ProcessManager> ExecState<P> {
     fn command_ctx(&self) -> CommandContext {
         CommandContext::new(
-            &self.cwd,
+            &self.cwd.clone().into(),
             &self.envs,
             &self.cargo_target_dir,
             self.fs.root(),
@@ -241,7 +241,7 @@ fn execute_steps<P: ProcessManager>(
                     .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
                 state
                     .fs
-                    .create_dir_all_abs(&target)
+                    .create_dir_all(&target)
                     .with_context(|| format!("failed to create dir {}", target.display()))?;
             }
             StepKind::Ls(path_opt) => {
@@ -295,7 +295,7 @@ fn execute_steps<P: ProcessManager>(
                     let parent_guard = GuardedPath::new(target.root(), parent)?;
                     state
                         .fs
-                        .create_dir_all_abs(&parent_guard)
+                        .create_dir_all(&parent_guard)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 state
@@ -312,7 +312,7 @@ fn execute_steps<P: ProcessManager>(
                     let parent_guard = GuardedPath::new(target.root(), parent)?;
                     state
                         .fs
-                        .create_dir_all_abs(&parent_guard)
+                        .create_dir_all(&parent_guard)
                         .with_context(|| format!("failed to create parent {}", parent.display()))?;
                 }
                 let steps = ast::parse_script(cmd)
@@ -387,7 +387,7 @@ fn copy_entry(fs: &dyn WorkspaceFs, src: &GuardedPath, dst: &GuardedPath) -> Res
         EntryKind::File => {
             if let Some(parent) = dst.as_path().parent() {
                 let parent_guard = GuardedPath::new(dst.root(), parent)?;
-                fs.create_dir_all_abs(&parent_guard)?;
+                fs.create_dir_all(&parent_guard)?;
             }
             fs.copy_file(src, dst)?;
         }
@@ -396,7 +396,7 @@ fn copy_entry(fs: &dyn WorkspaceFs, src: &GuardedPath, dst: &GuardedPath) -> Res
 }
 
 fn canonical_cwd(fs: &dyn WorkspaceFs, cwd: &GuardedPath) -> Result<String> {
-    Ok(fs.canonicalize_abs(cwd)?.display().to_string())
+    Ok(fs.canonicalize(cwd)?.display().to_string())
 }
 
 fn describe_dir(

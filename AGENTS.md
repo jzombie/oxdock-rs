@@ -5,6 +5,9 @@
 Do not override linter rules in any crate except `oxdock-fs` or `oxdock-process`, and never add global/blanket overrides.
 
 - **Strategy**: When addressing clippy warnings, prefer localized `#[allow(...)]` on specific items (functions/impls/structs) instead of crate-level `#![allow(...)]`.
+    - Avoid blanket overrides on traits or impl blocks if the lint only applies to a subset of methods; apply the suppression to the individual methods instead.
+    - For imports, split the `use` statement so that `#[allow(...)]` only applies to the specific disallowed item.
+    - For enums/structs, apply `#[allow(...)]` to the specific variant or field that uses the disallowed type, not the whole type definition.
 - **Scope**: Do not perform repository-wide or file-wide blanket changes to satisfy lints; limit edits to the minimal, justified scope.
 - **Enforcement**:
     - `clippy.toml` is used to `deny` `disallowed_macros` (like `std::cfg`), `disallowed_methods`, and `disallowed_types`.

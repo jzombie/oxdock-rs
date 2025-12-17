@@ -22,7 +22,7 @@ fn write_text(path: &GuardedPath, contents: &str) {
 
 fn create_dirs(path: &GuardedPath) {
     let resolver = PathResolver::new(path.root(), path.root()).unwrap();
-    resolver.create_dir_all_abs(path).unwrap();
+    resolver.create_dir_all(path).unwrap();
 }
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
@@ -340,7 +340,7 @@ fn capture_ls_lists_entries_with_header() {
         "{}:",
         PathResolver::new(dir.root(), dir.root())
             .unwrap()
-            .canonicalize_abs(&dir)
+            .canonicalize(&dir)
             .unwrap()
             .display()
     );
@@ -388,7 +388,7 @@ fn capture_cwd_canonicalizes_and_writes() {
 
     let expected = PathResolver::new(root.root(), root.root())
         .unwrap()
-        .canonicalize_abs(&root.join("a/b").unwrap())
+        .canonicalize(&root.join("a/b").unwrap())
         .unwrap()
         .display()
         .to_string();
@@ -591,7 +591,7 @@ fn read_cannot_escape_root() {
         err
     );
 
-    let _ = parent_fs.remove_file_abs(&secret);
+    let _ = parent_fs.remove_file(&secret);
 }
 
 #[test]
@@ -635,7 +635,7 @@ fn read_symlink_escape_is_blocked() {
         err
     );
 
-    let _ = parent_fs.remove_file_abs(&secret);
+    let _ = parent_fs.remove_file(&secret);
 }
 
 #[test]

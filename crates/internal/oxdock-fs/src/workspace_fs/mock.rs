@@ -6,6 +6,8 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 
+#[allow(clippy::disallowed_types)]
+use crate::UnguardedPath;
 use crate::{EntryKind, WorkspaceFs, to_forward_slashes};
 
 use super::GuardedPath;
@@ -104,17 +106,22 @@ impl Default for MockFs {
 }
 
 impl WorkspaceFs for MockFs {
-    fn canonicalize_abs(&self, path: &GuardedPath) -> Result<GuardedPath> {
+    fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath> {
         Ok(path.clone())
     }
 
+    #[allow(clippy::disallowed_types)]
+    fn canonicalize_unguarded(&self, _path: &UnguardedPath) -> Result<UnguardedPath> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn metadata_abs(&self, _path: &GuardedPath) -> Result<std::fs::Metadata> {
+    fn metadata(&self, _path: &GuardedPath) -> Result<std::fs::Metadata> {
         bail!("metadata not supported in mock fs");
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn metadata_external(&self, _path: &crate::UnguardedPath) -> Result<std::fs::Metadata> {
+    fn metadata_unguarded(&self, _path: &crate::UnguardedPath) -> Result<std::fs::Metadata> {
         bail!("metadata not supported in mock fs");
     }
 
@@ -140,13 +147,28 @@ impl WorkspaceFs for MockFs {
             .ok_or_else(|| anyhow::anyhow!("missing file {}", path.display()))
     }
 
+    #[allow(clippy::disallowed_types)]
+    fn read_file_unguarded(&self, _path: &UnguardedPath) -> Result<Vec<u8>> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
     fn read_to_string(&self, path: &GuardedPath) -> Result<String> {
         let bytes = self.read_file(path)?;
         String::from_utf8(bytes).map_err(|e| anyhow::anyhow!(e))
     }
 
+    #[allow(clippy::disallowed_types)]
+    fn read_to_string_unguarded(&self, _path: &UnguardedPath) -> Result<String> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
     fn read_dir_entries(&self, _path: &GuardedPath) -> Result<Vec<crate::DirEntry>> {
         bail!("read_dir unsupported in mock fs");
+    }
+
+    #[allow(clippy::disallowed_types)]
+    fn read_dir_entries_unguarded(&self, _path: &UnguardedPath) -> Result<Vec<crate::DirEntry>> {
+        bail!("unguarded operations not supported in mock fs");
     }
 
     fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()> {
@@ -155,7 +177,12 @@ impl WorkspaceFs for MockFs {
         Ok(())
     }
 
-    fn create_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+    #[allow(clippy::disallowed_types)]
+    fn write_file_unguarded(&self, _path: &UnguardedPath, _contents: &[u8]) -> Result<()> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
+    fn create_dir_all(&self, path: &GuardedPath) -> Result<()> {
         let rel = self.relative_path(path);
         let mut state = self.state.borrow_mut();
         state.dirs.insert(String::new());
@@ -167,16 +194,36 @@ impl WorkspaceFs for MockFs {
         Ok(())
     }
 
-    fn remove_file_abs(&self, _path: &GuardedPath) -> Result<()> {
+    #[allow(clippy::disallowed_types)]
+    fn create_dir_all_unguarded(&self, _path: &UnguardedPath) -> Result<()> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
+    fn remove_file(&self, _path: &GuardedPath) -> Result<()> {
         bail!("remove unsupported")
     }
 
-    fn remove_dir_all_abs(&self, _path: &GuardedPath) -> Result<()> {
+    #[allow(clippy::disallowed_types)]
+    fn remove_file_unguarded(&self, _path: &UnguardedPath) -> Result<()> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
+    fn remove_dir_all(&self, _path: &GuardedPath) -> Result<()> {
         bail!("remove unsupported")
+    }
+
+    #[allow(clippy::disallowed_types)]
+    fn remove_dir_all_unguarded(&self, _path: &UnguardedPath) -> Result<()> {
+        bail!("unguarded operations not supported in mock fs");
     }
 
     fn copy_file(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<u64> {
         bail!("copy unsupported")
+    }
+
+    #[allow(clippy::disallowed_types)]
+    fn copy_file_unguarded(&self, _src: &UnguardedPath, _dst: &UnguardedPath) -> Result<u64> {
+        bail!("unguarded operations not supported in mock fs");
     }
 
     fn copy_dir_recursive(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<()> {
@@ -184,7 +231,7 @@ impl WorkspaceFs for MockFs {
     }
 
     #[allow(clippy::disallowed_types)]
-    fn copy_dir_from_external(
+    fn copy_dir_from_unguarded(
         &self,
         _src: &crate::UnguardedPath,
         _dst: &GuardedPath,
@@ -193,7 +240,7 @@ impl WorkspaceFs for MockFs {
     }
 
     #[allow(clippy::disallowed_types)]
-    fn copy_file_from_external(
+    fn copy_file_from_unguarded(
         &self,
         _src: &crate::UnguardedPath,
         _dst: &GuardedPath,
@@ -201,17 +248,27 @@ impl WorkspaceFs for MockFs {
         bail!("copy unsupported")
     }
 
+    #[allow(clippy::disallowed_types)]
+    fn copy_file_to_unguarded(&self, _src: &GuardedPath, _dst: &UnguardedPath) -> Result<u64> {
+        bail!("unguarded operations not supported in mock fs");
+    }
+
     fn symlink(&self, _src: &GuardedPath, _dst: &GuardedPath) -> Result<()> {
         bail!("symlink unsupported")
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn open_external_file(&self, _path: &crate::UnguardedPath) -> Result<std::fs::File> {
+    fn open_file_unguarded(&self, _path: &crate::UnguardedPath) -> Result<std::fs::File> {
         bail!("open unsupported")
     }
 
     fn set_permissions_mode_unix(&self, _path: &GuardedPath, _mode: u32) -> Result<()> {
         bail!("perms unsupported")
+    }
+
+    #[allow(clippy::disallowed_types)]
+    fn set_permissions_mode_unix_unguarded(&self, _path: &UnguardedPath, _mode: u32) -> Result<()> {
+        bail!("unguarded operations not supported in mock fs");
     }
 
     fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {
@@ -224,6 +281,11 @@ impl WorkspaceFs for MockFs {
         } else {
             bail!("missing path {}", path.display())
         }
+    }
+
+    #[allow(clippy::disallowed_types)]
+    fn entry_kind_unguarded(&self, _path: &UnguardedPath) -> Result<EntryKind> {
+        bail!("unguarded operations not supported in mock fs");
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]

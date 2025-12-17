@@ -26,7 +26,7 @@ mod tests {
 
     fn create_dirs(path: &GuardedPath) {
         let resolver = PathResolver::new(path.root(), path.root()).unwrap();
-        resolver.create_dir_all_abs(path).unwrap();
+        resolver.create_dir_all(path).unwrap();
     }
 
     fn exists(root: &GuardedPath, rel: &str) -> bool {

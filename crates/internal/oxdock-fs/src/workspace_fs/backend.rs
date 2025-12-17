@@ -7,17 +7,17 @@ use super::{DirEntry, GuardedPath};
 /// expanding the public API surface; used to ensure host/miri implementations
 /// remain in sync.
 trait BackendImpl {
-    fn create_dir_all_abs(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()>;
+    fn create_dir_all(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()>;
     fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>>;
     fn read_file(&self, path: &GuardedPath) -> Result<Vec<u8>>;
     fn write_file(&self, path: &GuardedPath, contents: &[u8]) -> Result<()>;
-    fn canonicalize_abs(&self, path: GuardedPath) -> Result<GuardedPath>;
-    fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata>;
+    fn canonicalize(&self, path: GuardedPath) -> Result<GuardedPath>;
+    fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata>;
     fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind>;
     fn resolve_workdir(&self, resolved: GuardedPath) -> Result<GuardedPath>;
     fn resolve_copy_source(&self, guarded: GuardedPath) -> Result<GuardedPath>;
-    fn remove_file_abs(&self, path: &GuardedPath) -> Result<()>;
-    fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()>;
+    fn remove_file(&self, path: &GuardedPath) -> Result<()>;
+    fn remove_dir_all(&self, path: &GuardedPath) -> Result<()>;
 }
 
 // Host implementation (used when not under Miri)
@@ -34,7 +34,7 @@ impl HostBackend {
 #[cfg(not(miri))]
 #[allow(clippy::disallowed_methods)]
 impl BackendImpl for HostBackend {
-    fn create_dir_all_abs(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()> {
+    fn create_dir_all(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()> {
         if !root.as_path().exists() {
             fs::create_dir_all(root.as_path())
                 .with_context(|| format!("creating resolver root {}", root.display()))?;
@@ -85,18 +85,18 @@ impl BackendImpl for HostBackend {
         Ok(())
     }
 
-    fn canonicalize_abs(&self, path: GuardedPath) -> Result<GuardedPath> {
+    fn canonicalize(&self, path: GuardedPath) -> Result<GuardedPath> {
         Ok(path)
     }
 
-    fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
+    fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
         let m = fs::metadata(path.as_path())
             .with_context(|| format!("failed to stat {}", path.display()))?;
         Ok(m)
     }
 
     fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind> {
-        let meta = self.metadata_abs(path)?;
+        let meta = self.metadata(path)?;
         if meta.is_dir() {
             Ok(super::EntryKind::Dir)
         } else if meta.is_file() {
@@ -133,7 +133,7 @@ impl BackendImpl for HostBackend {
         Ok(guarded)
     }
 
-    fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
+    fn remove_file(&self, path: &GuardedPath) -> Result<()> {
         match std::fs::remove_file(path.as_path()) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -144,7 +144,7 @@ impl BackendImpl for HostBackend {
         Ok(())
     }
 
-    fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+    fn remove_dir_all(&self, path: &GuardedPath) -> Result<()> {
         std::fs::remove_dir_all(path.as_path())
             .with_context(|| format!("failed to remove dir {}", path.display()))?;
         Ok(())
@@ -224,7 +224,7 @@ mod miri_backend {
     }
 
     impl BackendImpl for MiriBackend {
-        fn create_dir_all_abs(&self, _root: &GuardedPath, path: &GuardedPath) -> Result<()> {
+        fn create_dir_all(&self, _root: &GuardedPath, path: &GuardedPath) -> Result<()> {
             let state = self.state_for_guard_rc(path)?;
             let rel = normalize_rel(path);
             state.lock().expect("miri state poisoned").ensure_dir(&rel);
@@ -265,11 +265,11 @@ mod miri_backend {
             Ok(())
         }
 
-        fn canonicalize_abs(&self, path: GuardedPath) -> Result<GuardedPath> {
+        fn canonicalize(&self, path: GuardedPath) -> Result<GuardedPath> {
             Ok(path)
         }
 
-        fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
+        fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
             let rel = normalize_rel(path);
             let binding = self.state_for_guard_rc(path)?;
             let state = binding.lock().expect("miri state poisoned");
@@ -323,7 +323,7 @@ mod miri_backend {
             }
         }
 
-        fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
+        fn remove_file(&self, path: &GuardedPath) -> Result<()> {
             let rel = normalize_rel(path);
             self.state_for_guard_rc(path)?
                 .lock()
@@ -332,7 +332,7 @@ mod miri_backend {
             Ok(())
         }
 
-        fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
+        fn remove_dir_all(&self, path: &GuardedPath) -> Result<()> {
             let rel = normalize_rel(path);
             self.state_for_guard_rc(path)?
                 .lock()
@@ -563,8 +563,8 @@ impl Backend {
         }
     }
 
-    pub(super) fn create_dir_all_abs(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()> {
-        self.as_impl().create_dir_all_abs(root, path)
+    pub(super) fn create_dir_all(&self, root: &GuardedPath, path: &GuardedPath) -> Result<()> {
+        self.as_impl().create_dir_all(root, path)
     }
 
     pub(super) fn read_dir_entries(&self, path: &GuardedPath) -> Result<Vec<DirEntry>> {
@@ -579,12 +579,12 @@ impl Backend {
         self.as_impl().write_file(path, contents)
     }
 
-    pub(super) fn canonicalize_abs(&self, path: GuardedPath) -> Result<GuardedPath> {
-        self.as_impl().canonicalize_abs(path)
+    pub(super) fn canonicalize(&self, path: GuardedPath) -> Result<GuardedPath> {
+        self.as_impl().canonicalize(path)
     }
 
-    pub(super) fn metadata_abs(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
-        self.as_impl().metadata_abs(path)
+    pub(super) fn metadata(&self, path: &GuardedPath) -> Result<std::fs::Metadata> {
+        self.as_impl().metadata(path)
     }
 
     pub(super) fn entry_kind(&self, path: &GuardedPath) -> Result<super::EntryKind> {
@@ -599,11 +599,11 @@ impl Backend {
         self.as_impl().resolve_copy_source(guarded)
     }
 
-    pub(super) fn remove_file_abs(&self, path: &GuardedPath) -> Result<()> {
-        self.as_impl().remove_file_abs(path)
+    pub(super) fn remove_file(&self, path: &GuardedPath) -> Result<()> {
+        self.as_impl().remove_file(path)
     }
 
-    pub(super) fn remove_dir_all_abs(&self, path: &GuardedPath) -> Result<()> {
-        self.as_impl().remove_dir_all_abs(path)
+    pub(super) fn remove_dir_all(&self, path: &GuardedPath) -> Result<()> {
+        self.as_impl().remove_dir_all(path)
     }
 }

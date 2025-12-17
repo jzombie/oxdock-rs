@@ -14,10 +14,10 @@ fn script_runs_copy_and_symlink() {
     // calling `std::fs` directly from non-fs crates.
     let resolver = PathResolver::new(root.as_path(), root.as_path()).unwrap();
     resolver
-        .create_dir_all_abs(&root.join("client/dist").unwrap())
+        .create_dir_all(&root.join("client/dist").unwrap())
         .unwrap();
     resolver
-        .create_dir_all_abs(&root.join("server").unwrap())
+        .create_dir_all(&root.join("server").unwrap())
         .unwrap();
     // Seed dist with a file
     resolver

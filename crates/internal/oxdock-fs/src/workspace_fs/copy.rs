@@ -23,7 +23,7 @@ impl PathResolver {
             .with_context(|| format!("copy source denied for {}", src.display()))?;
         if let Some(parent) = guarded_dst.as_path().parent() {
             let parent_guard = GuardedPath::new(guarded_dst.root(), parent)?;
-            self.create_dir_all_abs(&parent_guard)
+            self.create_dir_all(&parent_guard)
                 .with_context(|| format!("creating dir {}", parent.display()))?;
         }
         let n = fs::copy(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
@@ -59,7 +59,7 @@ impl PathResolver {
         let guarded_dst_root = self
             .check_access(dst.as_path(), AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
-        self.create_dir_all_abs(&guarded_dst_root)
+        self.create_dir_all(&guarded_dst_root)
             .with_context(|| format!("creating dir {}", guarded_dst_root.display()))?;
 
         for entry in fs::read_dir(src.as_path())? {
@@ -80,13 +80,13 @@ impl PathResolver {
                 .with_context(|| format!("copy destination denied for {}", dst_path.display()))?;
 
             if file_type.is_dir() {
-                self.create_dir_all_abs(&guarded_dst)
+                self.create_dir_all(&guarded_dst)
                     .with_context(|| format!("creating dir {}", guarded_dst.display()))?;
                 self.copy_dir_recursive(&guarded_src, &guarded_dst)?;
             } else if file_type.is_file() {
                 if let Some(parent) = guarded_dst.as_path().parent() {
                     let parent_guard = GuardedPath::new(guarded_dst.root(), parent)?;
-                    self.create_dir_all_abs(&parent_guard)
+                    self.create_dir_all(&parent_guard)
                         .with_context(|| format!("creating dir {}", parent.display()))?;
                 }
                 fs::copy(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
@@ -108,7 +108,7 @@ impl PathResolver {
         let guarded_dst_root = self
             .check_access(dst.as_path(), AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
-        self.create_dir_all_abs(&guarded_dst_root)?;
+        self.create_dir_all(&guarded_dst_root)?;
 
         for entry in self.read_dir_entries(src)? {
             let file_type = entry.file_type()?;
@@ -127,13 +127,13 @@ impl PathResolver {
                 .with_context(|| format!("copy destination denied for {}", dst_path.display()))?;
 
             if file_type.is_dir() {
-                self.create_dir_all_abs(&guarded_dst)
+                self.create_dir_all(&guarded_dst)
                     .with_context(|| format!("creating dir {}", guarded_dst.display()))?;
                 self.copy_dir_recursive(&guarded_src, &guarded_dst)?;
             } else {
                 if let Some(parent) = guarded_dst.as_path().parent() {
                     let parent_guard = GuardedPath::new(guarded_dst.root(), parent)?;
-                    self.create_dir_all_abs(&parent_guard)
+                    self.create_dir_all(&parent_guard)
                         .with_context(|| format!("creating dir {}", parent_guard.display()))?;
                 }
                 self.copy_file(&guarded_src, &guarded_dst)?;
@@ -143,7 +143,7 @@ impl PathResolver {
     }
 
     #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-    pub fn copy_dir_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()> {
+    pub fn copy_dir_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<()> {
         let guarded_dst_root = self
             .check_access(dst.as_path(), AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
@@ -159,7 +159,7 @@ impl PathResolver {
             if file_type.is_dir() {
                 fs::create_dir_all(&dst_path)
                     .with_context(|| format!("creating dir {}", dst_path.display()))?;
-                self.copy_dir_from_external(
+                self.copy_dir_from_unguarded(
                     &UnguardedPath::new(src_path),
                     &GuardedPath::new(guarded_dst_root.root(), &dst_path)?,
                 )?;
@@ -179,7 +179,7 @@ impl PathResolver {
     }
 
     #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-    pub fn copy_file_from_external(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64> {
+    pub fn copy_file_from_unguarded(&self, src: &UnguardedPath, dst: &GuardedPath) -> Result<u64> {
         let guarded_dst = self
             .check_access(dst.as_path(), AccessMode::Write)
             .with_context(|| format!("copy destination denied for {}", dst.display()))?;
