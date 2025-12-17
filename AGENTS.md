@@ -1,14 +1,37 @@
-AGENTS – workspace guardrails
+# OxDock Workspace Guardrails
 
-- Lints: Do not override linter rules in any crate except `oxdock-fs`, and never add global/blanket overrides.
-	- When addressing clippy warnings prefer localized `#[allow(...)]` on specific items (functions/impls/structs) instead of crate-level `#![allow(...)]`.
-	- Do not perform repository-wide or file-wide blanket changes to satisfy lints; limit edits to the minimal, justified scope.
-- Miri: In crates outside `crates/internal`, do not bypass, skip, or change behavior behind `cfg(miri)` (Miri must execute the same logic as other builds).
-- Filesystem: Use the `oxdock-fs` abstractions (`GuardedPath`/`UnguardedPath`, `PathResolver`, `GuardedPath::tempdir`) instead of raw `std::fs` for guarded paths; keep paths under their guards.
-	- Do not use `tempfile` directly in any crate other than `oxdock-fs`.
-- Testing: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `oxdock-buildtime-macros/tests/fixtures`.
-- Workspace layout: Internal crates live under `crates/internal`; the CLI, build-time macros, and fixtures sit at the workspace root.
+## Linting
 
-## TODO
+Do not override linter rules in any crate except `oxdock-fs` or `oxdock-process`, and never add global/blanket overrides.
 
-- Update instructions to include "process" model for the global/blanket overrides, etc.
+- **Strategy**: When addressing clippy warnings, prefer localized `#[allow(...)]` on specific items (functions/impls/structs) instead of crate-level `#![allow(...)]`.
+- **Scope**: Do not perform repository-wide or file-wide blanket changes to satisfy lints; limit edits to the minimal, justified scope.
+- **Enforcement**:
+    - `clippy.toml` is used to `deny` `disallowed_macros` (like `std::cfg`), `disallowed_methods`, and `disallowed_types`.
+    - `[workspace.lints.clippy]` in `Cargo.toml` enforces these rules workspace-wide.
+    - Crates should not override these defaults unless absolutely necessary (rare).
+
+## Miri & Isolation
+
+Prefer encapsulation over scattered platform/test-runner checks.
+
+- **Principle**: The `oxdock-fs` and `oxdock-process` crates should contain any logic that needs to behave differently when running under Miri or other isolated test runners. Other crates should not have to conditionally change behavior for Miri.
+- **Implementation**:
+    - Use `oxdock_fs::is_isolated()` instead of `cfg!(miri)` in implementation code. This funnels test-runner knowledge into a single, reviewable place.
+    - Do not use `#[cfg(miri)]` attributes outside of `crates/internal/oxdock-fs` and `crates/internal/oxdock-process`.
+- **Exceptions**:
+    - Implementation crates (`oxdock-fs`, `oxdock-process`) may legitimately use `cfg!(...)` or `#[cfg(...)]` internally.
+    - Use narrow, localized `#[allow(clippy::disallowed_macros)]` or `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]` on specific functions/items to keep the rest of the crate provably conformant.
+
+## Filesystem & Process
+
+- **Filesystem**: Use the `oxdock-fs` abstractions (`GuardedPath`/`UnguardedPath`, `PathResolver`, `GuardedPath::tempdir`) instead of raw `std::fs` for guarded paths; keep paths under their guards.
+    - Do not use `tempfile` directly in any crate other than `oxdock-fs`.
+- **Process Execution**: Use `oxdock-process` abstractions instead of raw `std::process::Command`.
+    - Logic handling process execution differences (e.g. Miri vs Native) belongs in `oxdock-process`.
+
+## Testing & Layout
+
+- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `oxdock-buildtime-macros/tests/fixtures`.
+- **Workspace layout**: Internal crates live under `crates/internal`; the CLI, build-time macros, and fixtures sit at the workspace root.
+
