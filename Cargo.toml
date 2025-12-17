@@ -29,9 +29,6 @@ anyhow = "1.0.100"
 indoc = "2.0.7"
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-alpha" }
 
-# Logging/tracing
-tracing = "0.1.43"
-
 # Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.1.0-alpha" }
 oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }
@@ -42,3 +39,6 @@ rust-embed = { version = "8.9.0", features = ["include-exclude"] }
 serial_test = "3.2.0"
 syn = { version = "2.0", features = ["full"] }
 tempfile = "3.23.0"
+
+# Logging/tracing
+tracing = "0.1.43"
