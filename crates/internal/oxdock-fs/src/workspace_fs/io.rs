@@ -215,9 +215,9 @@ impl PathResolver {
                 symlink_file(guarded_src.as_path(), guarded_dst.as_path())
             };
 
-            if let Err(e) = try_link {
-                eprintln!(
-                    "warning: failed to create symlink {} -> {}: {}; falling back to copy",
+                if let Err(e) = try_link {
+                tracing::warn!(
+                    "failed to create symlink {} -> {}: {}; falling back to copy",
                     guarded_dst.display(),
                     guarded_src.display(),
                     e

@@ -29,6 +29,9 @@ anyhow = "1.0.100"
 indoc = "2.0.7"
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-alpha" }
 
+# Logging/tracing
+tracing = "0.1.43"
+
 # Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.1.0-alpha" }
 oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }

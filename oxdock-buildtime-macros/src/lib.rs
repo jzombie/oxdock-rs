@@ -63,7 +63,7 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
 
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
-        eprintln!("prepare: rebuilding assets into {}", out_dir_abs.display());
+        tracing::info!("prepare: rebuilding assets into {}", out_dir_abs.display());
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
         return Ok(());
     }
@@ -78,7 +78,7 @@ fn expand_prepare_internal(input: &EmbedDslInput) -> syn::Result<()> {
                 ),
             ));
         }
-        eprintln!("prepare: reusing assets at {}", out_dir_abs.display());
+        tracing::info!("prepare: reusing assets at {}", out_dir_abs.display());
         return Ok(());
     }
 
@@ -305,7 +305,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     // If the filesystem is isolated (e.g. under Miri), we cannot safely access the host filesystem.
     // In this case, we skip the build process to avoid errors.
     if oxdock_fs::is_isolated() {
-        eprintln!("embed: skipping build under isolated fs");
+        tracing::info!("embed: skipping build under isolated fs");
         let mod_ident = syn::Ident::new(
             &format!("__oxdock_embed_{}", name),
             proc_macro2::Span::call_site(),
@@ -330,12 +330,12 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
     if should_build {
         preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
         if force_rebuild {
-            eprintln!(
+            tracing::info!(
                 "embed: force rebuilding assets into {}",
                 out_dir_abs.display()
             );
         } else {
-            eprintln!("embed: rebuilding assets into {}", out_dir_abs.display());
+            tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
         let folder_lit = syn::LitStr::new(
@@ -374,7 +374,7 @@ fn expand_embed_internal(input: &EmbedDslInput) -> syn::Result<proc_macro2::Toke
                 ),
             ));
         }
-        eprintln!("embed: reusing assets at {}", out_dir_abs.display());
+        tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
         let out_dir_lit = syn::LitStr::new(
             out_dir_abs.as_path().to_str().ok_or_else(|| {
                 syn::Error::new(input.out_dir.span(), "out_dir path not valid UTF-8")
@@ -478,7 +478,7 @@ fn build_assets(
     #[allow(clippy::disallowed_types)]
     let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
 
-    eprintln!(
+    tracing::info!(
         "embed: final workdir {} (temp root {})",
         final_cwd.display(),
         temp_root_guard.display()
@@ -522,7 +522,7 @@ fn build_assets(
                 format!("failed to copy final workdir into out_dir: {e}"),
             )
         })?;
-    eprintln!(
+    tracing::info!(
         "embed: populated out_dir from final workdir; entries now: {}",
         count_entries(out_dir, span)?
     );
