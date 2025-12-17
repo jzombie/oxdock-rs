@@ -53,7 +53,7 @@ mod tests {
 
         let seen = read_trimmed(&root.join("seen.txt").unwrap());
         let expected = root.join(".cargo-target").unwrap();
-        
+
         assert_eq!(
             seen.trim(),
             expected.display().to_string(),
