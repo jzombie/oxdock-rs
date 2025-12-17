@@ -488,6 +488,8 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::PathResolver;
+    #[cfg(not(miri))]
+    use serial_test::serial;
     use std::cell::Cell;
 
     #[cfg_attr(
@@ -547,6 +549,10 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
+    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
@@ -630,6 +636,7 @@ mod tests {
 mod windows_shell_tests {
     use super::*;
     use oxdock_fs::PathResolver;
+    use serial_test::serial;
 
     fn git(
         workspace_root: &GuardedPath,
@@ -645,6 +652,10 @@ mod windows_shell_tests {
         ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
     )]
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
+    #[cfg_attr(not(miri), serial)]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
         let workspace = GuardedPath::tempdir_with(|builder| {
@@ -703,6 +714,10 @@ mod windows_shell_tests {
     }
 
     #[test]
+    // [serial] is required because this test interacts with global state (filesystem/env)
+    // which causes race conditions on high-core-count machines. CI runners often have
+    // fewer cores, masking this issue not apparent there.
+    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_windows_command() -> Result<()> {
         let workspace = GuardedPath::tempdir_with(|builder| {
             builder.prefix("oxdock shell win ");

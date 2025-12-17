@@ -124,8 +124,8 @@ impl GuardedPath {
         self.path.clone()
     }
 
-    pub fn display(&self) -> impl std::fmt::Display + '_ {
-        self.path.display()
+    pub fn display(&self) -> String {
+        command_path(self).display().to_string()
     }
 
     pub fn join(&self, rel: &str) -> Result<Self> {
@@ -147,7 +147,7 @@ impl GuardedPath {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 impl std::fmt::Display for GuardedPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.path.display().fmt(f)
+        command_path(self).display().fmt(f)
     }
 }
 
@@ -348,4 +348,20 @@ pub fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
     }
 
     Cow::Borrowed(path.as_path())
+}
+
+/// Normalize a path string to use forward slashes, replacing backslashes.
+/// This is useful for consistent path representation (e.g. in `rust-embed` or mocks).
+pub fn to_forward_slashes(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
+/// Convert a guarded path into a string with forward slashes, suitable for
+/// use with `rust-embed` or other tools that require normalized paths.
+/// This strips Windows verbatim prefixes and ensures separators are `/`.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+pub fn embed_path(path: &GuardedPath) -> String {
+    let cmd = command_path(path);
+    let s = cmd.to_string_lossy();
+    to_forward_slashes(&s)
 }

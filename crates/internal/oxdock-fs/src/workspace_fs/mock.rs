@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 
-use crate::{EntryKind, WorkspaceFs};
+use crate::{EntryKind, WorkspaceFs, to_forward_slashes};
 
 use super::GuardedPath;
 
@@ -85,7 +85,7 @@ impl MockFs {
             .to_string_lossy()
             .trim_start_matches(std::path::MAIN_SEPARATOR)
             .to_string();
-        trimmed.replace('\\', "/")
+        to_forward_slashes(&trimmed)
     }
 
     fn split_components(&self, input: &str) -> Vec<String> {

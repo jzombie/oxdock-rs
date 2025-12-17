@@ -24,11 +24,14 @@ impl PathResolver {
 
     /// Detect whether a .git directory exists at or above the resolver root.
     pub fn has_git_dir(&self) -> Result<bool> {
-        let mut cur = Some(self.root.clone());
+        // GuardedPath::parent() cannot traverse above the configured root, which
+        // prevents nested crates from seeing a workspace-level .git directory
+        // (common for fixtures that live under tests/fixtures/*). Walk the
+        // raw filesystem path upward instead so we correctly detect .git
+        // without relaxing the guarded access for other operations.
+        let mut cur: Option<&std::path::Path> = Some(self.root().as_path());
         while let Some(p) = cur {
-            if let Ok(dot_git) = p.join(".git")
-                && dot_git.as_path().exists()
-            {
+            if p.join(".git").exists() {
                 return Ok(true);
             }
             cur = p.parent();

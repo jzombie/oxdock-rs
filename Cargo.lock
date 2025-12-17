@@ -285,6 +285,7 @@ dependencies = [
  "oxdock-core",
  "oxdock-fs",
  "oxdock-process",
+ "serial_test",
  "tempfile",
 ]
 
