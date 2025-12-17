@@ -648,6 +648,7 @@ mod windows_shell_tests {
         ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
     )]
     #[test]
+    #[serial]
     fn archive_head_handles_windows_temp_paths() -> Result<()> {
         // Use a temp workspace with spaces to mirror common Windows user dirs.
         let workspace = GuardedPath::tempdir_with(|builder| {
