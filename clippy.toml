@@ -27,8 +27,6 @@ disallowed-methods = [
   "std::fs::write",
   "std::path::Path::canonicalize",
   "std::path::Path::new",
-  "tempfile::tempdir",
-  "tempfile::Builder::tempdir",
   "std::process::Command::new",
   "std::process::Command::spawn",
   "std::process::Command::status",
@@ -36,6 +34,8 @@ disallowed-methods = [
   "std::process::Command::arg",
   "std::process::Command::args",
   "std::process::Command::current_dir",
+  "tempfile::tempdir",
+  "tempfile::Builder::tempdir",
 ]
 
 # Keep std::path usage funneled through the filesystem abstraction.
@@ -44,9 +44,10 @@ disallowed-types = [
   "std::path::PathBuf",
   "std::fs::OpenOptions",
   "oxdock_fs::UnguardedPath",
-  "tempfile::Builder",
   "std::process::Command",
   "std::process::Child",
   "std::process::Stdio",
-  "std::process::Output"
+  "std::process::Output",
+  "tempfile::Builder",
+  "tempfile::TempDir",
 ]
