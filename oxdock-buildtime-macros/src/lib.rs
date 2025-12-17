@@ -687,9 +687,7 @@ mod tests {
 
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
-        resolver
-            .create_dir_all(&assets_abs)
-            .expect("mkdir out_dir");
+        resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
         resolver
             .set_permissions_mode_unix(&assets_abs, 0o555)
             .expect("make out_dir read-only");
@@ -754,9 +752,7 @@ mod tests {
         let assets_rel = "prebuilt";
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         let resolver = resolver_for(&manifest_dir);
-        resolver
-            .create_dir_all(&assets_abs)
-            .expect("mkdir out_dir");
+        resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
         unsafe {

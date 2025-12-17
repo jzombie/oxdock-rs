@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 
-use crate::{EntryKind, WorkspaceFs, to_forward_slashes, UnguardedPath};
+use crate::{EntryKind, UnguardedPath, WorkspaceFs, to_forward_slashes};
 
 use super::GuardedPath;
 
@@ -237,11 +237,7 @@ impl WorkspaceFs for MockFs {
         bail!("copy unsupported")
     }
 
-    fn copy_file_to_unguarded(
-        &self,
-        _src: &GuardedPath,
-        _dst: &UnguardedPath,
-    ) -> Result<u64> {
+    fn copy_file_to_unguarded(&self, _src: &GuardedPath, _dst: &UnguardedPath) -> Result<u64> {
         bail!("unguarded operations not supported in mock fs");
     }
 

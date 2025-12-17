@@ -11,7 +11,7 @@ pub fn is_isolated() -> bool {
 pub mod embed;
 
 pub mod policy;
-pub use policy::{PolicyPath, GuardPolicy};
+pub use policy::{GuardPolicy, PolicyPath};
 
 pub mod workspace_fs;
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
@@ -159,8 +159,7 @@ impl WorkspaceFs for PathResolver {
         #[cfg(not(miri))]
         {
             #[allow(clippy::disallowed_methods)]
-            let entries = std::fs::read_dir(path.as_path())?
-                .collect::<Result<Vec<_>, _>>()?;
+            let entries = std::fs::read_dir(path.as_path())?.collect::<Result<Vec<_>, _>>()?;
             Ok(entries)
         }
         #[cfg(miri)]
