@@ -1,11 +1,7 @@
-#[test]
-fn trybuild_manifest_dir() {
-    use oxdock_process::CommandBuilder;
-    use std::path::Path;
+// TODO: Replace this ad-hoc repo-side cleanup with an isolated test harness
+// (e.g. run fixtures in temporary directories) to avoid mutating the repo.
+fn clean_prebuilt_dirs(manifest: &std::path::Path) {
     use std::fs;
-
-    // Ensure any previously generated prebuilt* dirs are removed so tests start clean.
-    let manifest = Path::new("tests/fixtures/build_from_manifest/Cargo.toml");
     if let Some(base) = manifest.parent() {
         if let Ok(entries) = fs::read_dir(base) {
             for e in entries.flatten() {
@@ -21,6 +17,16 @@ fn trybuild_manifest_dir() {
             }
         }
     }
+}
+
+#[test]
+fn trybuild_manifest_dir() {
+    use oxdock_process::CommandBuilder;
+    use std::path::Path;
+
+    // Ensure any previously generated prebuilt* dirs are removed so tests start clean.
+    let manifest = Path::new("tests/fixtures/build_from_manifest/Cargo.toml");
+    clean_prebuilt_dirs(manifest);
 
     let mut cmd = CommandBuilder::new("cargo");
     cmd.arg("run")
@@ -39,25 +45,10 @@ fn trybuild_manifest_dir() {
 fn trybuild_exit_fail() {
     use oxdock_process::CommandBuilder;
     use std::path::Path;
-    use std::fs;
 
     // Clean previously generated prebuilt* dirs for this fixture
     let manifest = Path::new("tests/fixtures/build_exit_fail/Cargo.toml");
-    if let Some(base) = manifest.parent() {
-        if let Ok(entries) = fs::read_dir(base) {
-            for e in entries.flatten() {
-                if let Ok(ft) = e.file_type() {
-                    if ft.is_dir() {
-                        if let Some(name) = e.file_name().to_str() {
-                            if name.starts_with("prebuilt") {
-                                let _ = fs::remove_dir_all(e.path());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    clean_prebuilt_dirs(manifest);
 
     let mut cmd = CommandBuilder::new("cargo");
     cmd.arg("run")
