@@ -15,4 +15,3 @@ embed = ["dep:rust-embed"]
 anyhow.workspace = true
 rust-embed = { workspace = true, optional = true }
 tempfile.workspace = true
-tracing = { workspace = true }
