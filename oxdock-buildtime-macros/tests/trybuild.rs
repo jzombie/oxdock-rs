@@ -3,18 +3,16 @@
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn clean_prebuilt_dirs(manifest: &std::path::Path) {
     use std::fs;
-    if let Some(base) = manifest.parent() {
-        if let Ok(entries) = fs::read_dir(base) {
-            for e in entries.flatten() {
-                if let Ok(ft) = e.file_type() {
-                    if ft.is_dir() {
-                        if let Some(name) = e.file_name().to_str() {
-                            if name.starts_with("prebuilt") {
-                                let _ = fs::remove_dir_all(e.path());
-                            }
-                        }
-                    }
-                }
+    if let Some(base) = manifest.parent()
+        && let Ok(entries) = fs::read_dir(base)
+    {
+        for e in entries.flatten() {
+            if let Ok(ft) = e.file_type()
+                && ft.is_dir()
+                && let Some(name) = e.file_name().to_str()
+                && name.starts_with("prebuilt")
+            {
+                let _ = fs::remove_dir_all(e.path());
             }
         }
     }

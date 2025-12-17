@@ -29,6 +29,12 @@ fn main() {
     assert_eq!(s_b.trim_end(), "hello from manifest B");
 
     // Ensure no cross-contamination: A shouldn't have b, B shouldn't have a.
-    assert!(DemoAssetsA::get("copied.txt").is_some(), "A must contain copied.txt");
-    assert!(DemoAssetsB::get("copied.txt").is_some(), "B must contain copied.txt");
+    assert!(
+        DemoAssetsA::get("copied.txt").is_some(),
+        "A must contain copied.txt"
+    );
+    assert!(
+        DemoAssetsB::get("copied.txt").is_some(),
+        "B must contain copied.txt"
+    );
 }
