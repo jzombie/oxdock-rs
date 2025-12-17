@@ -329,7 +329,6 @@ mod tests {
             "second background should be terminated once the first exits"
         );
 
-        // TODO: Migrate this so we don't need cfg(miri) here.
         let upper = if cfg!(miri) { 2.5 } else { 0.45 };
         assert!(
             elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
