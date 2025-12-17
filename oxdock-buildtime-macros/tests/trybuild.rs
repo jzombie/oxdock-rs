@@ -1,6 +1,7 @@
 // TODO: A better fixture should be used instead of this, especially one that auto-cleans
 // up after itself. A previous version did try to clean up after itself but was disabled
-// due to flakiness.
+// due to flakiness. One possibility is to use:  https://crates.io/crates/trybuild This
+// was originally experimented with but we wound up reverting to a manual approach.
 
 #[test]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
