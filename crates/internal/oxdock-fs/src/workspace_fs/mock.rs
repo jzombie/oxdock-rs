@@ -6,9 +6,9 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 
-use crate::{EntryKind, WorkspaceFs, to_forward_slashes};
 #[allow(clippy::disallowed_types)]
 use crate::UnguardedPath;
+use crate::{EntryKind, WorkspaceFs, to_forward_slashes};
 
 use super::GuardedPath;
 
