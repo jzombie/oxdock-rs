@@ -20,18 +20,7 @@ use syn::parse_macro_input;
 #[proc_macro]
 pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
-    match expand_embed_internal(&input) {
-        Ok(ts) => ts.into(),
-        Err(err) => {
-            let compile_error = err.to_compile_error();
-            let stub = embed_error_stub(&input.name);
-            quote! {
-                #compile_error
-                #stub
-            }
-            .into()
-        }
-    }
+    expand_embed_tokens(&input).into()
 }
 
 /// Macro similar to `embed!` but only prepares (builds/copies) the
@@ -143,6 +132,20 @@ fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
 
         pub use #mod_ident::#name;
+    }
+}
+
+fn expand_embed_tokens(input: &DslMacroInput) -> proc_macro2::TokenStream {
+    match expand_embed_internal(input) {
+        Ok(ts) => ts,
+        Err(err) => {
+            let compile_error = err.to_compile_error();
+            let stub = embed_error_stub(&input.name);
+            quote! {
+                #compile_error
+                #stub
+            }
+        }
     }
 }
 
@@ -614,6 +617,41 @@ mod tests {
         assert!(
             stub.contains("std :: iter :: empty"),
             "stub iter() should use std::iter::empty: {stub}"
+        );
+    }
+
+    #[test]
+    // IMPORTANT: [serial] is required, but may not be trigged by CI. The test mutates
+    // CARGO_* env vars without serialization, so it could race with other env-sensitive
+    // tests.
+    #[serial]
+    fn embed_tokens_include_compile_error_and_stub_on_failure() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
+        let manifest_dir = guard_root(&temp_root);
+
+        unsafe {
+            env::remove_var("CARGO_PRIMARY_PACKAGE");
+            env::remove_var("CARGO_MANIFEST_DIR");
+            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
+            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
+        }
+
+        let input = DslMacroInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
+            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
+        };
+
+        let tokens = super::expand_embed_tokens(&input);
+        let output = tokens.to_string();
+        assert!(
+            output.contains("compile_error"),
+            "tokens should include compile_error call: {output}"
+        );
+        assert!(
+            output.contains("__oxdock_embed_DemoAssets"),
+            "tokens should include stub module: {output}"
         );
     }
 
