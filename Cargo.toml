@@ -7,12 +7,6 @@ members = [
     "oxdock-buildtime-macros",
     "oxdock-cli",
 ]
-default-members = [
-    "oxdock-cli",
-    "crates/internal/oxdock-core",
-    "oxdock-buildtime-macros",
-    "crates/internal/oxdock-fs",
-]
 resolver = "2"
 
 [workspace.package]
