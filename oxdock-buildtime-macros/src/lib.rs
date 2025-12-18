@@ -596,6 +596,28 @@ mod tests {
     }
 
     #[test]
+    fn embed_error_stub_contains_placeholder_api() {
+        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
+        let stub = super::embed_error_stub(&name).to_string();
+        assert!(
+            stub.contains("mod __oxdock_embed_DemoAssets"),
+            "stub should wrap struct in module: {stub}"
+        );
+        assert!(
+            stub.contains("pub struct DemoAssets"),
+            "stub should define requested struct: {stub}"
+        );
+        assert!(
+            stub.contains("pub fn get"),
+            "stub should expose get() method: {stub}"
+        );
+        assert!(
+            stub.contains("std :: iter :: empty"),
+            "stub iter() should use std::iter::empty: {stub}"
+        );
+    }
+
+    #[test]
     fn normalizes_braced_script() {
         let ts = dsl_tokens! {
             WORKDIR /
