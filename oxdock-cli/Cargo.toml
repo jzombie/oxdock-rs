@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-cli"
-description = "Command-line entrypoint for OxDock's Docker-inspired compile-time language that snapshots workspaces and embeds assets."
+description = "CLI tooling for executing OxDock's Docker-inspired language on native platforms."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

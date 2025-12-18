@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-process"
-description = "Process orchestration for OxDock's Docker-inspired compile-time language, executing commands inside guarded contexts."
+description = "Process orchestration for OxDock environments."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
