@@ -396,6 +396,10 @@ fn capture_cwd_canonicalizes_and_writes() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
 fn copy_git_via_script_simple() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
     let snapshot = guard_root(&snapshot_temp);
@@ -449,6 +453,10 @@ fn copy_git_via_script_simple() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
 fn copy_git_directory_via_script() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
     let snapshot = guard_root(&snapshot_temp);

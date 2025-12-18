@@ -1,12 +1,11 @@
-// TODO: A better fixture should be used instead of this, especially one that auto-cleans
-// up after itself. A previous version did try to clean up after itself but was disabled
-// due to flakiness. One possibility is to use:  https://crates.io/crates/trybuild This
-// was originally experimented with but we wound up reverting to a manual approach.
-
 use oxdock_fixture::FixtureBuilder;
 use oxdock_fs::GuardedPath;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_manifest_dir() {
     let fixture = instantiate_fixture("build_from_manifest");
@@ -22,6 +21,10 @@ fn trybuild_manifest_dir() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_exit_fail() {
     let fixture = instantiate_fixture("build_exit_fail");
