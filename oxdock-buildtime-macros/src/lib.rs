@@ -22,7 +22,15 @@ pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
     match expand_embed_internal(&input) {
         Ok(ts) => ts.into(),
-        Err(err) => err.to_compile_error().into(),
+        Err(err) => {
+            let compile_error = err.to_compile_error();
+            let stub = embed_error_stub(&input.name);
+            quote! {
+                #compile_error
+                #stub
+            }
+            .into()
+        }
     }
 }
 
@@ -107,6 +115,37 @@ fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<sy
     Ok(syn::LitStr::new(&forward, span))
 }
 
+fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
+    syn::Ident::new(
+        &format!("__oxdock_embed_{}", name),
+        proc_macro2::Span::call_site(),
+    )
+}
+
+fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
+    let mod_ident = embed_module_ident(name);
+    quote! {
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        mod #mod_ident {
+            pub struct #name;
+
+            impl #name {
+                pub fn get(
+                    _file: &str,
+                ) -> Option<oxdock_fs::workspace_fs::embed::rust_embed::EmbeddedFile> {
+                    None
+                }
+
+                pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
+                    std::iter::empty()
+                }
+            }
+        }
+
+        pub use #mod_ident::#name;
+    }
+}
+
 fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
@@ -146,10 +185,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
     // In this case, we skip the build process to avoid errors.
     if oxdock_fs::is_isolated() {
         tracing::info!("embed: skipping build under isolated fs");
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         // Emit a dummy struct that matches the public API but has no assets.
         // We use the oxdock_fs::define_embed macro to handle the struct definition
@@ -184,10 +220,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
         // allow, then re-export it. This keeps the lint suppression scoped to
         // the generated item while avoiding call-site attributes. Tests that
         // inspect the output are updated to look through this wrapper.
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         return Ok(quote! {
             #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
@@ -210,10 +243,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
         }
         tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
         let out_dir_lit = embed_path_lit(&out_dir_abs, input.out_dir.span())?;
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
