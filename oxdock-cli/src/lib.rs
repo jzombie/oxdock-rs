@@ -388,29 +388,37 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
 type ShellCmdHook = dyn FnMut(&CommandSnapshot) -> Result<()> + Send;
 
 #[cfg(test)]
-static SHELL_CMD_HOOK: Mutex<Option<Box<ShellCmdHook>>> = Mutex::new(None);
+thread_local! {
+    static SHELL_CMD_HOOK: std::cell::RefCell<Option<Box<ShellCmdHook>>> = std::cell::RefCell::new(None);
+}
 
 #[cfg(test)]
 fn set_shell_command_hook<F>(hook: F)
 where
     F: FnMut(&CommandSnapshot) -> Result<()> + Send + 'static,
 {
-    *SHELL_CMD_HOOK.lock().unwrap() = Some(Box::new(hook));
+    SHELL_CMD_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
 }
 
 #[cfg(test)]
 fn clear_shell_command_hook() {
-    *SHELL_CMD_HOOK.lock().unwrap() = None;
+    SHELL_CMD_HOOK.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
 }
 
 #[cfg(test)]
 fn try_shell_command_hook(cmd: &mut CommandBuilder) -> Result<bool> {
-    if let Some(hook) = SHELL_CMD_HOOK.lock().unwrap().as_mut() {
-        let snap = cmd.snapshot();
-        hook(&snap)?;
-        return Ok(true);
-    }
-    Ok(false)
+    SHELL_CMD_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            let snap = cmd.snapshot();
+            hook(&snap)?;
+            return Ok(true);
+        }
+        Ok(false)
+    })
 }
 
 #[cfg(not(test))]
@@ -425,8 +433,6 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::PathResolver;
-    #[cfg(not(miri))]
-    use serial_test::serial;
     use std::cell::Cell;
 
     #[cfg_attr(
@@ -486,10 +492,6 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_command_for_platform() -> Result<()> {
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
@@ -500,7 +502,7 @@ mod tests {
             resolver.create_dir_all(&cwd)?;
         }
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let captured = std::sync::Arc::new(Mutex::new(None::<CommandSnapshot>));
         let guard = captured.clone();
         set_shell_command_hook(move |cmd| {
             *guard.lock().unwrap() = Some(cmd.clone());
@@ -573,7 +575,6 @@ mod tests {
 mod windows_shell_tests {
     use super::*;
     use oxdock_fs::PathResolver;
-    use serial_test::serial;
 
     #[test]
     fn command_path_strips_verbatim_prefix() -> Result<()> {
@@ -600,10 +601,6 @@ mod windows_shell_tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    #[cfg_attr(not(miri), serial)]
     fn run_shell_builds_windows_command() -> Result<()> {
         let workspace = GuardedPath::tempdir_with(|builder| {
             builder.prefix("oxdock shell win ");
@@ -613,7 +610,7 @@ mod windows_shell_tests {
         let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
         resolver.create_dir_all(&cwd)?;
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<CommandSnapshot>));
+        let captured = std::sync::Arc::new(Mutex::new(None::<CommandSnapshot>));
         let guard = captured.clone();
         set_shell_command_hook(move |cmd| {
             *guard.lock().unwrap() = Some(cmd.clone());

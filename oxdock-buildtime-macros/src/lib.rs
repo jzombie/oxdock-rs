@@ -481,7 +481,6 @@ mod tests {
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use oxdock_process::serial_cargo_env::manifest_env_guard;
-    use serial_test::serial;
     use syn::{Ident, LitStr, parse::Parser};
 
     macro_rules! dsl_tokens {
@@ -501,12 +500,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_when_out_dir_is_file_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -544,12 +537,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -740,12 +727,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -782,12 +763,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn prepare_errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -811,12 +786,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -839,12 +808,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -891,12 +854,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn uses_final_workdir_for_folder() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());

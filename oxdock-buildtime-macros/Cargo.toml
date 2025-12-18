@@ -36,4 +36,3 @@ tracing = { workspace = true }
 oxdock-fixture.workspace = true
 oxdock-fs = { workspace = true, features = ["embed"] }
 oxdock-process.workspace = true
-serial_test.workspace = true

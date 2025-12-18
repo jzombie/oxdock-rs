@@ -32,7 +32,6 @@ oxdock-process = { path = "crates/internal/oxdock-process", version = "0.3.0-alp
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 rust-embed = { version = "8.9.0", features = ["include-exclude"] }
-serial_test = "3.2.0"
 syn = { version = "2.0", features = ["full"] }
 tempfile = "3.23.0"
 toml_edit = "0.24.0"
