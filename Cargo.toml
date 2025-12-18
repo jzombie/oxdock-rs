@@ -1,9 +1,9 @@
 [workspace]
 members = [
     "crates/internal/oxdock-core",
+    "crates/internal/oxdock-fixture",
     "crates/internal/oxdock-fs",
     "crates/internal/oxdock-process",
-    "crates/internal/oxdock-fixture",
     "oxdock-buildtime-macros",
     "oxdock-cli",
 ]
@@ -30,8 +30,8 @@ oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-a
 
 # Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.1.0-alpha" }
-oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }
 oxdock-fixture = { path = "crates/internal/oxdock-fixture", version = "0.1.0-alpha" }
+oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }
 oxdock-process = { path = "crates/internal/oxdock-process", version = "0.1.0-alpha" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
