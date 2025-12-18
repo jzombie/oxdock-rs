@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-core"
-description = "Placeholder crate"
+description = "Core engine for OxDock's Docker-inspired compile-time language, orchestrating workspace snapshots and asset embedding."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
