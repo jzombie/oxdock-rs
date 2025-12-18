@@ -480,8 +480,8 @@ mod tests {
     use oxdock_core::StepKind;
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
+    use oxdock_process::serial_cargo_env::manifest_env_guard;
     use serial_test::serial;
-    use std::env;
     use syn::{Ident, LitStr, parse::Parser};
 
     macro_rules! dsl_tokens {
@@ -523,12 +523,7 @@ mod tests {
             .write_file(&assets_abs, b"not a dir")
             .expect("create file at out_dir path");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -571,12 +566,7 @@ mod tests {
             .set_permissions_mode_unix(&assets_abs, 0o555)
             .expect("make out_dir read-only");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -621,21 +611,12 @@ mod tests {
     }
 
     #[test]
-    // IMPORTANT: [serial] is required, but may not be trigged by CI. The test mutates
-    // CARGO_* env vars without serialization, so it could race with other env-sensitive
-    // tests.
-    #[serial]
     fn embed_tokens_include_compile_error_and_stub_on_failure() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -775,12 +756,7 @@ mod tests {
         resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -817,12 +793,7 @@ mod tests {
         let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -851,12 +822,7 @@ mod tests {
         let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -896,12 +862,7 @@ mod tests {
             )
             .expect("write source");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -946,12 +907,7 @@ mod tests {
             .expect("mkdir .git");
         let assets_rel = "prebuilt";
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let script = [
             "MKDIR dist",

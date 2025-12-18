@@ -1,6 +1,7 @@
 #[cfg(feature = "mock-process")]
 mod mock;
 mod shell;
+pub mod serial_cargo_env;
 
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, PolicyPath};
