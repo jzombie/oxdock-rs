@@ -83,7 +83,7 @@ fn extract_tar(tar_path: &GuardedPath, dest: &GuardedPath) -> Result<()> {
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     let mut cmd = Command::new("tar");
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         cmd.arg("--warning=no-timestamp");
     }
