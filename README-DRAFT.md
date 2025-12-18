@@ -132,6 +132,16 @@ To keep the badge grounded in real coverage reporting, the workflow multiplies t
 
 The badge therefore shows an approximate “effective Miri coverage” (baseline coverage × runnable ratio), which can never exceed the standard coverage percentage but gives a tangible sense of how much of the tested surface area is validated under the interpreter.
 
+To test the calculation locally without waiting for CI:
+
+```bash
+cargo llvm-cov --workspace --all-features --summary-only > coverage-summary.txt
+BASE_LINE_COVERAGE=$(sed -n 's/.*Lines:[[:space:]]*\([0-9.]*\)%.*/\1/p' coverage-summary.txt | head -n1) \
+  scripts/.github/miri-badge-report.sh
+```
+
+The helper emits the same badge JSON (`badges/miri-coverage.json`) and summary text used by CI, making it easy to confirm the numbers before opening a PR.
+
 If you run new tests under Miri locally, you can sanity-check parity with CI via:
 
 ```bash
