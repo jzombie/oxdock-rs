@@ -17,6 +17,11 @@ build = []
 [lib]
 proc-macro = true
 
+[features]
+default = []
+# Expose test utilities (e.g., DSL tokenizers) for dev/test builds.
+test-support = []
+
 [dependencies]
 oxdock-core = { workspace = true, features = ["token-input"] }
 oxdock-fs.workspace = true
@@ -30,8 +35,3 @@ oxdock-fixture.workspace = true
 oxdock-fs = { workspace = true, features = ["embed"] }
 oxdock-process.workspace = true
 serial_test.workspace = true
-
-[features]
-default = []
-# Expose test utilities (e.g., DSL tokenizers) for dev/test builds.
-test-support = []
