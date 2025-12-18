@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-fs"
-description = "Guarded filesystem utilities and workspace snapshots for OxDock"
+description = "Guarded filesystem utilities and workspace snapshots that let OxDock stage Docker-inspired environments at compile time."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

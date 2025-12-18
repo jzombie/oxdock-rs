@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-buildtime-macros"
-description = "Placeholder crate"
+description = "Proc-macros that power OxDock's Docker-inspired compile-time language, embedding assets directly into the binary data section."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

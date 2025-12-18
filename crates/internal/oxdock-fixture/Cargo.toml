@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-fixture"
-description = "OxDock fixture harness that materializes reusable Cargo workspace tests"
+description = "Fixture harness that materializes reproducible Cargo workspaces for OxDock's compile-time, Docker-inspired language."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
