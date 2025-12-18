@@ -241,6 +241,44 @@ mod tests {
     }
 
     #[test]
+    fn workspace_scope_restores_after_guard_block() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
+        let snapshot_root = guard_root(&snapshot);
+        let local_root = guard_root(&local);
+
+        let script = indoc!(
+            r#"
+            ENV RUN=1
+            [env:RUN] {
+                WORKSPACE LOCAL
+                WRITE local_only.txt inside
+            }
+            WRITE snapshot_only.txt outside
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
+
+        assert!(
+            local_root.join("local_only.txt").unwrap().exists(),
+            "workspace switch inside block should affect local root"
+        );
+        assert!(
+            snapshot_root
+                .join("snapshot_only.txt")
+                .unwrap()
+                .exists(),
+            "writes after block must target snapshot again"
+        );
+        assert!(
+            !local_root.join("snapshot_only.txt").unwrap().exists(),
+            "workspace should reset after guard block exits"
+        );
+    }
+
+    #[test]
     fn guard_matches_profile_env() {
         // Cargo sets PROFILE during builds/tests; verify guards see it.
         let temp = GuardedPath::tempdir().unwrap();
