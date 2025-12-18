@@ -341,6 +341,7 @@ dependencies = [
  "anyhow",
  "indoc",
  "proc-macro2",
+ "quote",
  "syn",
 ]
 

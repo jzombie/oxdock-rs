@@ -569,6 +569,7 @@ mod tests {
             WORKDIR /
             MKDIR assets;
             WRITE assets/hello.txt "hi there";
+            LS; LS; LS; RUN echo; LS;
             RUN echo && ls
         };
 
@@ -576,8 +577,13 @@ mod tests {
             oxdock_core::script_from_braced_tokens(&ts).expect("normalize braced script");
         let expected = [
             "WORKDIR /",
-            "MKDIR assets",
-            "WRITE assets/hello.txt hi there",
+            "MKDIR assets;",
+            "WRITE assets/hello.txt hi there;",
+            "LS;",
+            "LS;",
+            "LS;",
+            "RUN echo;",
+            "LS;",
             "RUN echo && ls",
         ]
         .join("\n");

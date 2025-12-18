@@ -956,6 +956,147 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "token-input")]
+    #[test]
+    fn string_and_braced_scripts_produce_identical_ast() {
+        use quote::quote;
+
+        let atomic_instructions: Vec<(&str, proc_macro2::TokenStream)> = vec![
+            ("WORKDIR /tmp", quote! { WORKDIR /tmp }),
+            ("ENV FOO=bar", quote! { ENV FOO=bar }),
+            ("RUN echo hi && ls", quote! { RUN echo hi && ls }),
+            ("WRITE dist/out.txt hi", quote! { WRITE dist/out.txt "hi" }),
+            (
+                "COPY src/file dist/file",
+                quote! { COPY src/file dist/file },
+            ),
+        ];
+
+        let mut cases: Vec<(String, proc_macro2::TokenStream)> = Vec::new();
+
+        for mask in 1..(1 << atomic_instructions.len()) {
+            let mut literal_parts = Vec::new();
+            let mut token_parts = Vec::new();
+            for (idx, (lit, tokens)) in atomic_instructions.iter().enumerate() {
+                if (mask & (1 << idx)) != 0 {
+                    literal_parts.push(*lit);
+                    token_parts.push(tokens.clone());
+                }
+            }
+            let literal = literal_parts.join("\n");
+            let tokens = quote! { #(#token_parts)* };
+            cases.push((literal, tokens));
+        }
+
+        cases.push((
+            indoc! {r#"
+                [env:PROFILE=release]
+                RUN echo release
+                RUN echo done
+            "#}
+            .trim()
+            .to_string(),
+            quote! {
+                [env:PROFILE=release] RUN echo release
+                RUN echo done
+            },
+        ));
+
+        cases.push((
+            indoc! {r#"
+                [platform:linux] {
+                    WORKDIR /client
+                    RUN echo linux
+                }
+                [env:FOO=bar] {
+                    WRITE scoped.txt hit
+                }
+                RUN echo finished
+            "#}
+            .trim()
+            .to_string(),
+            quote! {
+                [platform:linux] {
+                    WORKDIR /client
+                    RUN echo linux
+                }
+                [env:FOO=bar] {
+                    WRITE scoped.txt hit
+                }
+                RUN echo finished
+            },
+        ));
+
+        cases.push((
+            indoc! {r#"
+                [!env:SKIP]
+                [platform:windows] RUN echo win
+                [ env:MODE=beta,
+                  linux
+                ] RUN echo combo
+            "#}
+            .trim()
+            .to_string(),
+            quote! {
+                [!env:SKIP]
+                [platform:windows] RUN echo win
+                [env:MODE=beta, linux] RUN echo combo
+            },
+        ));
+
+        cases.push((
+            indoc! {r#"
+                [env:OUTER] {
+                    WORKDIR /tmp
+                    [env:INNER] {
+                        RUN echo inner; echo still
+                    }
+                    WRITE after.txt ok
+                }
+                RUN echo done
+            "#}
+            .trim()
+            .to_string(),
+            quote! {
+                [env:OUTER] {
+                    WORKDIR /tmp
+                    [env:INNER] {
+                        RUN echo inner; echo still
+                    }
+                    WRITE after.txt ok
+                }
+                RUN echo done
+            },
+        ));
+
+        cases.push((
+            indoc! {r#"
+                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:FOO] WRITE foo.txt bar
+                SYMLINK link target
+            "#}
+            .trim()
+            .to_string(),
+            quote! {
+                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:FOO] WRITE foo.txt "bar"
+                SYMLINK link target
+            },
+        ));
+
+        for (idx, (literal, tokens)) in cases.iter().enumerate() {
+            let text = literal.trim();
+            let string_steps = parse_script(text)
+                .unwrap_or_else(|e| panic!("string parse failed for case {idx}: {e}"));
+            let braced_steps = parse_braced_tokens(tokens)
+                .unwrap_or_else(|e| panic!("token parse failed for case {idx}: {e}"));
+            assert_eq!(
+                string_steps, braced_steps,
+                "AST mismatch for case {idx} literal:\n{text}"
+            );
+        }
+    }
+
     #[test]
     fn env_equals_guard_respects_inversion() {
         let mut envs = HashMap::new();

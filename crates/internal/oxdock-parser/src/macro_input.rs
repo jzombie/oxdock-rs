@@ -1,4 +1,15 @@
-use super::{Step, parse_script};
+//! Helpers that let proc-macro inputs reuse the regular string parser.
+//!
+//! The macros ultimately want everything to flow through `parse_script`, since
+//! that code already does the heavy lifting of guard handling, scope tracking,
+//! and AST construction.  Unfortunately `TokenStream` values do not retain
+//! whitespace or “line” structure, so we first have to rebuild a textual DSL
+//! representation that the parser understands.  The `sticky`/`needs_space`
+//! helpers below exist solely to recreate enough spacing for commands such as
+//! `ENV FOO=bar` or `RUN echo && ls` to look exactly like the string DSL,
+//! keeping both pathways unified.
+
+use super::{Command, Step, parse_script};
 use anyhow::Result;
 use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
 use syn::parse::{Parse, ParseStream};
@@ -79,10 +90,13 @@ fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
 }
 
 fn sticky(c: char) -> bool {
-    matches!(c, '/' | '.' | '-' | ':')
+    matches!(c, '/' | '.' | '-' | ':' | '=')
 }
 
 fn needs_space(prev: char, next: char) -> bool {
+    if next == ';' {
+        return false;
+    }
     if prev.is_whitespace() || next.is_whitespace() {
         return false;
     }
@@ -117,6 +131,12 @@ fn delim_pair(delim: Delimiter) -> Option<(char, char)> {
     }
 }
 
+fn current_line_command(line: &str) -> Option<Command> {
+    let trimmed = line.trim_start();
+    let head = trimmed.split_whitespace().next()?;
+    Command::parse(head)
+}
+
 fn walk(
     ts: TokenStream2,
     line: &mut String,
@@ -125,10 +145,6 @@ fn walk(
 ) -> Result<()> {
     for tt in ts {
         match tt {
-            TokenTree::Punct(ref p) if matches!(p.as_char(), ';' | ',') => {
-                finalize_line(lines, line);
-                *last_was_command = false;
-            }
             TokenTree::Group(g) => {
                 if let Some((open, close)) = delim_pair(g.delimiter()) {
                     match g.delimiter() {
@@ -146,9 +162,11 @@ fn walk(
                         Delimiter::Bracket => {
                             finalize_line(lines, line);
                             push_fragment(line, &open.to_string(), false);
-                            *last_was_command = false;
+                            finalize_line(lines, line);
                             walk(g.stream(), line, lines, last_was_command)?;
+                            finalize_line(lines, line);
                             push_fragment(line, &close.to_string(), false);
+                            finalize_line(lines, line);
                         }
                         _ => {
                             push_fragment(line, &open.to_string(), *last_was_command);
@@ -169,7 +187,9 @@ fn walk(
                 *last_was_command = false;
             }
             TokenTree::Punct(p) => {
-                push_fragment(line, &p.as_char().to_string(), *last_was_command);
+                let ch = p.as_char();
+                let force_space = *last_was_command && ch != ';';
+                push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;
             }
             TokenTree::Ident(ident) => {
@@ -177,7 +197,12 @@ fn walk(
                 let is_command = super::Command::parse(&ident_text).is_some();
                 let trimmed = line.trim();
                 let guard_prefix = trimmed.starts_with('[');
+                let mut should_finalize = false;
                 if is_command && !trimmed.is_empty() && !guard_prefix {
+                    should_finalize =
+                        !matches!(current_line_command(trimmed), Some(Command::Capture));
+                }
+                if should_finalize {
                     finalize_line(lines, line);
                 }
                 push_fragment(line, &ident_text, *last_was_command);
