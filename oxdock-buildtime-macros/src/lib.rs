@@ -236,9 +236,19 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
                 TokenTree::Group(g) => {
                     if let Some((open, close)) = delim_pair(g.delimiter()) {
                         push_fragment(line, &open.to_string(), *last_was_command);
+                        if open == '{' {
+                            finalize_line(lines, line);
+                        }
                         *last_was_command = false;
                         walk(g.stream(), line, lines, last_was_command)?;
-                        push_fragment(line, &close.to_string(), *last_was_command);
+                        if close == '}' {
+                            finalize_line(lines, line);
+                            push_fragment(line, &close.to_string(), false);
+                            finalize_line(lines, line);
+                            *last_was_command = false;
+                        } else {
+                            push_fragment(line, &close.to_string(), *last_was_command);
+                        }
                     } else {
                         walk(g.stream(), line, lines, last_was_command)?;
                     }
@@ -611,6 +621,7 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 #[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
+    use oxdock_core::{StepKind, parse_script};
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
@@ -742,6 +753,33 @@ mod tests {
         .join("\n");
 
         assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn braced_script_with_guard_block_parses() {
+        let ts: proc_macro2::TokenStream = quote! {
+            [env:PROFILE=release] {
+                WORKDIR /client
+                RUN echo build
+            }
+            WORKDIR /
+            COPY client/dist prebuilt/dist
+        };
+        let normalized = normalize_braced_script(&ts).expect("normalize braced script");
+        let steps = parse_script(&normalized).expect("braced script should parse");
+        assert_eq!(steps.len(), 4, "expected 4 commands");
+        assert_eq!(steps[0].scope_enter, 1);
+        assert_eq!(steps[1].scope_exit, 1);
+        match &steps[0].kind {
+            StepKind::Workdir(path) => assert_eq!(path, "/client"),
+            other => panic!("expected WORKDIR, saw {:?}", other),
+        }
+        match &steps[1].kind {
+            StepKind::Run(cmd) => assert_eq!(cmd, "echo build"),
+            other => panic!("expected RUN, saw {:?}", other),
+        }
+        assert!(steps[2].guards.is_empty());
+        assert!(steps[3].guards.is_empty());
     }
 
     #[test]

@@ -320,7 +320,7 @@ fn execute_steps<P: ProcessManager>(
                             .write_file(&target, contents.as_bytes())
                             .with_context(|| format!("failed to write {}", target.display()))?;
                     }
-        StepKind::Capture { path, cmd } => {
+                    StepKind::Capture { path, cmd } => {
                         let target = state
                             .fs
                             .resolve_write(&state.cwd, path)
