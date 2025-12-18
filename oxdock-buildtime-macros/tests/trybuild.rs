@@ -43,6 +43,25 @@ fn trybuild_exit_fail() {
     );
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_guard_scope() {
+    let fixture = instantiate_fixture("guard_scope");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("run")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
+        .env("TEST_SCOPE", "1")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(status.success(), "guard scope fixture should succeed");
+}
+
 fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
     let crate_root =
         GuardedPath::new_root_from_str(env!("CARGO_MANIFEST_DIR")).expect("crate root guard");
@@ -68,7 +87,6 @@ fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
             "oxdock-fs",
             workspace_path.join("crates/internal/oxdock-fs"),
         )
-        .with_version_dependency("rust-embed", "8.9.0")
         .with_workspace_snapshot_from(&workspace_path)
         .expect("workspace snapshot")
         .instantiate()

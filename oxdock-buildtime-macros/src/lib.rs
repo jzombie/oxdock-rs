@@ -235,19 +235,31 @@ fn normalize_braced_script(ts: &proc_macro2::TokenStream) -> syn::Result<String>
                 }
                 TokenTree::Group(g) => {
                     if let Some((open, close)) = delim_pair(g.delimiter()) {
-                        push_fragment(line, &open.to_string(), *last_was_command);
-                        if open == '{' {
-                            finalize_line(lines, line);
-                        }
-                        *last_was_command = false;
-                        walk(g.stream(), line, lines, last_was_command)?;
-                        if close == '}' {
-                            finalize_line(lines, line);
-                            push_fragment(line, &close.to_string(), false);
-                            finalize_line(lines, line);
-                            *last_was_command = false;
-                        } else {
-                            push_fragment(line, &close.to_string(), *last_was_command);
+                        match g.delimiter() {
+                            Delimiter::Brace => {
+                                finalize_line(lines, line);
+                                line.push(open);
+                                finalize_line(lines, line);
+                                *last_was_command = false;
+                                walk(g.stream(), line, lines, last_was_command)?;
+                                finalize_line(lines, line);
+                                line.push(close);
+                                finalize_line(lines, line);
+                                *last_was_command = false;
+                            }
+                            Delimiter::Bracket => {
+                                finalize_line(lines, line);
+                                push_fragment(line, &open.to_string(), false);
+                                *last_was_command = false;
+                                walk(g.stream(), line, lines, last_was_command)?;
+                                push_fragment(line, &close.to_string(), false);
+                            }
+                            _ => {
+                                push_fragment(line, &open.to_string(), *last_was_command);
+                                *last_was_command = false;
+                                walk(g.stream(), line, lines, last_was_command)?;
+                                push_fragment(line, &close.to_string(), *last_was_command);
+                            }
                         }
                     } else {
                         walk(g.stream(), line, lines, last_was_command)?;
@@ -628,6 +640,14 @@ mod tests {
     use std::env;
     use syn::parse::Parser;
 
+    macro_rules! dsl_tokens {
+        ($($tt:tt)*) => {{
+            use quote::quote;
+            let tokens: proc_macro2::TokenStream = quote! { $($tt)* };
+            tokens
+        }};
+    }
+
     fn guard_root(path: &UnguardedPath) -> GuardedPath {
         GuardedPath::new_root(path.as_path()).unwrap()
     }
@@ -736,7 +756,7 @@ mod tests {
 
     #[test]
     fn normalizes_braced_script() {
-        let ts: proc_macro2::TokenStream = quote! {
+        let ts = dsl_tokens! {
             WORKDIR /
             MKDIR assets;
             WRITE assets/hello.txt "hi there";
@@ -757,29 +777,49 @@ mod tests {
 
     #[test]
     fn braced_script_with_guard_block_parses() {
-        let ts: proc_macro2::TokenStream = quote! {
-            [env:PROFILE=release] {
-                WORKDIR /client
-                RUN echo build
-            }
+        let ts = dsl_tokens! {
             WORKDIR /
-            COPY client/dist prebuilt/dist
+            MKDIR scoped
+            MKDIR scoped/nested
+            [env:TEST_SCOPE] {
+                WORKDIR scoped
+                WRITE inner.txt inside
+                ENV SCOPE_FLAG=1
+                [env:SCOPE_FLAG] {
+                    WORKDIR nested
+                    WRITE deep.txt nested
+                    ENV INNER_ONLY=1
+                }
+                WRITE after_nested.txt still-scoped
+                [env:INNER_ONLY] WRITE leaked_inner.txt nope
+            }
+            WRITE outside.txt outside
+            [env:SCOPE_FLAG] WRITE leaked.txt nope
         };
         let normalized = normalize_braced_script(&ts).expect("normalize braced script");
         let steps = parse_script(&normalized).expect("braced script should parse");
-        assert_eq!(steps.len(), 4, "expected 4 commands");
-        assert_eq!(steps[0].scope_enter, 1);
-        assert_eq!(steps[1].scope_exit, 1);
+        assert_eq!(steps.len(), 13, "expected 13 commands");
+        assert_eq!(steps[3].scope_enter, 1, "outer block enter");
+        assert_eq!(steps[10].scope_exit, 1, "outer block exit");
+        assert_eq!(steps[6].scope_enter, 1, "nested block enter");
+        assert_eq!(steps[8].scope_exit, 1, "nested block exit");
         match &steps[0].kind {
-            StepKind::Workdir(path) => assert_eq!(path, "/client"),
-            other => panic!("expected WORKDIR, saw {:?}", other),
+            StepKind::Workdir(path) => assert_eq!(path, "/"),
+            other => panic!("expected WORKDIR /, saw {:?}", other),
         }
-        match &steps[1].kind {
-            StepKind::Run(cmd) => assert_eq!(cmd, "echo build"),
-            other => panic!("expected RUN, saw {:?}", other),
+        match &steps[3].kind {
+            StepKind::Workdir(path) => assert_eq!(path, "scoped"),
+            other => panic!("expected scoped WORKDIR, saw {:?}", other),
         }
-        assert!(steps[2].guards.is_empty());
-        assert!(steps[3].guards.is_empty());
+        match &steps[10].kind {
+            StepKind::Write { path, .. } => assert_eq!(path, "leaked_inner.txt"),
+            other => panic!("expected leaked inner WRITE, saw {:?}", other),
+        }
+        assert!(
+            steps[10].guards.len() == 1,
+            "leaked_inner should be guarded"
+        );
+        assert!(steps[12].guards.len() == 1, "outer leak should be guarded");
     }
 
     #[test]
