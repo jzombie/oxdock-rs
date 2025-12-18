@@ -20,10 +20,7 @@ use syn::parse_macro_input;
 #[proc_macro]
 pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
-    match expand_embed_internal(&input) {
-        Ok(ts) => ts.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
+    expand_embed_tokens(&input).into()
 }
 
 /// Macro similar to `embed!` but only prepares (builds/copies) the
@@ -107,6 +104,51 @@ fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<sy
     Ok(syn::LitStr::new(&forward, span))
 }
 
+fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
+    syn::Ident::new(
+        &format!("__oxdock_embed_{}", name),
+        proc_macro2::Span::call_site(),
+    )
+}
+
+fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
+    let mod_ident = embed_module_ident(name);
+    quote! {
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        mod #mod_ident {
+            pub struct #name;
+
+            impl #name {
+                pub fn get(
+                    _file: &str,
+                ) -> Option<oxdock_fs::workspace_fs::embed::rust_embed::EmbeddedFile> {
+                    None
+                }
+
+                pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
+                    std::iter::empty()
+                }
+            }
+        }
+
+        pub use #mod_ident::#name;
+    }
+}
+
+fn expand_embed_tokens(input: &DslMacroInput) -> proc_macro2::TokenStream {
+    match expand_embed_internal(input) {
+        Ok(ts) => ts,
+        Err(err) => {
+            let compile_error = err.to_compile_error();
+            let stub = embed_error_stub(&input.name);
+            quote! {
+                #compile_error
+                #stub
+            }
+        }
+    }
+}
+
 fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
@@ -146,10 +188,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
     // In this case, we skip the build process to avoid errors.
     if oxdock_fs::is_isolated() {
         tracing::info!("embed: skipping build under isolated fs");
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         // Emit a dummy struct that matches the public API but has no assets.
         // We use the oxdock_fs::define_embed macro to handle the struct definition
@@ -184,10 +223,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
         // allow, then re-export it. This keeps the lint suppression scoped to
         // the generated item while avoiding call-site attributes. Tests that
         // inspect the output are updated to look through this wrapper.
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         return Ok(quote! {
             #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
@@ -210,10 +246,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
         }
         tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
         let out_dir_lit = embed_path_lit(&out_dir_abs, input.out_dir.span())?;
-        let mod_ident = syn::Ident::new(
-            &format!("__oxdock_embed_{}", name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_ident = embed_module_ident(name);
 
         return Ok(quote! {
             #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
@@ -447,8 +480,7 @@ mod tests {
     use oxdock_core::StepKind;
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
-    use serial_test::serial;
-    use std::env;
+    use oxdock_process::serial_cargo_env::manifest_env_guard;
     use syn::{Ident, LitStr, parse::Parser};
 
     macro_rules! dsl_tokens {
@@ -468,12 +500,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_when_out_dir_is_file_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -490,12 +516,7 @@ mod tests {
             .write_file(&assets_abs, b"not a dir")
             .expect("create file at out_dir path");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -516,12 +537,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_when_out_dir_not_writable_before_build() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -538,12 +553,7 @@ mod tests {
             .set_permissions_mode_unix(&assets_abs, 0o555)
             .expect("make out_dir read-only");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -563,6 +573,83 @@ mod tests {
             msg.contains("out_dir not writable"),
             "message should report non-writable out_dir"
         );
+    }
+
+    #[test]
+    fn embed_error_stub_contains_placeholder_api() {
+        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
+        let stub = super::embed_error_stub(&name).to_string();
+        assert!(
+            stub.contains("mod __oxdock_embed_DemoAssets"),
+            "stub should wrap struct in module: {stub}"
+        );
+        assert!(
+            stub.contains("pub struct DemoAssets"),
+            "stub should define requested struct: {stub}"
+        );
+        assert!(
+            stub.contains("pub fn get"),
+            "stub should expose get() method: {stub}"
+        );
+        assert!(
+            stub.contains("std :: iter :: empty"),
+            "stub iter() should use std::iter::empty: {stub}"
+        );
+    }
+
+    #[test]
+    fn embed_tokens_include_compile_error_and_stub_on_failure() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let temp_root = UnguardedPath::new(temp.as_path());
+        let manifest_dir = guard_root(&temp_root);
+
+        let _env = manifest_env_guard(&manifest_dir, false);
+
+        let input = DslMacroInput {
+            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
+            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
+        };
+
+        let tokens = super::expand_embed_tokens(&input);
+        let output = tokens.to_string();
+        assert!(
+            output.contains("compile_error"),
+            "tokens should include compile_error call: {output}"
+        );
+        assert!(
+            output.contains("__oxdock_embed_DemoAssets"),
+            "tokens should include stub module: {output}"
+        );
+    }
+
+    #[test]
+    fn embed_module_ident_prefixes_struct_name() {
+        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
+        let module = super::embed_module_ident(&name);
+        assert_eq!(module.to_string(), "__oxdock_embed_DemoAssets");
+    }
+
+    #[test]
+    fn embed_path_lit_matches_embed_path_helper() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let lit =
+            super::embed_path_lit(&guard, proc_macro2::Span::call_site()).expect("lit should work");
+        assert_eq!(lit.value(), oxdock_fs::embed_path(&guard));
+    }
+
+    #[test]
+    fn join_guard_appends_relative_paths() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let base = temp.as_guarded_path().clone();
+        let joined =
+            super::join_guard(&base, "nested/file.txt", proc_macro2::Span::call_site()).unwrap();
+        assert!(
+            joined.as_path().ends_with("nested/file.txt"),
+            "join_guard should append relative paths"
+        );
+        assert_eq!(joined.root(), base.root(), "root should be preserved");
     }
 
     #[test]
@@ -640,12 +727,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn uses_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -656,12 +737,7 @@ mod tests {
         resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
 
         // Simulate crates.io tarball: no .git, not primary package.
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -687,23 +763,12 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn prepare_errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -721,23 +786,12 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn errors_without_out_dir_when_not_primary_and_no_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
         let manifest_dir = guard_root(&temp_root);
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "0");
-        }
+        let _env = manifest_env_guard(&manifest_dir, false);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -754,12 +808,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn builds_from_manifest_dir_when_primary_with_git() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -777,12 +825,7 @@ mod tests {
             )
             .expect("write source");
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let input = DslMacroInput {
             name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
@@ -811,12 +854,6 @@ mod tests {
     }
 
     #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    // Note: Under Miri the `#[serial]` attribute from `serial_test` is ignored —
-    // see https://github.com/palfrey/serial_test/issues/144#issuecomment-3667121315
-    #[serial]
     fn uses_final_workdir_for_folder() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let temp_root = UnguardedPath::new(temp.as_path());
@@ -827,12 +864,7 @@ mod tests {
             .expect("mkdir .git");
         let assets_rel = "prebuilt";
 
-        unsafe {
-            env::remove_var("CARGO_PRIMARY_PACKAGE");
-            env::remove_var("CARGO_MANIFEST_DIR");
-            env::set_var("CARGO_MANIFEST_DIR", manifest_dir.as_path());
-            env::set_var("CARGO_PRIMARY_PACKAGE", "1");
-        }
+        let _env = manifest_env_guard(&manifest_dir, true);
 
         let script = [
             "MKDIR dist",

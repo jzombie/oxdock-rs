@@ -41,6 +41,16 @@ fn trybuild_exit_fail() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("execution error"),
+        "embed! failure should report execution error, stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("no `DemoAssets` in `demo_assets`"),
+        "embed! should emit a stub so downstream code compiles, stderr:\n{stderr}"
+    );
 }
 
 #[test]
