@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-cli"
-description = "Placeholder crate"
+description = "CLI tooling for executing OxDock's Docker-inspired language on native platforms."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
