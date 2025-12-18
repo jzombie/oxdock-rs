@@ -634,6 +634,16 @@ impl ScriptParser {
         if trimmed.is_empty() {
             return Ok(());
         }
+        if let Some(idx) = trimmed.find(';') {
+            let command_token = trimmed[..idx].trim();
+            if !command_token.is_empty() && !command_token.chars().any(|c| c.is_whitespace()) {
+                let after = trimmed[idx + 1..].trim();
+                if !after.is_empty() {
+                    self.push_front(line_no, after.to_string());
+                }
+                return self.handle_command(line_no, command_token.to_string(), inline_guards);
+            }
+        }
         let (op_str, rest_str) = split_op_and_rest(trimmed);
         let cmd = Command::parse(op_str)
             .ok_or_else(|| anyhow!("line {}: unknown instruction '{}'", line_no, op_str))?;
@@ -916,6 +926,18 @@ mod tests {
             StepKind::Run(cmd) => assert_eq!(cmd, "echo 'literal /* stay */ value'"),
             other => panic!("expected RUN, saw {:?}", other),
         }
+    }
+
+    #[test]
+    fn semicolon_attached_to_command_splits_instructions() {
+        let script = "LS;LS;LS";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 3);
+        assert!(
+            steps
+                .iter()
+                .all(|step| matches!(step.kind, StepKind::Ls(_)))
+        );
     }
 
     #[test]
