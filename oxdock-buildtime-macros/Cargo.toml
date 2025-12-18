@@ -23,8 +23,10 @@ default = []
 test-support = []
 
 [dependencies]
+anyhow.workspace = true
 oxdock-core = { workspace = true, features = ["token-input"] }
 oxdock-fs.workspace = true
+oxdock-parser = { workspace = true, features = ["token-input"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

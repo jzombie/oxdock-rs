@@ -1,5 +1,5 @@
-use oxdock_core::{DslMacroInput, ScriptSource};
 use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_parser::{DslMacroInput, ScriptSource};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_macro_input;
@@ -43,8 +43,9 @@ fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
         ScriptSource::Braced(ts) => (
-            oxdock_core::script_from_braced_tokens(ts)
-                .map_err(|e| syn::Error::new(proc_macro2::Span::call_site(), e.to_string()))?,
+            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
+                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
+            })?,
             proc_macro2::Span::call_site(),
         ),
     };
@@ -110,8 +111,9 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
         ScriptSource::Braced(ts) => (
-            oxdock_core::script_from_braced_tokens(ts)
-                .map_err(|e| syn::Error::new(proc_macro2::Span::call_site(), e.to_string()))?,
+            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
+                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
+            })?,
             proc_macro2::Span::call_site(),
         ),
     };
@@ -574,7 +576,7 @@ mod tests {
         };
 
         let normalized =
-            oxdock_core::script_from_braced_tokens(&ts).expect("normalize braced script");
+            oxdock_parser::script_from_braced_tokens(&ts).expect("normalize braced script");
         let expected = [
             "WORKDIR /",
             "MKDIR assets;",
@@ -612,7 +614,7 @@ mod tests {
             WRITE outside.txt outside
             [env:SCOPE_FLAG] WRITE leaked.txt nope
         };
-        let steps = oxdock_core::parse_braced_tokens(&ts).expect("braced script should parse");
+        let steps = oxdock_parser::parse_braced_tokens(&ts).expect("braced script should parse");
         assert_eq!(steps.len(), 13, "expected 13 commands");
         assert_eq!(steps[3].scope_enter, 1, "outer block enter");
         assert_eq!(steps[10].scope_exit, 1, "outer block exit");
