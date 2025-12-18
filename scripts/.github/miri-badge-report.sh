@@ -51,9 +51,17 @@ mkdir -p badges
 } | tee miri-summary.txt
 printf "effective_coverage=%s\n" "${effective_label}" | tee miri-output.env
 printf '{"schemaVersion":1,"label":"miri coverage","message":"%s","color":"%s"}\n' "${effective_label}" "${color}" | tee badges/miri-coverage.json
-cat miri-output.env >> "$GITHUB_OUTPUT"
-{
-  echo "### Miri coverage"
-  echo
+
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  cat miri-output.env >> "$GITHUB_OUTPUT"
+fi
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### Miri coverage"
+    echo
+    cat miri-summary.txt
+  } >> "$GITHUB_STEP_SUMMARY"
+else
   cat miri-summary.txt
-} >> "$GITHUB_STEP_SUMMARY"
+fi

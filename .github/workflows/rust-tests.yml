@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: test_matrix
     outputs:
-      line-coverage: ${{ steps.cov-summary.outputs.line_percent }}
+      line_coverage: ${{ steps.cov-summary.outputs.line_percent }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -253,7 +253,7 @@ jobs:
       - name: Report Miri coverage
         shell: bash
         env:
-          BASE_LINE_COVERAGE: ${{ needs.coverage.outputs.line-coverage }}
+          BASE_LINE_COVERAGE: ${{ needs.coverage.outputs.line_coverage }}
         run: scripts/.github/miri-badge-report.sh
 
       - name: Publish Miri coverage badge
