@@ -3,8 +3,8 @@ members = [
     "crates/internal/oxdock-core",
     "crates/internal/oxdock-fixture",
     "crates/internal/oxdock-fs",
-    "crates/internal/oxdock-process",
     "crates/internal/oxdock-parser",
+    "crates/internal/oxdock-process",
     "oxdock-buildtime-macros",
     "oxdock-cli",
 ]
