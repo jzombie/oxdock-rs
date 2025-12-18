@@ -920,8 +920,7 @@ mod tests {
 
     #[test]
     fn string_dsl_errors_on_unclosed_block_comment() {
-        let err =
-            parse_script("RUN echo hi /*").expect_err("unclosed block comment should error");
+        let err = parse_script("RUN echo hi /*").expect_err("unclosed block comment should error");
         assert!(
             err.to_string().contains("unclosed block comment"),
             "unexpected error message: {err}"
