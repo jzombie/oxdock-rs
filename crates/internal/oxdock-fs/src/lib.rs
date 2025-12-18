@@ -17,6 +17,9 @@ pub mod workspace_fs;
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, to_forward_slashes};
 
+pub mod workspace_snapshot;
+pub use workspace_snapshot::{WorkspaceSnapshot, copy_workspace_to};
+
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
 

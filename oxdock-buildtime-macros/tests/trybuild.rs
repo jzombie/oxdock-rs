@@ -66,6 +66,8 @@ fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
             workspace_path.join("crates/internal/oxdock-fs"),
         )
         .with_version_dependency("rust-embed", "8.9.0")
+        .with_workspace_snapshot_from(&workspace_path)
+        .expect("workspace snapshot")
         .instantiate()
         .expect("failed to instantiate fixture")
 }

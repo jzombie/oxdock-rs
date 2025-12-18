@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, ensure};
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, UnguardedPath, command_path};
+use oxdock_fs::{
+    GuardedPath, GuardedTempDir, PathResolver, UnguardedPath, WorkspaceSnapshot, command_path,
+};
 use oxdock_process::CommandBuilder;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,6 +12,8 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 pub struct FixtureBuilder {
     template: UnguardedPath,
     replacements: BTreeMap<String, DependencyReplacement>,
+    workspace_snapshot: Option<WorkspaceSnapshot>,
+    workspace_root_env: Option<PathBuf>,
 }
 
 enum DependencyReplacement {
@@ -22,6 +26,9 @@ pub struct FixtureInstance {
     #[allow(dead_code)]
     tempdir: GuardedTempDir,
     root: GuardedPath,
+    #[allow(dead_code)]
+    workspace_snapshot: Option<WorkspaceSnapshot>,
+    workspace_root_env: Option<PathBuf>,
 }
 
 impl FixtureBuilder {
@@ -36,6 +43,8 @@ impl FixtureBuilder {
         Ok(Self {
             template: UnguardedPath::new(path),
             replacements: BTreeMap::new(),
+            workspace_snapshot: None,
+            workspace_root_env: None,
         })
     }
 
@@ -59,6 +68,24 @@ impl FixtureBuilder {
         self
     }
 
+    /// Override the workspace root that should be exposed to commands spawned via [`FixtureInstance`].
+    /// When present, the spawned process receives `OXDOCK_WORKSPACE_ROOT`, enabling DSL scripts
+    /// to open a clean snapshot of the original repository while working against the copied fixture.
+    pub fn with_workspace_root(mut self, root: impl AsRef<Path>) -> Self {
+        self.workspace_root_env = Some(root.as_ref().to_path_buf());
+        self
+    }
+
+    /// Snapshot the provided workspace root into a temporary directory and expose it to fixture
+    /// commands as their `OXDOCK_WORKSPACE_ROOT`.
+    pub fn with_workspace_snapshot_from(mut self, root: impl AsRef<Path>) -> Result<Self> {
+        let guard = GuardedPath::new_root(root.as_ref())?;
+        let snapshot = WorkspaceSnapshot::new(&guard)?;
+        self.workspace_root_env = Some(snapshot.root().as_path().to_path_buf());
+        self.workspace_snapshot = Some(snapshot);
+        Ok(self)
+    }
+
     /// Copy the template into a guarded temporary directory, returning a handle
     /// that cleans up automatically on drop.
     pub fn instantiate(self) -> Result<FixtureInstance> {
@@ -72,7 +99,16 @@ impl FixtureBuilder {
             patch_manifest(&resolver, &root, &self.replacements)?;
         }
 
-        Ok(FixtureInstance { tempdir, root })
+        let workspace_root_env = self
+            .workspace_root_env
+            .or_else(|| detect_workspace_root(self.template.as_path()));
+
+        Ok(FixtureInstance {
+            tempdir,
+            root,
+            workspace_snapshot: self.workspace_snapshot,
+            workspace_root_env,
+        })
     }
 }
 
@@ -92,6 +128,9 @@ impl FixtureInstance {
         let mut builder = CommandBuilder::new("cargo");
         let cwd = command_path(self.root()).into_owned();
         builder.current_dir(cwd);
+        if let Some(root) = &self.workspace_root_env {
+            builder.env("OXDOCK_WORKSPACE_ROOT", root);
+        }
         builder
     }
 }
@@ -189,4 +228,18 @@ fn insert_or_replace(table: &mut Table, key: &str, val: Value) {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn detect_workspace_root(template: &Path) -> Option<PathBuf> {
+    let mut cur = template;
+    while let Some(parent) = cur.parent() {
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        {
+            if parent.join(".git").exists() {
+                return Some(parent.to_path_buf());
+            }
+        }
+        cur = parent;
+    }
+    None
 }
