@@ -100,6 +100,26 @@ COPY_GIT release path/to/config.toml app/config/config.toml
 # copy a directory from a specific commit
 COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
 ```
+
+## Guard blocks and multi-line conditions
+
+Guards can now span multiple lines and wrap entire blocks of commands. This makes it easy to express platform or environment specific logic without repeating the same `[]` prefix on every line.
+
+```text
+[ env:PROFILE=release,
+  linux
+]
+WRITE linux-release.txt generated
+
+[platform:windows] {
+    WRITE win.txt hi
+    RUN powershell -Command Write-Host "windows!"
+}
+```
+
+- Square brackets may span multiple lines; commas express `AND`, pipes express `OR`.
+- Attaching a `{ ... }` block to a guard applies the guard to every enclosed command.
+- Guard-only lines without a block apply to the next command, preserving the existing syntax.
 # OxDock
 
 [![Coverage Status](https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main)](https://coveralls.io/github/jzombie/oxdock-rs?branch=main)

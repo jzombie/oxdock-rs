@@ -4,6 +4,7 @@ members = [
     "crates/internal/oxdock-fixture",
     "crates/internal/oxdock-fs",
     "crates/internal/oxdock-process",
+    "crates/internal/oxdock-parser",
     "oxdock-buildtime-macros",
     "oxdock-cli",
 ]
@@ -26,6 +27,7 @@ oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.2.0-a
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.2.0-alpha" }
 oxdock-fixture = { path = "crates/internal/oxdock-fixture", version = "0.2.0-alpha" }
 oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.2.0-alpha" }
+oxdock-parser = { path = "crates/internal/oxdock-parser", version = "0.2.0-alpha" }
 oxdock-process = { path = "crates/internal/oxdock-process", version = "0.2.0-alpha" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"

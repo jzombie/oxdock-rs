@@ -310,6 +310,7 @@ dependencies = [
  "anyhow",
  "indoc",
  "oxdock-fs",
+ "oxdock-parser",
  "oxdock-process",
 ]
 
@@ -331,6 +332,14 @@ dependencies = [
  "rust-embed",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "oxdock-parser"
+version = "0.2.0-alpha"
+dependencies = [
+ "anyhow",
+ "indoc",
 ]
 
 [[package]]
