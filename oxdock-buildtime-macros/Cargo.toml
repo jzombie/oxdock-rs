@@ -30,3 +30,8 @@ oxdock-fixture.workspace = true
 oxdock-fs = { workspace = true, features = ["embed"] }
 oxdock-process.workspace = true
 serial_test.workspace = true
+
+[features]
+default = []
+# Expose test utilities (e.g., DSL tokenizers) for dev/test builds.
+test-support = []

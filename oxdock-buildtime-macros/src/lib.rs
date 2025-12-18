@@ -1,4 +1,17 @@
 use oxdock_fs::{GuardedPath, PathResolver};
+
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::disallowed_types)]
+pub mod test_support {
+    #[macro_export]
+    macro_rules! dsl_tokens {
+        ($($tt:tt)*) => {{
+            use quote::quote;
+            let tokens: proc_macro2::TokenStream = quote! { $($tt)* };
+            tokens
+        }};
+    }
+}
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -639,14 +652,6 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use syn::parse::Parser;
-
-    macro_rules! dsl_tokens {
-        ($($tt:tt)*) => {{
-            use quote::quote;
-            let tokens: proc_macro2::TokenStream = quote! { $($tt)* };
-            tokens
-        }};
-    }
 
     fn guard_root(path: &UnguardedPath) -> GuardedPath {
         GuardedPath::new_root(path.as_path()).unwrap()
