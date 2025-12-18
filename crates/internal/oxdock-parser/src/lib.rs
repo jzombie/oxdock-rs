@@ -172,6 +172,98 @@ struct ScriptLine {
     text: String,
 }
 
+fn strip_comments(input: &str) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_line_comment = false;
+    let mut block_depth = 0usize;
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut double_escape = false;
+    let mut single_escape = false;
+
+    while let Some(ch) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+                output.push(ch);
+            }
+            continue;
+        }
+
+        if block_depth > 0 {
+            if ch == '/' && matches!(chars.peek(), Some('*')) {
+                chars.next();
+                block_depth += 1;
+                continue;
+            }
+            if ch == '*' && matches!(chars.peek(), Some('/')) {
+                chars.next();
+                block_depth -= 1;
+                continue;
+            }
+            if ch == '\n' {
+                output.push('\n');
+            }
+            continue;
+        }
+
+        if !in_double_quote && !in_single_quote && ch == '/' {
+            match chars.peek() {
+                Some('/') => {
+                    chars.next();
+                    in_line_comment = true;
+                    continue;
+                }
+                Some('*') => {
+                    chars.next();
+                    block_depth = 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        output.push(ch);
+
+        if in_double_quote {
+            if double_escape {
+                double_escape = false;
+            } else if ch == '\\' {
+                double_escape = true;
+            } else if ch == '"' {
+                in_double_quote = false;
+            }
+            continue;
+        }
+
+        if in_single_quote {
+            if single_escape {
+                single_escape = false;
+            } else if ch == '\\' {
+                single_escape = true;
+            } else if ch == '\'' {
+                in_single_quote = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_double_quote = true;
+            double_escape = false;
+        } else if ch == '\'' {
+            in_single_quote = true;
+            single_escape = false;
+        }
+    }
+
+    if block_depth > 0 {
+        bail!("unclosed block comment in DSL script");
+    }
+
+    Ok(output)
+}
+
 fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
     let mut text = raw.trim();
     let mut invert_prefix = false;
@@ -306,8 +398,9 @@ struct ScriptParser {
 }
 
 impl ScriptParser {
-    fn new(input: &str) -> Self {
-        let lines = input
+    fn new(input: &str) -> Result<Self> {
+        let stripped = strip_comments(input)?;
+        let lines = stripped
             .lines()
             .enumerate()
             .map(|(idx, raw)| ScriptLine {
@@ -315,7 +408,7 @@ impl ScriptParser {
                 text: raw.to_string(),
             })
             .collect::<VecDeque<_>>();
-        Self {
+        Ok(Self {
             lines,
             steps: Vec::new(),
             guard_stack: vec![Vec::new()],
@@ -323,7 +416,7 @@ impl ScriptParser {
             pending_can_open_block: false,
             pending_scope_enters: 0,
             scope_stack: Vec::new(),
-        }
+        })
     }
 
     fn parse(mut self) -> Result<Vec<Step>> {
@@ -744,7 +837,7 @@ fn build_step_kind(cmd: Command, remainder: &str, line_no: usize) -> Result<Step
 }
 
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
-    ScriptParser::new(input).parse()
+    ScriptParser::new(input)?.parse()
 }
 
 impl Command {
@@ -788,6 +881,50 @@ mod tests {
                 "unexpected error for '{bad}': {err}"
             );
         }
+    }
+
+    #[test]
+    fn string_dsl_supports_rust_style_comments() {
+        let script = indoc! {r#"
+            // leading comment line
+            WORKDIR /tmp // inline comment
+            RUN echo "keep // literal"
+            /* block comment
+               WORKDIR ignored
+               /* nested inner */
+               RUN ignored as well
+            */
+            RUN echo final
+            RUN echo 'literal /* stay */ value'
+        "#};
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 4, "expected 4 executable steps");
+        match &steps[0].kind {
+            StepKind::Workdir(path) => assert_eq!(path, "/tmp"),
+            other => panic!("expected WORKDIR, saw {:?}", other),
+        }
+        match &steps[1].kind {
+            StepKind::Run(cmd) => assert_eq!(cmd, "echo \"keep // literal\""),
+            other => panic!("expected RUN, saw {:?}", other),
+        }
+        match &steps[2].kind {
+            StepKind::Run(cmd) => assert_eq!(cmd, "echo final"),
+            other => panic!("expected RUN, saw {:?}", other),
+        }
+        match &steps[3].kind {
+            StepKind::Run(cmd) => assert_eq!(cmd, "echo 'literal /* stay */ value'"),
+            other => panic!("expected RUN, saw {:?}", other),
+        }
+    }
+
+    #[test]
+    fn string_dsl_errors_on_unclosed_block_comment() {
+        let err =
+            parse_script("RUN echo hi /*").expect_err("unclosed block comment should error");
+        assert!(
+            err.to_string().contains("unclosed block comment"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[test]
