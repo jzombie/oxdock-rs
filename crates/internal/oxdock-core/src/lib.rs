@@ -266,10 +266,7 @@ mod tests {
             "workspace switch inside block should affect local root"
         );
         assert!(
-            snapshot_root
-                .join("snapshot_only.txt")
-                .unwrap()
-                .exists(),
+            snapshot_root.join("snapshot_only.txt").unwrap().exists(),
             "writes after block must target snapshot again"
         );
         assert!(
