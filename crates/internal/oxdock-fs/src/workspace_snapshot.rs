@@ -1,5 +1,9 @@
+#[cfg(windows)]
+use crate::command_path;
 use crate::{GuardedPath, GuardedTempDir, PathResolver};
 use anyhow::{Context, Result, bail};
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+use std::process::Command;
 
 /// Copy the workspace rooted at `source` into `dest`, excluding VCS metadata
 /// such as `.git`. Both paths must be guarded to ensure callers cannot escape
@@ -21,7 +25,13 @@ impl WorkspaceSnapshot {
     pub fn new(source: &GuardedPath) -> Result<Self> {
         let tempdir = GuardedPath::tempdir()?;
         let dest = tempdir.as_guarded_path().clone();
-        copy_workspace_to(source, &dest)?;
+        let tar_path = dest.join("snapshot.tar")?;
+        run_git_archive(source, &tar_path)?;
+        extract_tar(&tar_path, &dest)?;
+        let resolver = PathResolver::new(dest.as_path(), dest.as_path())?;
+        resolver
+            .remove_file(&tar_path)
+            .with_context(|| format!("failed to remove {}", tar_path.display()))?;
         Ok(Self { tempdir })
     }
 
@@ -33,6 +43,60 @@ impl WorkspaceSnapshot {
     pub fn into_tempdir(self) -> GuardedTempDir {
         self.tempdir
     }
+}
+
+fn run_git_archive(source: &GuardedPath, tar_path: &GuardedPath) -> Result<()> {
+    #[cfg(windows)]
+    let tar_arg = command_path(tar_path);
+    #[cfg(windows)]
+    let tar_dest = tar_arg.as_ref();
+    #[cfg(not(windows))]
+    let tar_dest = tar_path.as_path();
+
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+    let status = Command::new("git")
+        .current_dir(source.as_path())
+        .args(["archive", "--format=tar", "--output"])
+        .arg(tar_dest)
+        .arg("HEAD")
+        .status()?;
+    if !status.success() {
+        bail!("git archive failed with status {}", status);
+    }
+    Ok(())
+}
+
+fn extract_tar(tar_path: &GuardedPath, dest: &GuardedPath) -> Result<()> {
+    #[cfg(windows)]
+    let tar_arg = command_path(tar_path);
+    #[cfg(windows)]
+    let tar_src = tar_arg.as_ref();
+    #[cfg(not(windows))]
+    let tar_src = tar_path.as_path();
+
+    #[cfg(windows)]
+    let dest_arg = command_path(dest);
+    #[cfg(windows)]
+    let dest_path = dest_arg.as_ref();
+    #[cfg(not(windows))]
+    let dest_path = dest.as_path();
+
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    let mut cmd = Command::new("tar");
+    #[cfg(unix)]
+    {
+        cmd.arg("--warning=no-timestamp");
+    }
+    let status = cmd
+        .arg("-xf")
+        .arg(tar_src)
+        .arg("-C")
+        .arg(dest_path)
+        .status()?;
+    if !status.success() {
+        bail!("tar failed with status {}", status);
+    }
+    Ok(())
 }
 
 fn copy_dir_filtered(
