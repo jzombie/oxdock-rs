@@ -5,6 +5,7 @@ embed! {
     script: {
         WORKDIR /
 
+        // The trybuild harness sets TEST_SCOPE=1 so this block executes during the test.
         [env:TEST_SCOPE] {
             WORKDIR scoped
             WRITE inner.txt inside
