@@ -1,6 +1,4 @@
 use anyhow::{Context, Result, bail};
-#[cfg(windows)]
-use oxdock_fs::command_path;
 use oxdock_fs::{GuardedPath, PathResolver, copy_workspace_to};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
