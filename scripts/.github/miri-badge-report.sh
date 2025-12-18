@@ -21,19 +21,6 @@ if [ "$total" -gt 0 ]; then
   ratio_label="${runnable_ratio_value}%"
 fi
 
-percent_int=$(printf "%.0f" "$runnable_ratio_value")
-if [ "$percent_int" -ge 90 ]; then
-  color="brightgreen"
-elif [ "$percent_int" -ge 75 ]; then
-  color="green"
-elif [ "$percent_int" -ge 50 ]; then
-  color="yellowgreen"
-elif [ "$percent_int" -gt 0 ]; then
-  color="orange"
-else
-  color="lightgrey"
-fi
-
 base_cov="${BASE_LINE_COVERAGE:-0}"
 if [ -z "$base_cov" ]; then
   base_cov="0"
@@ -41,6 +28,16 @@ fi
 
 effective_cov=$(awk -v base="$base_cov" -v ratio="$runnable_ratio_value" 'BEGIN { printf "%.1f", (base * ratio) / 100 }')
 effective_label="${effective_cov}%"
+effective_int=$(printf "%.0f" "$effective_cov")
+if [ "$effective_int" -ge 90 ]; then
+  color="brightgreen"
+elif [ "$effective_int" -ge 80 ]; then
+  color="green"
+elif [ "$effective_int" -ge 70 ]; then
+  color="yellow"
+else
+  color="red"
+fi
 
 mkdir -p badges
 {
