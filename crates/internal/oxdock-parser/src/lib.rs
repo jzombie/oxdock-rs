@@ -443,10 +443,10 @@ impl ScriptParser {
         if self.guard_stack.len() != 1 {
             bail!("unclosed guard block at end of script");
         }
-        if let Some(pending) = &self.pending_guards {
-            if !pending.is_empty() {
-                bail!("guard declared on final lines without a following command");
-            }
+        if let Some(pending) = &self.pending_guards
+            && !pending.is_empty()
+        {
+            bail!("guard declared on final lines without a following command");
         }
 
         Ok(self.steps)
@@ -506,8 +506,8 @@ impl ScriptParser {
             }
         };
 
-        if remainder_trimmed.starts_with('{') {
-            let after = remainder_trimmed[1..].trim_start();
+        if let Some(after_brace) = remainder_trimmed.strip_prefix('{') {
+            let after = after_brace.trim_start();
             if !after.is_empty() {
                 self.push_front(closing_line, after.to_string());
             }
@@ -638,15 +638,16 @@ impl ScriptParser {
         let cmd = Command::parse(op_str)
             .ok_or_else(|| anyhow!("line {}: unknown instruction '{}'", line_no, op_str))?;
         let mut remainder = rest_str.to_string();
-        if cmd != Command::Run && cmd != Command::RunBg {
-            if let Some(idx) = remainder.find(';') {
-                let first = remainder[..idx].trim().to_string();
-                let tail = remainder[idx + 1..].trim();
-                if !tail.is_empty() {
-                    self.push_front(line_no, tail.to_string());
-                }
-                remainder = first;
+        if cmd != Command::Run
+            && cmd != Command::RunBg
+            && let Some(idx) = remainder.find(';')
+        {
+            let first = remainder[..idx].trim().to_string();
+            let tail = remainder[idx + 1..].trim();
+            if !tail.is_empty() {
+                self.push_front(line_no, tail.to_string());
             }
+            remainder = first;
         }
 
         let guards = self.guard_context(inline_guards);
