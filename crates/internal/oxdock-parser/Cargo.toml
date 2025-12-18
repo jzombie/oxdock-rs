@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-parser"
-description = "Parser and AST definitions for the OxDock DSL"
+description = "Parser and AST definitions for the OxDock DSL."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
