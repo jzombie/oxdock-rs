@@ -1,6 +1,6 @@
 [package]
 name = "fixture-build-exit-fail"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -8,5 +8,5 @@ license = "Apache-2.0"
 [workspace]
 
 [dependencies]
-oxdock-buildtime-macros = { path = "../../.." }
-rust-embed = { version = "8.9.0", features = ["include-exclude"] }
+oxdock-buildtime-macros.workspace = true
+oxdock-fs = { workspace = true, features = ["embed"] }

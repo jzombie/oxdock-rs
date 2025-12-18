@@ -15,6 +15,12 @@
   <a href="https://deepwiki.com/jzombie/rust-oxdock">
     <img src="https://deepwiki.com/badge.svg" alt="DeepWiki" />
   </a>
+  <a href="https://coveralls.io/github/jzombie/oxdock-rs?branch=main">
+    <img src="https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main" alt="Coverage Status" />
+  </a>
+  <a href="#miri-coverage">
+    <img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjzombie%2Foxdock-rs%2Fbadges%2Fmiri-coverage.json" alt="Miri Coverage" />
+  </a>
 </div>
 
 # OxDock
@@ -22,10 +28,16 @@
 
 OxDock is a Docker-inspired language that is [run during compile-time](./oxdock-buildtime-macros/) of Rust programs, which embeds resources into the binary's data section, not allocating to heap when the program starts. It uses [rust-embed](https://crates.io/crates/rust-embed) under the hood, for file-like access to embedded resources.
 
+Beyond the macro, the same DSL drives a native CLI so scripts can orchestrate cross-platform workflows without containers. Unlike Docker, commands execute directly on the host, can be guarded by platform/env conditions, and can run inside scoped blocks so changes to `ENV` or `WORKDIR` don’t leak. OxDock happily complements container workflows too: you can invoke Docker from an OxDock script—or even install Docker—while still keeping the DSL portable.
+
+## Variants
+
 OxDock comes in two variants, each of which are independent of the other, but share the same core:
 
 - [oxdock-buildtime-macros](./oxdock-buildtime-macros/): Provides a Rust build-time dependency which runs OxDock scripts during the compilation of a Rust program.
 - [oxdock-cli](./oxdock-cli/): Command-line interface for running OxDock scripts from the command line.
+
+## Goals
 
 OxDock has a simple goal to provide a simple language that works the same across Mac, Linux, and Windows, including support for background processes, symlinks, and boolean conditionals (such as env and platform-based command filtering), which runs the same whether it's used as a preprocessing step in a build-time Rust macro, or as a CLI program, regardless of platform it is building on.
 
@@ -34,11 +46,55 @@ Every internal command is engineered to run the same way across platforms, excep
 ... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor.  
 ... TODO: Show example
 
-## Testing
+## Testing & Coverage
+
+### Testing
 
 Testing is performed across Linux, Mac, and Windows environments, and UB (Undefined Behavior) testing is handled by [Miri](https://github.com/rust-lang/miri).
 
 There is strong prioritzation in keeping unit and integration tests compatible with Miri, because doing so also encourages clean separation of process and filesystem modeling from direct OS calls, avoiding scattered filesystem and process usage throughout the codebase.
+
+### Coverage reporting
+
+#### LLVM line coverage (cargo-llvm-cov)
+
+The `coverage (cargo-llvm-cov)` GitHub Actions job installs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and publishes [`lcov`](https://github.com/linux-test-project/lcov) data to Coveralls. Once the repository is enabled on Coveralls, pushes and pull requests to `main` automatically update the badge above.
+
+To reproduce the report locally (requires the nightly LLVM tools component):
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+```
+
+#### Miri coverage
+
+The CI `miri` job monitors how many workspace unit tests can run under [`cargo miri`](https://github.com/rust-lang/miri). On pushes to `main`, the job publishes a badge description (`badges/miri-coverage.json` on the `badges` branch) that backs the Miri coverage badge above.
+
+To keep the badge grounded in real coverage reporting, the workflow multiplies two signals:
+
+1. **Runnable test ratio:** how many workspace tests are runnable under Miri vs. the total (`cargo miri test -- --list`).
+2. **LLVM line coverage baseline:** the percent reported by `cargo llvm-cov --summary-only` (the same value sent to Coveralls).
+
+The badge therefore shows an approximate “effective Miri coverage” (baseline coverage × runnable ratio), which can never exceed the standard coverage percentage but gives a tangible sense of how much of the tested surface area is validated under the interpreter.
+
+To test the calculation locally without waiting for CI:
+
+```bash
+cargo llvm-cov --workspace --all-features --summary-only > coverage-summary.txt
+BASE_LINE_COVERAGE=$(awk '/^TOTAL/ {print $10}' coverage-summary.txt | tr -d '%' | head -n1) \
+  scripts/.github/miri-badge-report.sh
+```
+
+The helper emits the same badge JSON (`badges/miri-coverage.json`) and summary text used by CI, making it easy to confirm the numbers before opening a PR.
+
+If you run new tests under Miri locally, you can sanity-check parity with CI via:
+
+```bash
+cargo +nightly miri setup
+cargo +nightly miri test --workspace --all-features --lib --tests
+```
 
 ## Path Separators
 
@@ -100,51 +156,30 @@ COPY_GIT release path/to/config.toml app/config/config.toml
 # copy a directory from a specific commit
 COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
 ```
-# OxDock
 
-[![Coverage Status](https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main)](https://coveralls.io/github/jzombie/oxdock-rs?branch=main)
-[![Miri Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjzombie%2Foxdock-rs%2Fbadges%2Fmiri-coverage.json)](#miri-coverage)
+## Guard blocks and multi-line conditions
 
-OxDock is a Rust workspace that explores guarded filesystem access, process isolation, and deterministic tooling. The project is still evolving and its README will grow as more components are documented.
+Guards can now span multiple lines and wrap entire blocks of commands. This makes it easy to express platform or environment specific logic without repeating the same `[]` prefix on every line.
 
-## Coverage reporting
+```text
+[ env:PROFILE=release,
+  linux
+]
+WRITE linux-release.txt generated
 
-### LLVM line coverage (cargo-llvm-cov)
-
-The `coverage (cargo-llvm-cov)` GitHub Actions job installs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and publishes [`lcov`](https://github.com/linux-test-project/lcov) data to Coveralls. Once the repository is enabled on Coveralls, pushes and pull requests to `main` automatically update the badge above.
-
-To reproduce the report locally (requires the nightly LLVM tools component):
-
-```bash
-cargo install cargo-llvm-cov
-rustup component add llvm-tools-preview
-cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+[platform:windows] {
+    WRITE win.txt hi
+    RUN powershell -Command Write-Host "windows!"
+}
 ```
 
-### Miri coverage
+- Square brackets may span multiple lines; commas express `AND`, pipes express `OR`.
+- Attaching a `{ ... }` block to a guard applies the guard to every enclosed command.
+- Guard-only lines without a block apply to the next command, preserving the existing syntax.
+- Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
 
-The CI `miri` job monitors how many workspace unit tests can run under [`cargo miri`](https://github.com/rust-lang/miri). On pushes to `main`, the job publishes a badge description (`badges/miri-coverage.json` on the `badges` branch) that backs the Miri coverage badge above.
+## Comments in DSL scripts
 
-To keep the badge grounded in real coverage reporting, the workflow multiplies two signals:
-
-1. **Runnable test ratio:** how many workspace tests are runnable under Miri vs. the total (`cargo miri test -- --list`).
-2. **LLVM line coverage baseline:** the percent reported by `cargo llvm-cov --summary-only` (the same value sent to Coveralls).
-
-The badge therefore shows an approximate “effective Miri coverage” (baseline coverage × runnable ratio), which can never exceed the standard coverage percentage but gives a tangible sense of how much of the tested surface area is validated under the interpreter.
-
-To test the calculation locally without waiting for CI:
-
-```bash
-cargo llvm-cov --workspace --all-features --summary-only > coverage-summary.txt
-BASE_LINE_COVERAGE=$(awk '/^TOTAL/ {print $10}' coverage-summary.txt | tr -d '%' | head -n1) \
-  scripts/.github/miri-badge-report.sh
-```
-
-The helper emits the same badge JSON (`badges/miri-coverage.json`) and summary text used by CI, making it easy to confirm the numbers before opening a PR.
-
-If you run new tests under Miri locally, you can sanity-check parity with CI via:
-
-```bash
-cargo +nightly miri setup
-cargo +nightly miri test --workspace --all-features --lib --tests
-```
+- **String / file-based DSL (the original format):** The parser strips three comment styles before interpreting commands. Lines that start with `#` or `//` are ignored entirely, and C-style `/* ... */` block comments (with nesting) are removed while preserving newlines so error spans remain stable. Comment markers inside quoted strings stay intact—only actual comment regions are dropped.
+- **Braced Rust DSL (`script: { ... }`):** Because this form is parsed by Rust first and only later normalized into the OxDock DSL, it inherits Rust's syntax. Use standard Rust comments (`//`, `/* ... */`) inside the block; `#` cannot start a comment because it would be parsed as a macro/attribute prefix before the DSL ever sees it.
+- **Mixing forms:** When writing shared snippets that might appear in both forms, stick to `//` or `/* ... */` comments. They work in the classic string/file DSL (thanks to the normalizer) and in the Rust DSL via Rust's own lexer, so you avoid surprises when switching between representations.

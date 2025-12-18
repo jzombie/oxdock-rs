@@ -17,9 +17,16 @@ build = []
 [lib]
 proc-macro = true
 
+[features]
+default = []
+# Expose test utilities (e.g., DSL tokenizers) for dev/test builds.
+test-support = []
+
 [dependencies]
-oxdock-core.workspace = true
+anyhow.workspace = true
+oxdock-core = { workspace = true, features = ["token-input"] }
 oxdock-fs.workspace = true
+oxdock-parser = { workspace = true, features = ["token-input"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

@@ -23,9 +23,25 @@ embed! {
 		RUN npm run build
 		WORKSPACE SNAPSHOT
 		COPY client/dist prebuilt/client/dist
-	"#,
+"#,
 	out_dir: "prebuilt",
 }
+
+// You can also embed scripts using a Rust-style DSL without raw strings.
+embed! {
+    name: InlineAssets,
+    script: {
+        [env:PROFILE=release] {
+            WORKDIR /client
+            RUN npm run build
+        }
+        WORKDIR /
+        COPY client/dist prebuilt/dist
+    },
+    out_dir: "prebuilt",
+}
+// Blocks use scoped environments: WORKDIR/WORKSPACE/ENV changes inside the braces
+// reset automatically after the block ends, so temporary setup stays contained.
 
 // At runtime you can use the generated rust-embed struct:
 // if let Some(bytes) = DemoAssets::get("client/dist/index.html") { ... }

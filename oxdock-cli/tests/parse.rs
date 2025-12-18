@@ -155,3 +155,36 @@ fn parse_semicolon_splits_multiple_instructions() {
         _ => panic!("expected second WRITE"),
     }
 }
+
+#[test]
+fn parse_multi_line_guard_block() {
+    let script = indoc! {r#"
+        [ env:MODE=debug,
+          linux
+        ]
+        WRITE guarded.txt ok
+    "#};
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].guards.len(), 1);
+    match &steps[0].kind {
+        StepKind::Write { path, .. } => assert_eq!(path, "guarded.txt"),
+        _ => panic!("expected WRITE"),
+    }
+}
+
+#[test]
+fn parse_guarded_block_applies_to_all_commands() {
+    let script = indoc! {r#"
+        [env:TEST=1] {
+            WRITE one.txt 1
+            WRITE two.txt 2
+        }
+        WRITE three.txt 3
+    "#};
+    let steps = parse_script(script).expect("parse should succeed");
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0].guards.len(), 1);
+    assert_eq!(steps[1].guards.len(), 1);
+    assert!(steps[2].guards.is_empty());
+}

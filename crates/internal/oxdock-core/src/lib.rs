@@ -48,6 +48,8 @@ mod tests {
         let steps = vec![Step {
             guards: Vec::new(),
             kind: StepKind::Run(cmd.to_string()),
+            scope_enter: 0,
+            scope_exit: 0,
         }];
 
         run_steps(&root, &steps).unwrap();
@@ -176,6 +178,101 @@ mod tests {
             "platform guard should skip on unix and run elsewhere"
         );
         assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
+    }
+
+    #[test]
+    fn guard_block_env_scope_restores_after_exit() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+
+        let script = indoc!(
+            r#"
+            ENV RUN=1
+            [env:RUN] {
+                ENV INNER=1
+                WRITE scoped.txt hit
+            }
+            [env:INNER] WRITE leak.txt nope
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(&root, &steps).unwrap();
+
+        assert!(exists(&root, "scoped.txt"), "block should run");
+        assert!(
+            !exists(&root, "leak.txt"),
+            "env set inside block must not leak outward"
+        );
+    }
+
+    #[test]
+    fn guard_block_workdir_scope_restores_after_exit() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+
+        let script = indoc!(
+            r#"
+            MKDIR nested
+            ENV RUN=1
+            [env:RUN] {
+                WORKDIR nested
+                WRITE inside.txt ok
+            }
+            WRITE outside.txt root
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(&root, &steps).unwrap();
+
+        assert!(
+            exists(&root, "nested/inside.txt"),
+            "inside write should land in nested dir"
+        );
+        assert!(
+            exists(&root, "outside.txt"),
+            "workdir should reset after block exits"
+        );
+        assert!(
+            !exists(&root, "nested/outside.txt"),
+            "writes after block should not stay scoped"
+        );
+    }
+
+    #[test]
+    fn workspace_scope_restores_after_guard_block() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let local = GuardedPath::tempdir().unwrap();
+        let snapshot_root = guard_root(&snapshot);
+        let local_root = guard_root(&local);
+
+        let script = indoc!(
+            r#"
+            ENV RUN=1
+            [env:RUN] {
+                WORKSPACE LOCAL
+                WRITE local_only.txt inside
+            }
+            WRITE snapshot_only.txt outside
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
+
+        assert!(
+            local_root.join("local_only.txt").unwrap().exists(),
+            "workspace switch inside block should affect local root"
+        );
+        assert!(
+            snapshot_root.join("snapshot_only.txt").unwrap().exists(),
+            "writes after block must target snapshot again"
+        );
+        assert!(
+            !local_root.join("snapshot_only.txt").unwrap().exists(),
+            "workspace should reset after guard block exits"
+        );
     }
 
     #[test]

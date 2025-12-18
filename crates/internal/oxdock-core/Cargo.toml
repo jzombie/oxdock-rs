@@ -14,9 +14,14 @@ normal = ["tracing"]
 development = []
 build = []
 
+[features]
+default = []
+token-input = ["oxdock-parser/token-input"]
+
 [dependencies]
 anyhow.workspace = true
 oxdock-fs.workspace = true
+oxdock-parser = { workspace = true }
 oxdock-process.workspace = true
 
 [dev-dependencies]

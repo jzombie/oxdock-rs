@@ -95,7 +95,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fixture-build-exit-fail"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 dependencies = [
  "oxdock-buildtime-macros",
  "rust-embed",
@@ -168,7 +168,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "oxdock-buildtime-macros"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 dependencies = [
  "oxdock-core",
  "oxdock-fs",
@@ -180,16 +180,17 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
+ "oxdock-parser",
  "oxdock-process",
 ]
 
 [[package]]
 name = "oxdock-fs"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -197,8 +198,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxdock-parser"
+version = "0.3.0-alpha"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "oxdock-process"
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",

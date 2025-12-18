@@ -28,14 +28,20 @@ fn script_runs_copy_and_symlink() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("client".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Run("echo ok".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -43,6 +49,8 @@ fn script_runs_copy_and_symlink() {
                 from: "./client/dist".into(),
                 to: "./client/dist-copy".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -50,10 +58,14 @@ fn script_runs_copy_and_symlink() {
                 from: "./client/dist".into(),
                 to: "./server/dist".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Run("echo ok".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
