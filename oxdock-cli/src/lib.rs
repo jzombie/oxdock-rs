@@ -98,8 +98,7 @@ where
 
     // Materialize source tree without .git
     if prepare_snapshot {
-        copy_workspace_to(&workspace_root, &temp_root)
-            .context("failed to snapshot workspace")?;
+        copy_workspace_to(&workspace_root, &temp_root).context("failed to snapshot workspace")?;
     }
 
     // Interpret a tiny Dockerfile-ish script

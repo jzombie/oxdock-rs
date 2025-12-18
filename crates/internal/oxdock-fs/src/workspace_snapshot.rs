@@ -46,10 +46,7 @@ fn copy_dir_filtered(
         .with_context(|| format!("creating {}", dst.display()))?;
 
     for entry in source_resolver.read_dir_entries(src)? {
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
         if name == ".git" || name == "target" {
             continue;
         }
@@ -63,11 +60,7 @@ fn copy_dir_filtered(
             )
         })?;
         let dst_child = dst.join(&name).with_context(|| {
-            format!(
-                "constructing destination entry {}/{}",
-                dst.display(),
-                name
-            )
+            format!("constructing destination entry {}/{}", dst.display(), name)
         })?;
 
         let ft = entry.file_type().with_context(|| {
