@@ -1,5 +1,6 @@
 [package]
 name = "oxdock-fs"
+description = "Guarded filesystem utilities and workspace snapshots for OxDock"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

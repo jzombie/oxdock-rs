@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-core"
-description = "Placeholder crate"
+description = "OxDock workflow engine for parsing and executing oxfile scripts"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
