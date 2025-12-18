@@ -291,7 +291,10 @@ impl WorkspaceFs for PathResolver {
             Ok(())
         }
         #[cfg(not(unix))]
-        Ok(())
+        {
+            let _ = (path, mode);
+            Ok(())
+        }
     }
 
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
