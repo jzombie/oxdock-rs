@@ -1,6 +1,13 @@
 use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, VecDeque};
 
+#[cfg(feature = "token-input")]
+mod macro_input;
+#[cfg(feature = "token-input")]
+pub use macro_input::parse_braced_tokens;
+#[cfg(feature = "token-input")]
+pub use macro_input::{DslMacroInput, ScriptSource, script_from_braced_tokens};
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     Workdir,

@@ -12,12 +12,10 @@ pub mod test_support {
         }};
     }
 }
+use oxdock_core::{DslMacroInput, ScriptSource};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_macro_input;
-
-mod script_input;
-use script_input::{DslMacroInput, ScriptSource, normalize_braced_script};
 
 // TODO: Update example and don't ignore
 /// Macro that runs the DSL at compile-time, materializes assets into a temp
@@ -57,7 +55,11 @@ pub fn prepare(input: TokenStream) -> TokenStream {
 fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
-        ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
+        ScriptSource::Braced(ts) => (
+            oxdock_core::script_from_braced_tokens(ts)
+                .map_err(|e| syn::Error::new(proc_macro2::Span::call_site(), e.to_string()))?,
+            proc_macro2::Span::call_site(),
+        ),
     };
 
     let manifest_resolver =
@@ -120,7 +122,11 @@ fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<sy
 fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
     let (script_src, span) = match &input.script {
         ScriptSource::Literal(lit) => (lit.value(), lit.span()),
-        ScriptSource::Braced(ts) => (normalize_braced_script(ts)?, proc_macro2::Span::call_site()),
+        ScriptSource::Braced(ts) => (
+            oxdock_core::script_from_braced_tokens(ts)
+                .map_err(|e| syn::Error::new(proc_macro2::Span::call_site(), e.to_string()))?,
+            proc_macro2::Span::call_site(),
+        ),
     };
 
     let manifest_resolver =
@@ -449,7 +455,7 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 #[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
-    use oxdock_core::{StepKind, parse_script};
+    use oxdock_core::StepKind;
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use serial_test::serial;
@@ -571,7 +577,8 @@ mod tests {
             RUN echo && ls
         };
 
-        let normalized = normalize_braced_script(&ts).expect("normalize braced script");
+        let normalized =
+            oxdock_core::script_from_braced_tokens(&ts).expect("normalize braced script");
         let expected = [
             "WORKDIR /",
             "MKDIR assets",
@@ -604,8 +611,7 @@ mod tests {
             WRITE outside.txt outside
             [env:SCOPE_FLAG] WRITE leaked.txt nope
         };
-        let normalized = normalize_braced_script(&ts).expect("normalize braced script");
-        let steps = parse_script(&normalized).expect("braced script should parse");
+        let steps = oxdock_core::parse_braced_tokens(&ts).expect("braced script should parse");
         assert_eq!(steps.len(), 13, "expected 13 commands");
         assert_eq!(steps[3].scope_enter, 1, "outer block enter");
         assert_eq!(steps[10].scope_exit, 1, "outer block exit");

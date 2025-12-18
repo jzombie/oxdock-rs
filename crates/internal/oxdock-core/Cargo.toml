@@ -17,10 +17,14 @@ build = []
 [dependencies]
 anyhow.workspace = true
 oxdock-fs.workspace = true
-oxdock-parser.workspace = true
+oxdock-parser = { workspace = true }
 oxdock-process.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
 oxdock-fs = { workspace = true, features = ["mock-fs"] }
 oxdock-process = { workspace = true, features = ["mock-process"] }
+
+[features]
+default = []
+token-input = ["oxdock-parser/token-input"]

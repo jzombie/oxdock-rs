@@ -340,6 +340,8 @@ version = "0.2.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
+ "proc-macro2",
+ "syn",
 ]
 
 [[package]]
