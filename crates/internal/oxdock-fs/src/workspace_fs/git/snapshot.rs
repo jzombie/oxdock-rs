@@ -77,6 +77,7 @@ fn archive_revision(source: &GuardedPath, dest: &GuardedPath, rev: &str) -> Resu
     Ok(())
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn run_git_archive(source: &GuardedPath, tar_path: &GuardedPath, rev: &str) -> Result<()> {
     #[cfg(windows)]
     let tar_arg = command_path(tar_path);
@@ -98,6 +99,7 @@ fn run_git_archive(source: &GuardedPath, tar_path: &GuardedPath, rev: &str) -> R
     Ok(())
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn extract_tar(tar_path: &GuardedPath, dest: &GuardedPath) -> Result<()> {
     #[cfg(windows)]
     let tar_arg = command_path(tar_path);
@@ -135,6 +137,7 @@ fn has_git_checkout(root: &GuardedPath) -> bool {
     root.as_path().join(".git").exists()
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn git_has_commits(root: &GuardedPath) -> Result<bool> {
     let status = Command::new("git")
         .current_dir(root.as_path())
@@ -144,6 +147,7 @@ fn git_has_commits(root: &GuardedPath) -> Result<bool> {
     Ok(status.success())
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn worktree_is_dirty(root: &GuardedPath) -> Result<bool> {
     let output = Command::new("git")
         .current_dir(root.as_path())

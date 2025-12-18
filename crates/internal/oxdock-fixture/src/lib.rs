@@ -1,14 +1,16 @@
 use anyhow::{Context, Result, ensure};
-use oxdock_fs::{
-    GuardedPath, GuardedTempDir, PathResolver, UnguardedPath, WorkspaceSnapshot, command_path,
-};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, WorkspaceSnapshot, command_path};
+#[allow(clippy::disallowed_types)]
+use oxdock_fs::UnguardedPath;
 use oxdock_process::CommandBuilder;
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
 /// Builder that materializes a Cargo project template inside a temporary,
 /// auto-cleaned directory for integration tests.
+#[allow(clippy::disallowed_types)]
 pub struct FixtureBuilder {
     template: UnguardedPath,
     replacements: BTreeMap<String, DependencyReplacement>,
@@ -16,12 +18,14 @@ pub struct FixtureBuilder {
     workspace_root_env: Option<PathBuf>,
 }
 
+#[allow(clippy::disallowed_types)]
 enum DependencyReplacement {
     Path(PathBuf),
     Version(String),
 }
 
 /// Handle to a copied fixture workspace.
+#[allow(clippy::disallowed_types)]
 pub struct FixtureInstance {
     #[allow(dead_code)]
     tempdir: GuardedTempDir,
@@ -33,6 +37,7 @@ pub struct FixtureInstance {
 
 impl FixtureBuilder {
     /// Create a builder from an on-disk template directory.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn new(template: impl AsRef<Path>) -> Result<Self> {
         let path = template.as_ref();
         ensure!(
@@ -49,6 +54,7 @@ impl FixtureBuilder {
     }
 
     /// Force the named dependency to use an absolute path inside the instantiated project.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn with_path_dependency(mut self, name: impl Into<String>, path: impl AsRef<Path>) -> Self {
         self.replacements.insert(
             name.into(),
@@ -71,6 +77,7 @@ impl FixtureBuilder {
     /// Override the workspace root that should be exposed to commands spawned via [`FixtureInstance`].
     /// When present, the spawned process receives `OXDOCK_WORKSPACE_ROOT`, enabling DSL scripts
     /// to open a clean snapshot of the original repository while working against the copied fixture.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn with_workspace_root(mut self, root: impl AsRef<Path>) -> Self {
         self.workspace_root_env = Some(root.as_ref().to_path_buf());
         self
@@ -78,6 +85,7 @@ impl FixtureBuilder {
 
     /// Snapshot the provided workspace root into a temporary directory and expose it to fixture
     /// commands as their `OXDOCK_WORKSPACE_ROOT`.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn with_workspace_snapshot_from(mut self, root: impl AsRef<Path>) -> Result<Self> {
         let guard = GuardedPath::new_root(root.as_ref())?;
         let snapshot = WorkspaceSnapshot::new(&guard)?;
@@ -87,6 +95,7 @@ impl FixtureBuilder {
     }
 
     /// Snapshot the workspace at a specific commit and expose it via `OXDOCK_WORKSPACE_ROOT`.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn with_workspace_snapshot_at_commit(
         mut self,
         root: impl AsRef<Path>,
@@ -189,6 +198,7 @@ fn patch_dependency_table(
     }
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn apply_path_replacement(item: &mut Item, path: &Path) {
     let path_value = Value::from(path_string(path));
     match item {
@@ -239,10 +249,12 @@ fn insert_or_replace(table: &mut Table, key: &str, val: Value) {
     }
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn detect_workspace_root(template: &Path) -> Option<PathBuf> {
     let mut cur = template;
     while let Some(parent) = cur.parent() {

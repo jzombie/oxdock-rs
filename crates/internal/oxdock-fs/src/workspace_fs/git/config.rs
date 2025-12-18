@@ -1,5 +1,7 @@
 use crate::workspace_fs::GuardedPath;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
+#[cfg(not(miri))]
+use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct GitIdentity {
@@ -87,6 +89,7 @@ fn write_config(repo: &GuardedPath, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(miri))]
 fn env_fallback(keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Ok(val) = std::env::var(key) {
