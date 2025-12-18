@@ -15,7 +15,9 @@ use anyhow::bail;
 #[allow(clippy::disallowed_types)]
 use std::path::PathBuf;
 
+pub mod config;
 pub mod snapshot;
+pub use config::{GitIdentity, ensure_git_identity};
 pub use snapshot::{WorkspaceSnapshot, copy_workspace_to};
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]

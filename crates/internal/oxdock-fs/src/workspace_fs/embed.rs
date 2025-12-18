@@ -19,7 +19,9 @@ macro_rules! define_embed {
 
         #[cfg(miri)]
         impl $name {
-            pub fn get(_file: &str) -> Option<$crate::workspace_fs::embed::rust_embed::EmbeddedFile> {
+            pub fn get(
+                _file: &str,
+            ) -> Option<$crate::workspace_fs::embed::rust_embed::EmbeddedFile> {
                 None
             }
             pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {

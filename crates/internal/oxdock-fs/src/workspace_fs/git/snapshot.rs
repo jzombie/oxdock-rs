@@ -1,5 +1,7 @@
 #[cfg(windows)]
 use crate::workspace_fs::command_path;
+#[cfg(test)]
+use crate::workspace_fs::git::ensure_git_identity;
 use crate::workspace_fs::{GuardedPath, GuardedTempDir, PathResolver};
 use anyhow::{Context, Result, bail};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -241,8 +243,7 @@ mod tests {
         let root = workspace.as_guarded_path().clone();
         let resolver = PathResolver::new(root.as_path(), root.as_path())?;
         git(&root, ["init"])?;
-        git(&root, ["config", "user.email", "test@example.com"])?;
-        git(&root, ["config", "user.name", "Test User"])?;
+        ensure_git_identity(&root)?;
 
         let committed = root.join("README.txt")?;
         resolver.write_file(&committed, b"initial")?;
@@ -274,8 +275,7 @@ mod tests {
         let root = workspace.as_guarded_path().clone();
         let resolver = PathResolver::new(root.as_path(), root.as_path())?;
         git(&root, ["init"])?;
-        git(&root, ["config", "user.email", "test@example.com"])?;
-        git(&root, ["config", "user.name", "Test User"])?;
+        ensure_git_identity(&root)?;
 
         let committed = root.join("README.txt")?;
         resolver.write_file(&committed, b"initial")?;

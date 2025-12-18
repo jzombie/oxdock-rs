@@ -1,5 +1,5 @@
 use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
 use oxdock_process::CommandBuilder;
 
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
@@ -421,12 +421,8 @@ fn copy_git_via_script_simple() {
         .arg(".")
         .status()
         .expect("git add failed");
-    // Commit using `-c` so we don't write any repo config
+    ensure_git_identity(&repo).expect("ensure git identity");
     git_cmd(&repo)
-        .arg("-c")
-        .arg("user.email=test@example.com")
-        .arg("-c")
-        .arg("user.name=Test User")
         .arg("commit")
         .arg("-m")
         .arg("initial")
@@ -476,11 +472,8 @@ fn copy_git_directory_via_script() {
         .arg(".")
         .status()
         .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
     git_cmd(&repo)
-        .arg("-c")
-        .arg("user.email=test@example.com")
-        .arg("-c")
-        .arg("user.name=Test User")
         .arg("commit")
         .arg("-m")
         .arg("initial")

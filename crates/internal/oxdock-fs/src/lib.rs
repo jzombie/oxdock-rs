@@ -8,10 +8,12 @@ pub fn is_isolated() -> bool {
 }
 
 pub mod workspace_fs;
+pub use workspace_fs::git::{
+    GitIdentity, WorkspaceSnapshot, copy_workspace_to, ensure_git_identity,
+};
+pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, to_forward_slashes};
-pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
-pub use workspace_fs::git::{WorkspaceSnapshot, copy_workspace_to};
 
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
