@@ -5,10 +5,10 @@ pub use rust_embed;
 macro_rules! define_embed {
     ($name:ident, $folder:expr) => {
         #[cfg(not(miri))]
-        use $crate::embed::rust_embed;
+        use $crate::workspace_fs::embed::rust_embed;
 
         #[cfg(not(miri))]
-        #[derive($crate::embed::rust_embed::RustEmbed)]
+        #[derive($crate::workspace_fs::embed::rust_embed::RustEmbed)]
         #[folder = $folder]
         // Force inclusion of all files, overriding .gitignore which might ignore the generated folder
         #[include = "**/*"]
@@ -19,7 +19,7 @@ macro_rules! define_embed {
 
         #[cfg(miri)]
         impl $name {
-            pub fn get(_file: &str) -> Option<$crate::embed::rust_embed::EmbeddedFile> {
+            pub fn get(_file: &str) -> Option<$crate::workspace_fs::embed::rust_embed::EmbeddedFile> {
                 None
             }
             pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {

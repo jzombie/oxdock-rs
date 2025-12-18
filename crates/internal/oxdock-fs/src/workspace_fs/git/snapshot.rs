@@ -1,6 +1,6 @@
 #[cfg(windows)]
-use crate::command_path;
-use crate::{GuardedPath, GuardedTempDir, PathResolver};
+use crate::workspace_fs::command_path;
+use crate::workspace_fs::{GuardedPath, GuardedTempDir, PathResolver};
 use anyhow::{Context, Result, bail};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::process::Command;

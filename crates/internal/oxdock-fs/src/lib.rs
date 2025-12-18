@@ -7,18 +7,11 @@ pub fn is_isolated() -> bool {
     cfg!(miri)
 }
 
-#[cfg(feature = "embed")]
-pub mod embed;
-
-pub mod policy;
-pub use policy::{GuardPolicy, PolicyPath};
-
 pub mod workspace_fs;
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, to_forward_slashes};
-
-pub mod workspace_snapshot;
-pub use workspace_snapshot::{WorkspaceSnapshot, copy_workspace_to};
+pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
+pub use workspace_fs::git::{WorkspaceSnapshot, copy_workspace_to};
 
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
