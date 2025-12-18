@@ -25,13 +25,19 @@ impl WorkspaceSnapshot {
     pub fn new(source: &GuardedPath) -> Result<Self> {
         let tempdir = GuardedPath::tempdir()?;
         let dest = tempdir.as_guarded_path().clone();
-        let tar_path = dest.join("snapshot.tar")?;
-        run_git_archive(source, &tar_path)?;
-        extract_tar(&tar_path, &dest)?;
-        let resolver = PathResolver::new(dest.as_path(), dest.as_path())?;
-        resolver
-            .remove_file(&tar_path)
-            .with_context(|| format!("failed to remove {}", tar_path.display()))?;
+        if has_git_checkout(source) && git_has_commits(source)? {
+            if worktree_is_dirty(source)? {
+                // NOTE: We intentionally copy the working tree when there are uncommitted
+                // changes so snapshot consumers see local edits. If your caller needs a
+                // historical snapshot at a specific commit instead, you probably want to
+                // skip this branch and always archive the desired revision via git.
+                copy_workspace_to(source, &dest)?;
+            } else {
+                archive_clean_head(source, &dest)?;
+            }
+        } else {
+            copy_workspace_to(source, &dest)?;
+        }
         Ok(Self { tempdir })
     }
 
@@ -43,6 +49,17 @@ impl WorkspaceSnapshot {
     pub fn into_tempdir(self) -> GuardedTempDir {
         self.tempdir
     }
+}
+
+fn archive_clean_head(source: &GuardedPath, dest: &GuardedPath) -> Result<()> {
+    let tar_path = dest.join("snapshot.tar")?;
+    run_git_archive(source, &tar_path)?;
+    extract_tar(&tar_path, dest)?;
+    let resolver = PathResolver::new(dest.as_path(), dest.as_path())?;
+    resolver
+        .remove_file(&tar_path)
+        .with_context(|| format!("failed to remove {}", tar_path.display()))?;
+    Ok(())
 }
 
 fn run_git_archive(source: &GuardedPath, tar_path: &GuardedPath) -> Result<()> {
@@ -97,6 +114,28 @@ fn extract_tar(tar_path: &GuardedPath, dest: &GuardedPath) -> Result<()> {
         bail!("tar failed with status {}", status);
     }
     Ok(())
+}
+
+fn has_git_checkout(root: &GuardedPath) -> bool {
+    root.as_path().join(".git").exists()
+}
+
+fn git_has_commits(root: &GuardedPath) -> Result<bool> {
+    let status = Command::new("git")
+        .current_dir(root.as_path())
+        .args(["rev-parse", "--verify", "HEAD"])
+        .status()
+        .with_context(|| format!("git rev-parse failed in {}", root.display()))?;
+    Ok(status.success())
+}
+
+fn worktree_is_dirty(root: &GuardedPath) -> Result<bool> {
+    let output = Command::new("git")
+        .current_dir(root.as_path())
+        .args(["status", "--porcelain"])
+        .output()
+        .with_context(|| format!("git status failed in {}", root.display()))?;
+    Ok(!output.stdout.is_empty())
 }
 
 fn copy_dir_filtered(
@@ -176,6 +215,52 @@ mod tests {
             !dest_root.join(".git")?.exists(),
             ".git directory should not be copied"
         );
+        Ok(())
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn snapshot_includes_uncommitted_changes() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let root = workspace.as_guarded_path().clone();
+        let resolver = PathResolver::new(root.as_path(), root.as_path())?;
+        git(&root, ["init"])?;
+        git(&root, ["config", "user.email", "test@example.com"])?;
+        git(&root, ["config", "user.name", "Test User"])?;
+
+        let committed = root.join("README.txt")?;
+        resolver.write_file(&committed, b"initial")?;
+        git(&root, ["add", "README.txt"])?;
+        git(&root, ["commit", "-m", "init"])?;
+
+        resolver.write_file(&committed, b"modified")?;
+        let untracked = root.join("new.txt")?;
+        resolver.write_file(&untracked, b"new file")?;
+
+        let snapshot = WorkspaceSnapshot::new(&root)?;
+        let snap_root = snapshot.root().clone();
+        let snap_resolver = PathResolver::new(snap_root.as_path(), snap_root.as_path())?;
+        let snap_readme = snap_root.join("README.txt")?;
+        let snap_new = snap_root.join("new.txt")?;
+
+        assert_eq!(snap_resolver.read_to_string(&snap_readme)?, "modified");
+        assert_eq!(snap_resolver.read_to_string(&snap_new)?, "new file");
+        Ok(())
+    }
+
+    fn git(root: &GuardedPath, args: impl IntoIterator<Item = &'static str>) -> Result<()> {
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let status = Command::new("git")
+            .current_dir(root.as_path())
+            .args(args)
+            .status()
+            .context("failed to run git command")?;
+        if !status.success() {
+            bail!("git command exited with {}", status);
+        }
         Ok(())
     }
 }
