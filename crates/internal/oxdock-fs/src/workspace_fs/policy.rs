@@ -1,6 +1,6 @@
-use crate::GuardedPath;
+use crate::workspace_fs::GuardedPath;
 #[allow(clippy::disallowed_types)]
-use crate::UnguardedPath;
+use crate::workspace_fs::UnguardedPath;
 
 /// Defines the guard policy for an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

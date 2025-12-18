@@ -1,7 +1,5 @@
 use anyhow::{Context, Result, bail};
-#[cfg(windows)]
-use oxdock_fs::command_path;
-use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_fs::{GuardedPath, PathResolver, copy_workspace_to};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
@@ -98,7 +96,7 @@ where
 
     // Materialize source tree without .git
     if prepare_snapshot {
-        archive_head(&workspace_root, &temp_root)?;
+        copy_workspace_to(&workspace_root, &temp_root).context("failed to snapshot workspace")?;
     }
 
     // Interpret a tiny Dockerfile-ish script
@@ -386,20 +384,6 @@ fn run_shell(cwd: &GuardedPath, workspace_root: &GuardedPath) -> Result<()> {
         bail!("interactive shell unsupported on this platform");
     }
 }
-fn run_cmd(mut cmd: CommandBuilder) -> Result<()> {
-    #[cfg(test)]
-    {
-        if try_shell_command_hook(&mut cmd)? {
-            return Ok(());
-        }
-    }
-    let status = cmd.status()?;
-    if !status.success() {
-        bail!("command returned status {}", status);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 type ShellCmdHook = dyn FnMut(&CommandSnapshot) -> Result<()> + Send;
 
@@ -435,53 +419,6 @@ fn try_shell_command_hook(_cmd: &mut CommandBuilder) -> Result<bool> {
 }
 
 // `command_path` now lives in `oxdock-fs` to centralize Path usage.
-
-fn archive_head(workspace_root: &GuardedPath, temp_root: &GuardedPath) -> Result<()> {
-    let archive_guard = temp_root
-        .join("src.tar")
-        .context("failed to create archive path under temp root")?;
-    #[cfg(windows)]
-    let archive_path_buf = command_path(&archive_guard);
-    #[cfg(windows)]
-    let archive_path = archive_path_buf.as_ref();
-    #[cfg(not(windows))]
-    let archive_path = archive_guard.as_path();
-
-    #[cfg(windows)]
-    let temp_root_path_buf = command_path(temp_root);
-    #[cfg(windows)]
-    let temp_root_path = temp_root_path_buf.as_ref();
-    #[cfg(not(windows))]
-    let temp_root_path = temp_root.as_path();
-    let mut archive_cmd = CommandBuilder::new("git");
-    archive_cmd
-        .current_dir(workspace_root.as_path())
-        .args(["archive", "--format=tar", "--output"]);
-    archive_cmd.arg(archive_path).arg("HEAD");
-    run_cmd(archive_cmd)?;
-
-    let mut tar_cmd = CommandBuilder::new("tar");
-    #[cfg(unix)]
-    {
-        // The temp workspace often inherits mtimes newer than the host clock (e.g. containerized builds),
-        // which makes GNU tar print noisy "timestamp is in the future" diagnostics. Silence just that warning.
-        tar_cmd.arg("--warning=no-timestamp");
-    }
-    tar_cmd
-        .arg("-xf")
-        .arg(archive_path)
-        .arg("-C")
-        .arg(temp_root_path);
-    run_cmd(tar_cmd)?;
-
-    // Drop the intermediate archive to keep the temp workspace clean.
-    // Remove intermediate archive via a resolver rooted at the temp root.
-    let resolver_temp = PathResolver::new(temp_root.as_path(), temp_root.as_path())?;
-    resolver_temp
-        .remove_file(&archive_guard)
-        .with_context(|| format!("failed to remove {}", archive_guard.display()))?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -637,57 +574,6 @@ mod windows_shell_tests {
     use super::*;
     use oxdock_fs::PathResolver;
     use serial_test::serial;
-
-    fn git(
-        workspace_root: &GuardedPath,
-        args: impl IntoIterator<Item = &'static str>,
-    ) -> Result<()> {
-        let mut cmd = CommandBuilder::new("git");
-        cmd.current_dir(workspace_root.as_path()).args(args);
-        run_cmd(cmd)
-    }
-
-    #[cfg_attr(
-        miri,
-        ignore = "relies on tempdirs, git, and tar binaries which are unavailable under Miri"
-    )]
-    #[test]
-    // [serial] is required because this test interacts with global state (filesystem/env)
-    // which causes race conditions on high-core-count machines. CI runners often have
-    // fewer cores, masking this issue not apparent there.
-    #[cfg_attr(not(miri), serial)]
-    fn archive_head_handles_windows_temp_paths() -> Result<()> {
-        // Use a temp workspace with spaces to mirror common Windows user dirs.
-        let workspace = GuardedPath::tempdir_with(|builder| {
-            builder.prefix("oxdock shell test ");
-        })?;
-        let workspace_root = workspace.as_guarded_path().clone();
-        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
-        let readme = workspace_root.join("README.md")?;
-        resolver.write_file(&readme, b"shell workspace")?;
-
-        git(&workspace_root, ["init"])?;
-        git(
-            &workspace_root,
-            ["config", "user.email", "test@example.com"],
-        )?;
-        git(&workspace_root, ["config", "user.name", "Test User"])?;
-        git(&workspace_root, ["add", "."])?;
-        git(&workspace_root, ["commit", "-m", "init"])?;
-
-        let archive_temp = GuardedPath::tempdir_with(|builder| {
-            builder.prefix("oxdock shell dst ");
-        })?;
-        let archive_root = archive_temp.as_guarded_path().clone();
-        archive_head(&workspace_root, &archive_root)?;
-
-        let extracted_readme = archive_root.join("README.md")?;
-        let archive_resolver = PathResolver::new(archive_root.as_path(), archive_root.as_path())?;
-        let contents = archive_resolver.read_to_string(&extracted_readme)?;
-        assert_eq!(contents, "shell workspace");
-
-        Ok(())
-    }
 
     #[test]
     fn command_path_strips_verbatim_prefix() -> Result<()> {

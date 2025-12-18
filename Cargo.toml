@@ -1,24 +1,17 @@
 [workspace]
 members = [
     "crates/internal/oxdock-core",
+    "crates/internal/oxdock-fixture",
     "crates/internal/oxdock-fs",
     "crates/internal/oxdock-process",
     "oxdock-buildtime-macros",
-    # Fixture crate used by the macros crate trybuild test to verify manifest-dir behavior.
-    "oxdock-buildtime-macros/tests/fixtures/build_from_manifest",
     "oxdock-cli",
-]
-default-members = [
-    "oxdock-cli",
-    "crates/internal/oxdock-core",
-    "oxdock-buildtime-macros",
-    "crates/internal/oxdock-fs",
 ]
 resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/jzombie/oxdock-rs"
@@ -27,18 +20,20 @@ publish = true
 [workspace.dependencies]
 anyhow = "1.0.100"
 indoc = "2.0.7"
-oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.1.0-alpha" }
+oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.2.0-alpha" }
 
 # Internal crates
-oxdock-core = { path = "crates/internal/oxdock-core", version = "0.1.0-alpha" }
-oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.1.0-alpha" }
-oxdock-process = { path = "crates/internal/oxdock-process", version = "0.1.0-alpha" }
+oxdock-core = { path = "crates/internal/oxdock-core", version = "0.2.0-alpha" }
+oxdock-fixture = { path = "crates/internal/oxdock-fixture", version = "0.2.0-alpha" }
+oxdock-fs = { path = "crates/internal/oxdock-fs", version = "0.2.0-alpha" }
+oxdock-process = { path = "crates/internal/oxdock-process", version = "0.2.0-alpha" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 rust-embed = { version = "8.9.0", features = ["include-exclude"] }
 serial_test = "3.2.0"
 syn = { version = "2.0", features = ["full"] }
 tempfile = "3.23.0"
+toml_edit = "0.22.22"
 
 # Logging/tracing
 tracing = "0.1.43"
@@ -47,4 +42,3 @@ tracing = "0.1.43"
 disallowed_methods = "deny"
 disallowed_types = "deny"
 disallowed_macros = "deny"
-

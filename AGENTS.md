@@ -18,7 +18,7 @@ Do not override linter rules in any crate except `oxdock-fs` or `oxdock-process`
 
 Prefer encapsulation over scattered platform/test-runner checks.
 
-- **Principle**: The `oxdock-fs` and `oxdock-process` crates should contain any logic that needs to behave differently when running under Miri or other isolated test runners. Other crates should not have to conditionally change behavior for Miri.
+- **Principle**: The `oxdock-fs` and `oxdock-process` crates should contain any logic that needs to behave differently when running under Miri or other isolated test runners. Other crates should not have to conditionally change behavior for Miri (tests *can* have Miri skips, but it is very discouraged, and they *MUST* include the reason why they are skipped).
 - **Implementation**:
     - Use `oxdock_fs::is_isolated()` instead of `cfg!(miri)` in implementation code. This funnels test-runner knowledge into a single, reviewable place.
     - Do not use `#[cfg(miri)]` attributes outside of `crates/internal/oxdock-fs` and `crates/internal/oxdock-process`.

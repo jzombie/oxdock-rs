@@ -1,6 +1,6 @@
 [package]
-name = "oxdock-buildtime-macros"
-description = "Placeholder crate"
+name = "oxdock-fixture"
+description = "Internal fixture harness for OxDock tests"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -14,19 +14,8 @@ normal = ["tracing"]
 development = []
 build = []
 
-[lib]
-proc-macro = true
-
 [dependencies]
-oxdock-core.workspace = true
+anyhow.workspace = true
 oxdock-fs.workspace = true
-proc-macro2.workspace = true
-quote.workspace = true
-syn.workspace = true
-tracing = { workspace = true }
-
-[dev-dependencies]
-oxdock-fixture.workspace = true
-oxdock-fs = { workspace = true, features = ["embed"] }
 oxdock-process.workspace = true
-serial_test.workspace = true
+toml_edit.workspace = true
