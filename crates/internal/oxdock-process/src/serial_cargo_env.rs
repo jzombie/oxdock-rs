@@ -58,9 +58,6 @@ impl Drop for SerialCargoEnv<'_> {
 }
 
 /// Convenience wrapper that constructs a [`SerialCargoEnv`].
-pub fn manifest_env_guard<'a>(
-    manifest_dir: &'a GuardedPath,
-    primary: bool,
-) -> SerialCargoEnv<'a> {
+pub fn manifest_env_guard<'a>(manifest_dir: &'a GuardedPath, primary: bool) -> SerialCargoEnv<'a> {
     SerialCargoEnv::new(manifest_dir, primary)
 }
