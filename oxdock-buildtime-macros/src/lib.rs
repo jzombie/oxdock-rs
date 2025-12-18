@@ -618,6 +618,35 @@ mod tests {
     }
 
     #[test]
+    fn embed_module_ident_prefixes_struct_name() {
+        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
+        let module = super::embed_module_ident(&name);
+        assert_eq!(module.to_string(), "__oxdock_embed_DemoAssets");
+    }
+
+    #[test]
+    fn embed_path_lit_matches_embed_path_helper() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let lit =
+            super::embed_path_lit(&guard, proc_macro2::Span::call_site()).expect("lit should work");
+        assert_eq!(lit.value(), oxdock_fs::embed_path(&guard));
+    }
+
+    #[test]
+    fn join_guard_appends_relative_paths() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let base = temp.as_guarded_path().clone();
+        let joined =
+            super::join_guard(&base, "nested/file.txt", proc_macro2::Span::call_site()).unwrap();
+        assert!(
+            joined.as_path().ends_with("nested/file.txt"),
+            "join_guard should append relative paths"
+        );
+        assert_eq!(joined.root(), base.root(), "root should be preserved");
+    }
+
+    #[test]
     fn normalizes_braced_script() {
         let ts = dsl_tokens! {
             WORKDIR /
