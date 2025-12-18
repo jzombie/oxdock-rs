@@ -1,7 +1,7 @@
 use crate::workspace_fs::GuardedPath;
-use anyhow::{Result, bail};
 #[cfg(not(miri))]
 use anyhow::Context;
+use anyhow::{Result, bail};
 
 #[derive(Debug, Clone)]
 pub struct GitIdentity {

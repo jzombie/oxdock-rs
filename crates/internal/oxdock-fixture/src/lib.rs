@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, WorkspaceSnapshot, command_path};
 #[allow(clippy::disallowed_types)]
 use oxdock_fs::UnguardedPath;
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, WorkspaceSnapshot, command_path};
 use oxdock_process::CommandBuilder;
 use std::collections::BTreeMap;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
