@@ -156,6 +156,8 @@ pub enum StepKind {
 pub struct Step {
     pub guards: Vec<Vec<Guard>>,
     pub kind: StepKind,
+    pub scope_enter: usize,
+    pub scope_exit: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -287,12 +289,20 @@ fn combine_guard_groups(a: &[Vec<Guard>], b: &[Vec<Guard>]) -> Vec<Vec<Guard>> {
     combined
 }
 
+#[derive(Clone)]
+struct ScopeFrame {
+    line_no: usize,
+    had_command: bool,
+}
+
 struct ScriptParser {
     lines: VecDeque<ScriptLine>,
     steps: Vec<Step>,
     guard_stack: Vec<Vec<Vec<Guard>>>,
     pending_guards: Option<Vec<Vec<Guard>>>,
     pending_can_open_block: bool,
+    pending_scope_enters: usize,
+    scope_stack: Vec<ScopeFrame>,
 }
 
 impl ScriptParser {
@@ -311,6 +321,8 @@ impl ScriptParser {
             guard_stack: vec![Vec::new()],
             pending_guards: None,
             pending_can_open_block: false,
+            pending_scope_enters: 0,
+            scope_stack: Vec::new(),
         }
     }
 
@@ -406,7 +418,7 @@ impl ScriptParser {
             if !after.is_empty() {
                 self.push_front(closing_line, after.to_string());
             }
-            self.start_block(groups)?;
+            self.start_block(groups, first_line.line_no)?;
             return Ok(());
         }
 
@@ -437,10 +449,10 @@ impl ScriptParser {
             bail!("line {}: '{{' must directly follow a guard", line_no);
         }
         self.pending_can_open_block = false;
-        self.start_block(guards)
+        self.start_block(guards, line_no)
     }
 
-    fn start_block(&mut self, guards: Vec<Vec<Guard>>) -> Result<()> {
+    fn start_block(&mut self, guards: Vec<Vec<Guard>>, line_no: usize) -> Result<()> {
         let with_pending = if let Some(pending) = self.pending_guards.take() {
             combine_guard_groups(&pending, &guards)
         } else {
@@ -455,6 +467,11 @@ impl ScriptParser {
             combine_guard_groups(&parent, &with_pending)
         };
         self.guard_stack.push(next);
+        self.scope_stack.push(ScopeFrame {
+            line_no,
+            had_command: false,
+        });
+        self.pending_scope_enters += 1;
         Ok(())
     }
 
@@ -468,6 +485,24 @@ impl ScriptParser {
                 line_no
             );
         }
+        let frame = self
+            .scope_stack
+            .last()
+            .cloned()
+            .ok_or_else(|| anyhow!("line {}: scope stack underflow", line_no))?;
+        if !frame.had_command {
+            bail!(
+                "line {}: guard block starting on line {} must contain at least one command",
+                line_no,
+                frame.line_no
+            );
+        }
+        let step = self
+            .steps
+            .last_mut()
+            .ok_or_else(|| anyhow!("line {}: guard block closed without any commands", line_no))?;
+        step.scope_exit += 1;
+        self.scope_stack.pop();
         self.guard_stack.pop();
         Ok(())
     }
@@ -523,7 +558,17 @@ impl ScriptParser {
 
         let guards = self.guard_context(inline_guards);
         let kind = build_step_kind(cmd, &remainder, line_no)?;
-        self.steps.push(Step { guards, kind });
+        let scope_enter = self.pending_scope_enters;
+        self.pending_scope_enters = 0;
+        for frame in self.scope_stack.iter_mut() {
+            frame.had_command = true;
+        }
+        self.steps.push(Step {
+            guards,
+            kind,
+            scope_enter,
+            scope_exit: 0,
+        });
         Ok(())
     }
 }
@@ -861,5 +906,55 @@ mod tests {
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].guards[0].len(), 2);
+    }
+
+    #[test]
+    fn guard_block_emits_scope_markers() {
+        let script = indoc! {r#"
+            ENV RUN=1
+            [env:RUN] {
+                WRITE one.txt 1
+                WRITE two.txt 2
+            }
+            WRITE three.txt 3
+        "#};
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[1].scope_enter, 1);
+        assert_eq!(steps[1].scope_exit, 0);
+        assert_eq!(steps[2].scope_enter, 0);
+        assert_eq!(steps[2].scope_exit, 1);
+        assert_eq!(steps[3].scope_enter, 0);
+        assert_eq!(steps[3].scope_exit, 0);
+    }
+
+    #[test]
+    fn nested_guard_block_scopes_stack_counts() {
+        let script = indoc! {r#"
+            [env:OUTER] {
+                [env:INNER] {
+                    WRITE deep.txt ok
+                }
+            }
+        "#};
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].scope_enter, 2);
+        assert_eq!(steps[0].scope_exit, 2);
+    }
+
+    #[test]
+    fn guard_block_must_contain_command() {
+        let script = indoc! {r#"
+            [env:FOO]
+            {
+            }
+        "#};
+        let err = parse_script(script).expect_err("empty block must fail");
+        assert!(
+            err.to_string()
+                .contains("must contain at least one command"),
+            "unexpected error: {err}"
+        );
     }
 }

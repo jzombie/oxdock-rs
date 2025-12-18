@@ -120,6 +120,7 @@ WRITE linux-release.txt generated
 - Square brackets may span multiple lines; commas express `AND`, pipes express `OR`.
 - Attaching a `{ ... }` block to a guard applies the guard to every enclosed command.
 - Guard-only lines without a block apply to the next command, preserving the existing syntax.
+- Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
 # OxDock
 
 [![Coverage Status](https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main)](https://coveralls.io/github/jzombie/oxdock-rs?branch=main)

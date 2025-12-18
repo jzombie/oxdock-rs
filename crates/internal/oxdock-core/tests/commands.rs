@@ -70,14 +70,20 @@ fn commands_behave_cross_platform() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Mkdir("client".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Mkdir("client/dist".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -85,6 +91,8 @@ fn commands_behave_cross_platform() {
                 path: "client/dist/hello.txt".into(),
                 contents: "hi".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -92,14 +100,20 @@ fn commands_behave_cross_platform() {
                 key: "FOO".into(),
                 value: "bar".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Run(run_cmd.into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::RunBg(bg_cmd.into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -107,6 +121,8 @@ fn commands_behave_cross_platform() {
                 from: "./source.txt".into(),
                 to: "./client/dist/from_build.txt".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -114,18 +130,26 @@ fn commands_behave_cross_platform() {
                 from: "./target_dir".into(),
                 to: "./client/dist-link".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Ls(Some("client".into())),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("client/dist".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Echo("echo from workdir".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -133,14 +157,20 @@ fn commands_behave_cross_platform() {
                 path: "nested.txt".into(),
                 contents: "nested".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workspace(WorkspaceTarget::Local),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -148,14 +178,20 @@ fn commands_behave_cross_platform() {
                 path: "local_note.txt".into(),
                 contents: "local".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workspace(WorkspaceTarget::Snapshot),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -163,6 +199,8 @@ fn commands_behave_cross_platform() {
                 path: "snap_note.txt".into(),
                 contents: "snap".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
@@ -228,10 +266,14 @@ fn exit_stops_pipeline_and_reports_code() {
                 path: "before.txt".into(),
                 contents: "ok".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Exit(9),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -239,6 +281,8 @@ fn exit_stops_pipeline_and_reports_code() {
                 path: "after.txt".into(),
                 contents: "nope".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
@@ -279,6 +323,8 @@ fn write_cmd_captures_output() {
             path: "out.txt".into(),
             cmd: cmd.into(),
         },
+        scope_enter: 0,
+        scope_exit: 0,
     }];
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
@@ -295,6 +341,8 @@ fn capture_echo_interpolates_env() {
                 key: "FOO".into(),
                 value: "hi".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -302,6 +350,8 @@ fn capture_echo_interpolates_env() {
                 path: "echo.txt".into(),
                 cmd: "ECHO value=${FOO}".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
@@ -322,6 +372,8 @@ fn capture_ls_lists_entries_with_header() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("items".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -329,6 +381,8 @@ fn capture_ls_lists_entries_with_header() {
                 path: "ls.txt".into(),
                 cmd: "LS".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
@@ -360,6 +414,8 @@ fn capture_cat_emits_file_contents() {
             path: "out.txt".into(),
             cmd: "CAT note.txt".into(),
         },
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     run_steps(&root, &steps).unwrap();
@@ -374,6 +430,8 @@ fn capture_cwd_canonicalizes_and_writes() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("a/b".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
@@ -381,6 +439,8 @@ fn capture_cwd_canonicalizes_and_writes() {
                 path: "pwd.txt".into(),
                 cmd: "CWD".into(),
             },
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
 
@@ -529,6 +589,8 @@ fn workdir_cannot_escape_root() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Workdir("../".into()),
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
@@ -549,6 +611,8 @@ fn write_cannot_escape_root() {
             path: "../escape.txt".into(),
             contents: "nope".into(),
         },
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
@@ -583,6 +647,8 @@ fn read_cannot_escape_root() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("../secret.txt".into()),
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
@@ -627,6 +693,8 @@ fn read_symlink_escape_is_blocked() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("leak.txt".into()),
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
@@ -652,6 +720,8 @@ fn write_missing_path_cannot_escape_root() {
             path: "a/b/../../../../outside.txt".into(),
             contents: "nope".into(),
         },
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
@@ -669,6 +739,8 @@ fn workdir_creates_missing_dirs_within_root() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Workdir("a/b/c".into()),
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     run_steps(&root, &steps).unwrap();
@@ -684,6 +756,8 @@ fn cat_reads_file_contents_without_error() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::Cat("file.txt".into()),
+        scope_enter: 0,
+        scope_exit: 0,
     }];
 
     // This should succeed and emit contents to stdout; we only verify it does not error.
@@ -698,10 +772,14 @@ fn cwd_prints_to_stdout() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Workdir("a/b".into()),
+            scope_enter: 0,
+            scope_exit: 0,
         },
         Step {
             guards: Vec::new(),
             kind: StepKind::Cwd,
+            scope_enter: 0,
+            scope_exit: 0,
         },
     ];
     // Should succeed and print the canonical cwd; we only assert it doesn't error.

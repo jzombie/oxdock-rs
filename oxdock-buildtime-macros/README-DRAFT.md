@@ -40,6 +40,8 @@ embed! {
     },
     out_dir: "prebuilt",
 }
+// Blocks use scoped environments: WORKDIR/WORKSPACE/ENV changes inside the braces
+// reset automatically after the block ends, so temporary setup stays contained.
 
 // At runtime you can use the generated rust-embed struct:
 // if let Some(bytes) = DemoAssets::get("client/dist/index.html") { ... }

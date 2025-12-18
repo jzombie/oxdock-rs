@@ -48,6 +48,8 @@ mod tests {
         let steps = vec![Step {
             guards: Vec::new(),
             kind: StepKind::Run(cmd.to_string()),
+            scope_enter: 0,
+            scope_exit: 0,
         }];
 
         run_steps(&root, &steps).unwrap();
@@ -176,6 +178,66 @@ mod tests {
             "platform guard should skip on unix and run elsewhere"
         );
         assert!(exists(&root, "always.txt"), "unguarded WRITE should run");
+    }
+
+    #[test]
+    fn guard_block_env_scope_restores_after_exit() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+
+        let script = indoc!(
+            r#"
+            ENV RUN=1
+            [env:RUN] {
+                ENV INNER=1
+                WRITE scoped.txt hit
+            }
+            [env:INNER] WRITE leak.txt nope
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(&root, &steps).unwrap();
+
+        assert!(exists(&root, "scoped.txt"), "block should run");
+        assert!(
+            !exists(&root, "leak.txt"),
+            "env set inside block must not leak outward"
+        );
+    }
+
+    #[test]
+    fn guard_block_workdir_scope_restores_after_exit() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+
+        let script = indoc!(
+            r#"
+            MKDIR nested
+            ENV RUN=1
+            [env:RUN] {
+                WORKDIR nested
+                WRITE inside.txt ok
+            }
+            WRITE outside.txt root
+            "#
+        );
+        let steps = parse_script(script).unwrap();
+
+        run_steps(&root, &steps).unwrap();
+
+        assert!(
+            exists(&root, "nested/inside.txt"),
+            "inside write should land in nested dir"
+        );
+        assert!(
+            exists(&root, "outside.txt"),
+            "workdir should reset after block exits"
+        );
+        assert!(
+            !exists(&root, "nested/outside.txt"),
+            "writes after block should not stay scoped"
+        );
     }
 
     #[test]
