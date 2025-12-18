@@ -121,6 +121,12 @@ WRITE linux-release.txt generated
 - Attaching a `{ ... }` block to a guard applies the guard to every enclosed command.
 - Guard-only lines without a block apply to the next command, preserving the existing syntax.
 - Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
+
+## Comments in DSL scripts
+
+- **String / file-based DSL (the original format):** The parser strips three comment styles before interpreting commands. Lines that start with `#` or `//` are ignored entirely, and C-style `/* ... */` block comments (with nesting) are removed while preserving newlines so error spans remain stable. Comment markers inside quoted strings stay intact—only actual comment regions are dropped.
+- **Braced Rust DSL (`script: { ... }`):** Because this form is parsed by Rust first and only later normalized into the OxDock DSL, it inherits Rust's syntax. Use standard Rust comments (`//`, `/* ... */`) inside the block; `#` cannot start a comment because it would be parsed as a macro/attribute prefix before the DSL ever sees it.
+- **Mixing forms:** When writing shared snippets that might appear in both forms, stick to `//` or `/* ... */` comments. They work in the classic string/file DSL (thanks to the normalizer) and in the Rust DSL via Rust's own lexer, so you avoid surprises when switching between representations.
 # OxDock
 
 [![Coverage Status](https://coveralls.io/repos/github/jzombie/oxdock-rs/badge.svg?branch=main)](https://coveralls.io/github/jzombie/oxdock-rs?branch=main)
