@@ -86,6 +86,19 @@ impl FixtureBuilder {
         Ok(self)
     }
 
+    /// Snapshot the workspace at a specific commit and expose it via `OXDOCK_WORKSPACE_ROOT`.
+    pub fn with_workspace_snapshot_at_commit(
+        mut self,
+        root: impl AsRef<Path>,
+        commit: impl AsRef<str>,
+    ) -> Result<Self> {
+        let guard = GuardedPath::new_root(root.as_ref())?;
+        let snapshot = WorkspaceSnapshot::at_commit(&guard, commit)?;
+        self.workspace_root_env = Some(snapshot.root().as_path().to_path_buf());
+        self.workspace_snapshot = Some(snapshot);
+        Ok(self)
+    }
+
     /// Copy the template into a guarded temporary directory, returning a handle
     /// that cleans up automatically on drop.
     pub fn instantiate(self) -> Result<FixtureInstance> {
