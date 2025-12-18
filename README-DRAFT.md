@@ -136,7 +136,7 @@ To test the calculation locally without waiting for CI:
 
 ```bash
 cargo llvm-cov --workspace --all-features --summary-only > coverage-summary.txt
-BASE_LINE_COVERAGE=$(sed -n 's/.*Lines:[[:space:]]*\([0-9.]*\)%.*/\1/p' coverage-summary.txt | head -n1) \
+BASE_LINE_COVERAGE=$(awk '/^TOTAL/ {print $10}' coverage-summary.txt | tr -d '%' | head -n1) \
   scripts/.github/miri-badge-report.sh
 ```
 

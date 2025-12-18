@@ -164,7 +164,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          percent=$(sed -n 's/.*Lines:[[:space:]]*\([0-9.]*\)%.*/\1/p' coverage-summary.txt | head -n1)
+          percent=$(awk '/^TOTAL/ {print $10}' coverage-summary.txt | tr -d '%' | head -n1)
           if [ -z "$percent" ]; then
             percent="0"
           fi
