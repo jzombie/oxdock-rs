@@ -1,5 +1,3 @@
-#![cfg(feature = "token-input")]
-
 use super::{Step, parse_script};
 use anyhow::Result;
 use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
