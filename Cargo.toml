@@ -36,7 +36,7 @@ tempfile = "3.23.0"
 toml_edit = "0.24.0"
 
 # Logging/tracing
-tracing = "0.1.43"
+tracing = "0.1.44"
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"
