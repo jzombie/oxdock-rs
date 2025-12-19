@@ -20,7 +20,7 @@ impl PathResolver {
         };
 
         let resolved = self
-            .check_access(&candidate, AccessMode::Passthru)
+            .check_access(&candidate, AccessMode::Write)
             .with_context(|| format!("WORKDIR {} escapes root", candidate.display()))?;
         self.backend.resolve_workdir(resolved)
     }

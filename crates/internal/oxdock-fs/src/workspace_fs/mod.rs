@@ -115,7 +115,6 @@ use std::path::Path;
 pub(crate) enum AccessMode {
     Read,
     Write,
-    Passthru,
 }
 
 impl AccessMode {
@@ -123,7 +122,6 @@ impl AccessMode {
         match self {
             AccessMode::Read => "READ",
             AccessMode::Write => "WRITE",
-            AccessMode::Passthru => "PASSTHRU",
         }
     }
 }

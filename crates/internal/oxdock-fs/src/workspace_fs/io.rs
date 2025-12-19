@@ -73,13 +73,9 @@ impl PathResolver {
     #[allow(clippy::disallowed_methods)]
     pub fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self
-            .check_access(path.as_path(), AccessMode::Passthru)
+            .check_access(path.as_path(), AccessMode::Read)
             .or_else(|_| {
-                self.check_access_with_root(
-                    &self.build_context,
-                    path.as_path(),
-                    AccessMode::Passthru,
-                )
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
         self.backend.canonicalize(cand)
