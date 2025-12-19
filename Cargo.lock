@@ -208,6 +208,7 @@ name = "oxdock-fixture"
 version = "0.3.0-alpha"
 dependencies = [
  "anyhow",
+ "indoc",
  "oxdock-fs",
  "oxdock-process",
  "toml_edit",
