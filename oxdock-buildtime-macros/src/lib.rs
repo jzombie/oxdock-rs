@@ -127,7 +127,7 @@ fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
 
                 pub fn iter() -> Filenames {
                     static EMPTY: [&str; 0] = [];
-                    Filenames::from_slice(EMPTY)
+                    Filenames::from_slice(&EMPTY)
                 }
             }
         }
