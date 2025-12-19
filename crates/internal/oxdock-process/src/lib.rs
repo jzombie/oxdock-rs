@@ -655,6 +655,11 @@ impl CommandBuilder {
         self
     }
 
+    pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
+
     pub fn stdin_file(&mut self, file: File) -> &mut Self {
         self.inner.stdin(Stdio::from(file));
         self

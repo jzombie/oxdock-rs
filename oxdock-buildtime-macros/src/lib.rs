@@ -459,33 +459,37 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
     Ok(entries.len())
 }
 
+/// Determines if the macro execution should be skipped to prevent heavy build operations
+/// during IDE analysis.
+///
+/// This is used to prevent IDE warnings and performance issues resulting from
+/// `rust-analyzer` (or other tools) executing the macro logic in a background process.
+/// Since `embed!` and `prepare!` can involve significant work (script execution,
+/// file I/O), running them during every keystroke analysis is undesirable.
 fn embed_execution_is_skipped() -> bool {
-    #[cfg(rust_analyzer)]
+    // Runtime check: rust-analyzer sets this variable in the proc-macro server process.
+    if std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok() {
+        return true;
+    }
+
+    // Fallback: Check executable name
+    if std::env::current_exe()
+        .ok()
+        .map(|pb| pb.to_string_lossy().contains("rust-analyzer"))
+        .unwrap_or(false)
     {
         return true;
     }
 
-    #[cfg(not(rust_analyzer))]
-    {
-        let explicit_skip = std::env::var("OXDOCK_EMBED_SKIP_EXECUTION")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
-            .unwrap_or(false);
-        if explicit_skip {
-            return true;
-        }
-
-        if std::env::var("RA_PROC_MACRO_SERVER").is_ok() {
-            return true;
-        }
-
-        std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok()
-            || std::env::var("RUSTC_WORKSPACE_WRAPPER")
-                .map(|wrapper| wrapper.contains("rust-analyzer"))
-                .unwrap_or(false)
-            || std::env::var("RUSTC_WRAPPER")
-                .map(|wrapper| wrapper.contains("rust-analyzer"))
-                .unwrap_or(false)
+    // Fallback 2: VS Code background task detection
+    // If we are running inside VS Code (detected via VSCODE_PID), but TERM is missing,
+    // it is likely a background analysis task (like rust-analyzer running cargo check)
+    // rather than a user-initiated terminal command.
+    if std::env::var("VSCODE_PID").is_ok() && std::env::var("TERM").is_err() {
+        return true;
     }
+
+    false
 }
 
 enum MacroPlan {

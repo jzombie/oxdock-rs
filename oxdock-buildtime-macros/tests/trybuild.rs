@@ -100,18 +100,18 @@ fn trybuild_run_failure_reports_cause() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-fn trybuild_skip_exec_env() {
+fn trybuild_skip_exec_rust_analyzer_env() {
     let fixture = instantiate_fixture("build_exit_fail");
 
     let mut cmd = fixture.cargo();
     cmd.arg("check")
-        .env("OXDOCK_EMBED_SKIP_EXECUTION", "1")
+        .env("RUST_ANALYZER_INTERNALS_DO_NOT_USE", "this is unstable")
         .arg("--quiet");
     let status = cmd.status().expect("failed to spawn cargo");
 
     assert!(
         status.success(),
-        "embed skip env should prevent execution errors when building fixture"
+        "detecting rust-analyzer env should skip execution automatically"
     );
 }
 
@@ -121,18 +121,41 @@ fn trybuild_skip_exec_env() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-fn trybuild_skip_exec_rust_analyzer_env() {
+fn trybuild_skip_exec_vscode_background() {
     let fixture = instantiate_fixture("build_exit_fail");
 
     let mut cmd = fixture.cargo();
     cmd.arg("check")
-        .env("RA_PROC_MACRO_SERVER", "1")
+        .env("VSCODE_PID", "1234")
+        .env_remove("TERM") // Ensure TERM is missing
         .arg("--quiet");
     let status = cmd.status().expect("failed to spawn cargo");
 
     assert!(
         status.success(),
-        "detecting rust-analyzer env should skip execution automatically"
+        "detecting VS Code background env (VSCODE_PID set, TERM missing) should skip execution"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_exec_vscode_integrated_terminal() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("VSCODE_PID", "1234")
+        .env("TERM", "xterm-256color") // TERM is present in integrated terminal
+        .arg("--quiet");
+    let output = cmd.output().expect("failed to spawn cargo");
+
+    assert!(
+        !output.success(),
+        "VS Code integrated terminal (VSCODE_PID set, TERM set) should NOT skip execution"
     );
 }
 
