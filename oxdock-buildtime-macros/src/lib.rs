@@ -460,20 +460,28 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 }
 
 fn embed_execution_is_skipped() -> bool {
-    let explicit_skip = std::env::var("OXDOCK_EMBED_SKIP_EXECUTION")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
-        .unwrap_or(false);
-    if explicit_skip {
+    #[cfg(rust_analyzer)]
+    {
         return true;
     }
 
-    std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok()
-        || std::env::var("RUSTC_WORKSPACE_WRAPPER")
-            .map(|wrapper| wrapper.contains("rust-analyzer"))
-            .unwrap_or(false)
-        || std::env::var("RUSTC_WRAPPER")
-            .map(|wrapper| wrapper.contains("rust-analyzer"))
-            .unwrap_or(false)
+    #[cfg(not(rust_analyzer))]
+    {
+        let explicit_skip = std::env::var("OXDOCK_EMBED_SKIP_EXECUTION")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+            .unwrap_or(false);
+        if explicit_skip {
+            return true;
+        }
+
+        std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok()
+            || std::env::var("RUSTC_WORKSPACE_WRAPPER")
+                .map(|wrapper| wrapper.contains("rust-analyzer"))
+                .unwrap_or(false)
+            || std::env::var("RUSTC_WRAPPER")
+                .map(|wrapper| wrapper.contains("rust-analyzer"))
+                .unwrap_or(false)
+    }
 }
 
 enum MacroPlan {
