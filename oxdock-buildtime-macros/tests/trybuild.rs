@@ -121,6 +121,27 @@ fn trybuild_skip_exec_env() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_skip_exec_rust_analyzer_env() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("RA_PROC_MACRO_SERVER", "1")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "detecting rust-analyzer env should skip execution automatically"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_guard_scope() {
     let fixture = instantiate_fixture("guard_scope");
 

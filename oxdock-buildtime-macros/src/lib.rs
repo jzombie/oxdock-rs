@@ -474,6 +474,10 @@ fn embed_execution_is_skipped() -> bool {
             return true;
         }
 
+        if std::env::var("RA_PROC_MACRO_SERVER").is_ok() {
+            return true;
+        }
+
         std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok()
             || std::env::var("RUSTC_WORKSPACE_WRAPPER")
                 .map(|wrapper| wrapper.contains("rust-analyzer"))
