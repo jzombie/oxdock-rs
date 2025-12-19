@@ -52,6 +52,11 @@ fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let manifest_root = manifest_resolver.root().clone();
 
+    if embed_execution_is_skipped() {
+        tracing::info!("prepare: skipping build due to embed skip flag");
+        return Ok(());
+    }
+
     let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -188,6 +193,11 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
     // In this case, we skip the build process to avoid errors.
     if oxdock_fs::is_isolated() {
         tracing::info!("embed: skipping build under isolated fs");
+        return Ok(embed_error_stub(name));
+    }
+
+    if embed_execution_is_skipped() {
+        tracing::info!("embed: skipping build due to embed skip flag");
         return Ok(embed_error_stub(name));
     }
 
@@ -485,6 +495,23 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
         .read_dir_entries(dir)
         .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
     Ok(entries.len())
+}
+
+fn embed_execution_is_skipped() -> bool {
+    let explicit_skip = std::env::var("OXDOCK_EMBED_SKIP_EXECUTION")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+        .unwrap_or(false);
+    if explicit_skip {
+        return true;
+    }
+
+    std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok()
+        || std::env::var("RUSTC_WORKSPACE_WRAPPER")
+            .map(|wrapper| wrapper.contains("rust-analyzer"))
+            .unwrap_or(false)
+        || std::env::var("RUSTC_WRAPPER")
+            .map(|wrapper| wrapper.contains("rust-analyzer"))
+            .unwrap_or(false)
 }
 
 #[cfg(test)]

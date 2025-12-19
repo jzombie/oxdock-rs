@@ -100,6 +100,27 @@ fn trybuild_run_failure_reports_cause() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_skip_exec_env() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("OXDOCK_EMBED_SKIP_EXECUTION", "1")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "embed skip env should prevent execution errors when building fixture"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_guard_scope() {
     let fixture = instantiate_fixture("guard_scope");
 
