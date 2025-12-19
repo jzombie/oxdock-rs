@@ -32,7 +32,6 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 tracing = { workspace = true }
-sha2.workspace = true
 
 [dev-dependencies]
 oxdock-fixture.workspace = true

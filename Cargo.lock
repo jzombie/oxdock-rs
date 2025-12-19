@@ -164,7 +164,6 @@ dependencies = [
  "oxdock-process",
  "proc-macro2",
  "quote",
- "sha2",
  "syn",
  "tracing",
 ]
@@ -195,6 +194,14 @@ dependencies = [
 [[package]]
 name = "oxdock-embed"
 version = "0.3.0-alpha"
+dependencies = [
+ "anyhow",
+ "oxdock-fs",
+ "proc-macro2",
+ "quote",
+ "sha2",
+ "syn",
+]
 
 [[package]]
 name = "oxdock-fixture"

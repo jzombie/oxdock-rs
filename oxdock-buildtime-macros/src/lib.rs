@@ -1,10 +1,8 @@
+use oxdock_embed::{emit_embed_module, gather_assets};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_parser::{DslMacroInput, ScriptSource};
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use sha2::{Digest, Sha256};
-#[allow(unused_imports)]
-use std::time::SystemTime;
+use quote::quote;
 use syn::parse_macro_input;
 
 // TODO: Update example and don't ignore
@@ -109,251 +107,6 @@ fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
     )
 }
 
-struct EmbeddedAsset {
-    rel_path: String,
-    include_path: String,
-    sha256: [u8; 32],
-    last_modified: Option<u64>,
-    created: Option<u64>,
-}
-
-fn collect_embedded_assets(
-    resolver: &PathResolver,
-    out_dir: &GuardedPath,
-    span: proc_macro2::Span,
-) -> syn::Result<Vec<EmbeddedAsset>> {
-    let mut assets = Vec::new();
-    collect_embedded_assets_recursive(resolver, out_dir, out_dir, &mut assets, span)?;
-    assets.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(assets)
-}
-
-fn collect_embedded_assets_recursive(
-    resolver: &PathResolver,
-    root: &GuardedPath,
-    dir: &GuardedPath,
-    assets: &mut Vec<EmbeddedAsset>,
-    span: proc_macro2::Span,
-) -> syn::Result<()> {
-    let mut entries = resolver.read_dir_entries(dir).map_err(|e| {
-        syn::Error::new(
-            span,
-            format!("failed to read assets in {}: {e}", dir.as_path().display()),
-        )
-    })?;
-    entries.sort_by(|a, b| a.path().cmp(&b.path()));
-
-    for entry in entries {
-        let entry_path = entry.path();
-        let entry_guard = GuardedPath::new(root.root(), entry_path.as_path())
-            .map_err(|e| syn::Error::new(span, e.to_string()))?;
-        let file_type = entry.file_type().map_err(|e| {
-            syn::Error::new(
-                span,
-                format!(
-                    "failed to read file type for {}: {e}",
-                    entry_guard.as_path().display()
-                ),
-            )
-        })?;
-
-        if file_type.is_dir() {
-            collect_embedded_assets_recursive(resolver, root, &entry_guard, assets, span)?;
-            continue;
-        }
-
-        if !file_type.is_file() {
-            continue;
-        }
-
-        let rel_path = entry_guard
-            .as_path()
-            .strip_prefix(root.as_path())
-            .map_err(|_| {
-                syn::Error::new(
-                    span,
-                    format!(
-                        "embedded file {} not under {}",
-                        entry_guard.as_path().display(),
-                        root.as_path().display()
-                    ),
-                )
-            })?;
-        let rel_str = rel_path.to_str().ok_or_else(|| {
-            syn::Error::new(
-                span,
-                format!(
-                    "embedded file path is not valid UTF-8: {}",
-                    entry_guard.as_path().display()
-                ),
-            )
-        })?;
-        let rel_forward = oxdock_fs::to_forward_slashes(rel_str);
-        let include_path = oxdock_fs::embed_path(&entry_guard);
-
-        let bytes = resolver.read_file(&entry_guard).map_err(|e| {
-            syn::Error::new(
-                span,
-                format!(
-                    "failed to read {} for hashing: {e}",
-                    entry_guard.as_path().display()
-                ),
-            )
-        })?;
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let sha256: [u8; 32] = hasher.finalize().into();
-
-        let metadata = resolver.metadata(&entry_guard).map_err(|e| {
-            syn::Error::new(
-                span,
-                format!(
-                    "failed to read metadata for {}: {e}",
-                    entry_guard.as_path().display()
-                ),
-            )
-        })?;
-        let last_modified = metadata
-            .modified()
-            .ok()
-            .and_then(|mtime| mtime.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        let created = metadata
-            .created()
-            .ok()
-            .and_then(|ctime| ctime.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-
-        assets.push(EmbeddedAsset {
-            rel_path: rel_forward,
-            include_path,
-            sha256,
-            last_modified,
-            created,
-        });
-    }
-
-    Ok(())
-}
-
-fn emit_embed_module(
-    name: &syn::Ident,
-    assets: &[EmbeddedAsset],
-) -> syn::Result<proc_macro2::TokenStream> {
-    let mod_ident = embed_module_ident(name);
-    let bytes_idents: Vec<_> = (0..assets.len())
-        .map(|idx| format_ident!("__OXDOCK_EMBED_BYTES_{idx}"))
-        .collect();
-    let abs_paths: Vec<_> = assets
-        .iter()
-        .map(|asset| syn::LitStr::new(&asset.include_path, proc_macro2::Span::call_site()))
-        .collect();
-    let rel_paths: Vec<_> = assets
-        .iter()
-        .map(|asset| syn::LitStr::new(&asset.rel_path, proc_macro2::Span::call_site()))
-        .collect();
-
-    let bytes_consts = bytes_idents
-        .iter()
-        .zip(abs_paths.iter())
-        .map(|(ident, abs)| quote! { const #ident: &[u8] = include_bytes!(#abs); });
-
-    let metadata_tokens: Vec<_> = assets
-        .iter()
-        .map(|asset| {
-            let hash_bytes: Vec<_> = asset
-                .sha256
-                .iter()
-                .map(|b| {
-                    let lit = proc_macro2::Literal::u8_unsuffixed(*b);
-                    quote! { #lit }
-                })
-                .collect();
-            let last_modified = match asset.last_modified {
-                Some(v) => {
-                    let lit = syn::LitInt::new(&v.to_string(), proc_macro2::Span::call_site());
-                    quote! { Some(#lit) }
-                }
-                None => quote! { None },
-            };
-            let created = match asset.created {
-                Some(v) => {
-                    let lit = syn::LitInt::new(&v.to_string(), proc_macro2::Span::call_site());
-                    quote! { Some(#lit) }
-                }
-                None => quote! { None },
-            };
-            quote! {
-                oxdock_embed::rust_embed::Metadata::__oxdock_new(
-                    [#(#hash_bytes),*],
-                    #last_modified,
-                    #created
-                )
-            }
-        })
-        .collect();
-
-    let asset_entries: Vec<_> = rel_paths
-        .iter()
-        .zip(bytes_idents.iter())
-        .zip(metadata_tokens.iter())
-        .map(|((rel, ident), metadata)| {
-            quote! {
-                AssetEntry {
-                    rel: #rel,
-                    data: #ident,
-                    metadata: #metadata,
-                }
-            }
-        })
-        .collect();
-
-    Ok(quote! {
-        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-        mod #mod_ident {
-            extern crate alloc;
-
-            use alloc::borrow::Cow;
-            use oxdock_embed::rust_embed::{EmbeddedFile, Filenames, Metadata};
-
-            #[derive(Clone)]
-            struct AssetEntry {
-                rel: &'static str,
-                data: &'static [u8],
-                metadata: Metadata,
-            }
-
-            #( #bytes_consts )*
-            const __OXDOCK_EMBED_FILENAMES: &[&str] = &[
-                #(#rel_paths),*
-            ];
-            const __OXDOCK_EMBED_ASSETS: &[AssetEntry] = &[
-                #(#asset_entries),*
-            ];
-
-            pub struct #name;
-
-            impl #name {
-                pub fn get(path: &str) -> Option<EmbeddedFile> {
-                    __OXDOCK_EMBED_ASSETS
-                        .iter()
-                        .find(|entry| entry.rel == path)
-                        .map(|entry| EmbeddedFile {
-                            data: Cow::Borrowed(entry.data),
-                            metadata: entry.metadata.clone(),
-                        })
-                }
-
-                pub fn iter() -> Filenames {
-                    Filenames::from_slice(__OXDOCK_EMBED_FILENAMES)
-                }
-            }
-        }
-
-        pub use #mod_ident::#name;
-    })
-}
-
 fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
     let mod_ident = embed_module_ident(name);
     quote! {
@@ -453,7 +206,8 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
             tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        let assets = collect_embedded_assets(&manifest_resolver, &out_dir_abs, span)?;
+        let assets = gather_assets(&manifest_resolver, &out_dir_abs)
+            .map_err(|e| syn::Error::new(span, e.to_string()))?;
         return emit_embed_module(name, &assets);
     }
 
@@ -468,7 +222,8 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
             ));
         }
         tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
-        let assets = collect_embedded_assets(&manifest_resolver, &out_dir_abs, span)?;
+        let assets = gather_assets(&manifest_resolver, &out_dir_abs)
+            .map_err(|e| syn::Error::new(span, e.to_string()))?;
         return emit_embed_module(name, &assets);
     }
 
