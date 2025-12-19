@@ -103,8 +103,6 @@ pub use path::{command_path, embed_path, to_forward_slashes};
 #[allow(clippy::disallowed_types)]
 pub use path::UnguardedPath;
 
-#[cfg(feature = "embed")]
-pub mod embed;
 pub mod policy;
 pub use policy::{GuardPolicy, PolicyPath};
 

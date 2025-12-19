@@ -1,11 +1,9 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
 extern crate alloc;
 
-use alloc::borrow::Cow;
-
-/// Compatibility shim for the rust-embed public API so downstream crates can
-/// continue using `DemoAssets::get` / `::iter` without the upstream crate.
 pub mod rust_embed {
-    use super::Cow;
+    use alloc::borrow::Cow;
 
     #[derive(Clone)]
     pub struct Metadata {
@@ -48,6 +46,12 @@ pub mod rust_embed {
 
     pub enum Filenames {
         Embedded(core::slice::Iter<'static, &'static str>),
+    }
+
+    impl Filenames {
+        pub fn from_slice(slice: &'static [&'static str]) -> Self {
+            Self::Embedded(slice.iter())
+        }
     }
 
     impl Iterator for Filenames {

@@ -16,7 +16,6 @@ build = []
 
 [features]
 mock-fs = []
-embed = []
 
 [dependencies]
 anyhow.workspace = true

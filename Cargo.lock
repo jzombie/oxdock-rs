@@ -157,6 +157,7 @@ version = "0.3.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-core",
+ "oxdock-embed",
  "oxdock-fixture",
  "oxdock-fs",
  "oxdock-parser",
@@ -190,6 +191,10 @@ dependencies = [
  "oxdock-parser",
  "oxdock-process",
 ]
+
+[[package]]
+name = "oxdock-embed"
+version = "0.3.0-alpha"
 
 [[package]]
 name = "oxdock-fixture"

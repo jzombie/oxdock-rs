@@ -116,6 +116,10 @@ fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
             "oxdock-fs",
             workspace_path.join("crates/internal/oxdock-fs"),
         )
+        .with_path_dependency(
+            "oxdock-embed",
+            workspace_path.join("crates/internal/oxdock-embed"),
+        )
         .with_workspace_snapshot_from(&workspace_path)
         .expect("workspace snapshot")
         .instantiate()

@@ -284,7 +284,7 @@ fn emit_embed_module(
                 None => quote! { None },
             };
             quote! {
-                oxdock_fs::workspace_fs::embed::rust_embed::Metadata::__oxdock_new(
+                oxdock_embed::rust_embed::Metadata::__oxdock_new(
                     [#(#hash_bytes),*],
                     #last_modified,
                     #created
@@ -314,7 +314,7 @@ fn emit_embed_module(
             extern crate alloc;
 
             use alloc::borrow::Cow;
-            use oxdock_fs::workspace_fs::embed::rust_embed::{EmbeddedFile, Filenames, Metadata};
+            use oxdock_embed::rust_embed::{EmbeddedFile, Filenames, Metadata};
 
             #[derive(Clone)]
             struct AssetEntry {
@@ -331,9 +331,6 @@ fn emit_embed_module(
                 #(#asset_entries),*
             ];
 
-            static __OXDOCK_EMBED_EMPTY: [&str; 0] = [];
-
-
             pub struct #name;
 
             impl #name {
@@ -348,11 +345,7 @@ fn emit_embed_module(
                 }
 
                 pub fn iter() -> Filenames {
-                    if __OXDOCK_EMBED_FILENAMES.is_empty() {
-                        Filenames::Embedded(__OXDOCK_EMBED_EMPTY.iter())
-                    } else {
-                        Filenames::Embedded(__OXDOCK_EMBED_FILENAMES.iter())
-                    }
+                    Filenames::from_slice(__OXDOCK_EMBED_FILENAMES)
                 }
             }
         }
@@ -368,7 +361,7 @@ fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
         mod #mod_ident {
             extern crate alloc;
 
-            use oxdock_fs::workspace_fs::embed::rust_embed::{EmbeddedFile, Filenames};
+            use oxdock_embed::rust_embed::{EmbeddedFile, Filenames};
 
             pub struct #name;
 
@@ -381,7 +374,7 @@ fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
 
                 pub fn iter() -> Filenames {
                     static EMPTY: [&str; 0] = [];
-                    Filenames::Embedded(EMPTY.iter())
+                    Filenames::from_slice(EMPTY)
                 }
             }
         }
@@ -814,8 +807,8 @@ mod tests {
             "stub should expose get() method: {stub}"
         );
         assert!(
-            stub.contains("Filenames :: Embedded"),
-            "stub iter() should construct Filenames::Embedded: {stub}"
+            stub.contains("Filenames :: from_slice"),
+            "stub iter() should construct Filenames from slice: {stub}"
         );
     }
 

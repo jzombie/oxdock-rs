@@ -25,7 +25,8 @@ test-support = []
 [dependencies]
 anyhow.workspace = true
 oxdock-core = { workspace = true, features = ["token-input"] }
-oxdock-fs = { workspace = true, features = ["embed"] }
+oxdock-embed.workspace = true
+oxdock-fs.workspace = true
 oxdock-parser = { workspace = true, features = ["token-input"] }
 proc-macro2.workspace = true
 quote.workspace = true
@@ -35,5 +36,6 @@ sha2.workspace = true
 
 [dev-dependencies]
 oxdock-fixture.workspace = true
-oxdock-fs = { workspace = true, features = ["embed"] }
+oxdock-embed.workspace = true
+oxdock-fs.workspace = true
 oxdock-process.workspace = true
