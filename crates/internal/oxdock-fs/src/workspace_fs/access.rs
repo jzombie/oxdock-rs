@@ -1,11 +1,17 @@
-use anyhow::{Result, bail};
 #[cfg(not(miri))]
 use anyhow::Context;
+use anyhow::{Result, bail};
 #[allow(clippy::disallowed_types)]
 use std::path::Path;
 #[cfg(miri)]
 #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::PathBuf;
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
+use std::path::PathBuf;
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
+use std::ffi::OsString;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
@@ -30,67 +36,7 @@ pub(crate) fn guard_path(
         let root_abs = std::fs::canonicalize(root)
             .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
 
-        if let Ok(cand_abs) = std::fs::canonicalize(candidate) {
-            if !cand_abs.starts_with(&root_abs) {
-                bail!(
-                    "{} access to {} escapes allowed root {}",
-                    mode.name(),
-                    cand_abs.display(),
-                    root_abs.display()
-                );
-            }
-            return Ok(cand_abs);
-        }
-
-        let mut ancestor = candidate;
-        while !ancestor.exists() {
-            if let Some(parent) = ancestor.parent() {
-                ancestor = parent;
-            } else {
-                ancestor = root;
-                break;
-            }
-        }
-
-        let ancestor_abs = std::fs::canonicalize(ancestor)
-            .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
-
-        let mut rem_components: Vec<std::ffi::OsString> = Vec::new();
-        {
-            let mut skip = ancestor.components();
-            let mut full = candidate.components();
-            loop {
-                match (skip.next(), full.next()) {
-                    (Some(s), Some(f)) if s == f => continue,
-                    (_opt_s, opt_f) => {
-                        if let Some(f) = opt_f {
-                            rem_components.push(f.as_os_str().to_os_string());
-                            for comp in full {
-                                rem_components.push(comp.as_os_str().to_os_string());
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        let mut cand_abs = ancestor_abs.clone();
-        for c in rem_components.iter() {
-            let s = std::ffi::OsStr::new(&c);
-            if s == "." {
-                continue;
-            }
-            if s == ".." {
-                cand_abs = cand_abs
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or(cand_abs);
-                continue;
-            }
-            cand_abs.push(s);
-        }
-
+        let cand_abs = normalize_candidate(&root_abs, candidate)?;
         if !cand_abs.starts_with(&root_abs) {
             bail!(
                 "{} access to {} escapes allowed root {}",
@@ -102,6 +48,65 @@ pub(crate) fn guard_path(
 
         Ok(cand_abs)
     }
+}
+
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn normalize_candidate(root_abs: &Path, candidate: &Path) -> Result<PathBuf> {
+    if let Ok(cand_abs) = std::fs::canonicalize(candidate) {
+        return Ok(cand_abs);
+    }
+
+    let mut ancestor = candidate;
+    while !ancestor.exists() {
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            ancestor = root_abs;
+            break;
+        }
+    }
+
+    let ancestor_abs = std::fs::canonicalize(ancestor)
+        .with_context(|| format!("failed to canonicalize ancestor {}", ancestor.display()))?;
+
+    let mut rem_components: Vec<OsString> = Vec::new();
+    {
+        let mut skip = ancestor.components();
+        let mut full = candidate.components();
+        loop {
+            match (skip.next(), full.next()) {
+                (Some(s), Some(f)) if s == f => continue,
+                (_opt_s, opt_f) => {
+                    if let Some(f) = opt_f {
+                        rem_components.push(f.as_os_str().to_os_string());
+                        for comp in full {
+                            rem_components.push(comp.as_os_str().to_os_string());
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut cand_abs = ancestor_abs.clone();
+    for c in rem_components.iter() {
+        let s = std::ffi::OsStr::new(&c);
+        if s == "." {
+            continue;
+        }
+        if s == ".." {
+            cand_abs = cand_abs
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(cand_abs);
+            continue;
+        }
+        cand_abs.push(s);
+    }
+
+    Ok(cand_abs)
 }
 
 #[cfg(miri)]
@@ -174,17 +179,39 @@ impl PathResolver {
         candidate: &Path,
         mode: AccessMode,
     ) -> Result<GuardedPath> {
-        let guarded = guard_path(root.as_path(), candidate, mode)?;
-        #[cfg(miri)]
-        {
-            Ok(GuardedPath::from_guarded_parts(
-                root.root().to_path_buf(),
-                guarded,
-            ))
-        }
+        match guard_path(root.as_path(), candidate, mode) {
+            Ok(guarded) => {
+                #[cfg(miri)]
+                {
+                    Ok(GuardedPath::from_guarded_parts(
+                        root.root().to_path_buf(),
+                        guarded,
+                    ))
+                }
 
-        #[cfg(not(miri))]
-        Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
+                #[cfg(not(miri))]
+                {
+                    Ok(GuardedPath::from_guarded_parts(root.to_path_buf(), guarded))
+                }
+            }
+            Err(primary) => {
+                #[cfg(not(miri))]
+                {
+                    if root.as_path() == self.root.as_path()
+                        && let Some(workspace_root) = &self.workspace_root
+                        && let Ok(root_abs) = std::fs::canonicalize(root.as_path())
+                        && let Ok(canon) = normalize_candidate(&root_abs, candidate)
+                        && canon.starts_with(workspace_root.as_path())
+                    {
+                        return Ok(GuardedPath::from_guarded_parts(
+                            root.to_path_buf(),
+                            candidate.to_path_buf(),
+                        ));
+                    }
+                }
+                Err(primary)
+            }
+        }
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]

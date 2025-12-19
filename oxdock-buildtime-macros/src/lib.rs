@@ -308,10 +308,11 @@ fn build_assets(
             .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
     host_resolver.set_workspace_root(workspace_root);
 
-    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps).map_err(|e| {
-        // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
-        syn::Error::new(span, format!("execution error: {e:#}"))
-    })?;
+    let final_cwd =
+        oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps).map_err(|e| {
+            // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
+            syn::Error::new(span, format!("execution error: {e:#}"))
+        })?;
 
     if debug_embed {
         eprintln!(
@@ -384,25 +385,18 @@ fn build_assets(
     Ok(final_cwd)
 }
 
-fn read_workspace_env(
-    key: &str,
-    span: proc_macro2::Span,
-) -> syn::Result<Option<GuardedPath>> {
+fn read_workspace_env(key: &str, span: proc_macro2::Span) -> syn::Result<Option<GuardedPath>> {
     match std::env::var(key) {
         Ok(value) => {
             if value.is_empty() {
                 return Ok(None);
             }
-            let guard = GuardedPath::new_root_from_str(&value).map_err(|e| {
-                syn::Error::new(span, format!("invalid {key} {value}: {e}"))
-            })?;
+            let guard = GuardedPath::new_root_from_str(&value)
+                .map_err(|e| syn::Error::new(span, format!("invalid {key} {value}: {e}")))?;
             Ok(Some(guard))
         }
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(e) => Err(syn::Error::new(
-            span,
-            format!("failed to read {key}: {e}"),
-        )),
+        Err(e) => Err(syn::Error::new(span, format!("failed to read {key}: {e}"))),
     }
 }
 

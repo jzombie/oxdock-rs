@@ -199,6 +199,13 @@ impl WorkspaceFs for MockFs {
         bail!("unguarded operations not supported in mock fs");
     }
 
+    fn ensure_parent_dir(&self, path: &GuardedPath) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            self.create_dir_all(&parent)?;
+        }
+        Ok(())
+    }
+
     fn remove_file(&self, _path: &GuardedPath) -> Result<()> {
         bail!("remove unsupported")
     }

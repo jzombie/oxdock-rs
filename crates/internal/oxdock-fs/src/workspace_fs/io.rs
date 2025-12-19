@@ -70,6 +70,19 @@ impl PathResolver {
         self.backend.write_file(&guarded, contents)
     }
 
+    pub fn ensure_parent_dir(&self, path: &GuardedPath) -> Result<()> {
+        if let Some(parent) = path.as_path().parent() {
+            let parent_guard = self
+                .check_access(parent, AccessMode::Write)
+                .or_else(|_| {
+                    self.check_access_with_root(&self.build_context, parent, AccessMode::Write)
+                })
+                .with_context(|| format!("parent {} escapes root", parent.display()))?;
+            self.backend.create_dir_all(&self.root, &parent_guard)?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::disallowed_methods)]
     pub fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self

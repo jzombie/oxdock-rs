@@ -96,7 +96,8 @@ fn run_steps_inner(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<GuardedPath> {
-    let resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
+    let mut resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
+    resolver.set_workspace_root(build_context.clone());
     run_steps_with_fs(Box::new(resolver), steps)
 }
 
@@ -315,12 +316,15 @@ fn execute_steps<P: ProcessManager>(
                             .fs
                             .resolve_write(&state.cwd, path)
                             .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
-                        if let Some(parent) = target.as_path().parent() {
-                            let parent_guard = GuardedPath::new(target.root(), parent)?;
-                            state.fs.create_dir_all(&parent_guard).with_context(|| {
-                                format!("failed to create parent {}", parent.display())
+                        state
+                            .fs
+                            .ensure_parent_dir(&target)
+                            .with_context(|| {
+                                format!(
+                                    "failed to create parent for {}",
+                                    target.display()
+                                )
                             })?;
-                        }
                         state
                             .fs
                             .write_file(&target, contents.as_bytes())
@@ -331,22 +335,30 @@ fn execute_steps<P: ProcessManager>(
                             .fs
                             .resolve_write(&state.cwd, path)
                             .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
-                        if let Some(parent) = target.as_path().parent() {
-                            let parent_guard = GuardedPath::new(target.root(), parent)?;
-                            state.fs.create_dir_all(&parent_guard).with_context(|| {
-                                format!("failed to create parent {}", parent.display())
+                        state
+                            .fs
+                            .ensure_parent_dir(&target)
+                            .with_context(|| {
+                                format!(
+                                    "failed to create parent for {}",
+                                    target.display()
+                                )
                             })?;
-                        }
                         let steps = ast::parse_script(cmd)
                             .with_context(|| format!("step {}: CAPTURE parse failed", idx + 1))?;
                         if steps.len() != 1 {
                             bail!("CAPTURE expects exactly one instruction");
                         }
                         let mut sub_state = ExecState {
-                            fs: Box::new(PathResolver::new(
-                                state.fs.root().as_path(),
-                                state.fs.build_context().as_path(),
-                            )?),
+                            fs: {
+                                let mut resolver = PathResolver::new(
+                                    state.fs.root().as_path(),
+                                    state.fs.build_context().as_path(),
+                                )?;
+                                resolver
+                                    .set_workspace_root(state.fs.build_context().clone());
+                                Box::new(resolver)
+                            },
                             cargo_target_dir: state.cargo_target_dir.clone(),
                             cwd: state.cwd.clone(),
                             envs: state.envs.clone(),
@@ -427,10 +439,7 @@ fn copy_entry(fs: &dyn WorkspaceFs, src: &GuardedPath, dst: &GuardedPath) -> Res
             fs.copy_dir_recursive(src, dst)?;
         }
         EntryKind::File => {
-            if let Some(parent) = dst.as_path().parent() {
-                let parent_guard = GuardedPath::new(dst.root(), parent)?;
-                fs.create_dir_all(&parent_guard)?;
-            }
+            fs.ensure_parent_dir(dst)?;
             fs.copy_file(src, dst)?;
         }
     }
