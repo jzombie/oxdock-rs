@@ -474,6 +474,15 @@ fn embed_execution_is_skipped() -> bool {
             return true;
         }
 
+        // Heuristic: Check if the current executable is the rust-analyzer proc-macro server
+        if std::env::current_exe()
+            .ok()
+            .and_then(|pb| pb.file_name().map(|n| n.to_string_lossy().contains("rust-analyzer")))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
         if std::env::var("RA_PROC_MACRO_SERVER").is_ok() {
             return true;
         }
