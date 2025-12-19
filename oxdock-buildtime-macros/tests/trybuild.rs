@@ -91,6 +91,27 @@ fn trybuild_no_std_embed() {
     );
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_workspace_root_override() {
+    let fixture = instantiate_fixture("workspace_root_override");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("run")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "workspace root override fixture should compile and run"
+    );
+}
+
 fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
     let crate_root =
         GuardedPath::new_root_from_str(env!("CARGO_MANIFEST_DIR")).expect("crate root guard");
@@ -120,8 +141,6 @@ fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
             "oxdock-embed",
             workspace_path.join("crates/internal/oxdock-embed"),
         )
-        .with_workspace_snapshot_from(&workspace_path)
-        .expect("workspace snapshot")
         .instantiate()
         .expect("failed to instantiate fixture")
 }

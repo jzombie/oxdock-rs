@@ -121,9 +121,7 @@ impl FixtureBuilder {
             patch_manifest(&resolver, &root, &self.replacements)?;
         }
 
-        let workspace_root_env = self
-            .workspace_root_env
-            .or_else(|| detect_workspace_root(self.template.as_path()));
+        let workspace_root_env = self.workspace_root_env;
 
         Ok(FixtureInstance {
             tempdir,
@@ -254,21 +252,6 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-fn detect_workspace_root(template: &Path) -> Option<PathBuf> {
-    let mut cur = template;
-    while let Some(parent) = cur.parent() {
-        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-        {
-            if parent.join(".git").exists() {
-                return Some(parent.to_path_buf());
-            }
-        }
-        cur = parent;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,20 +318,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn detect_workspace_root_finds_enclosing_git_directory() -> Result<()> {
-        let tempdir = GuardedPath::tempdir()?;
-        let root = tempdir.as_guarded_path().clone();
-        let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
-        let git_dir = root.join(".git")?;
-        resolver.create_dir_all(&git_dir)?;
-
-        let nested = root.join("nested/project")?;
-        resolver.create_dir_all(&nested)?;
-
-        let detected = detect_workspace_root(nested.as_path());
-        assert_eq!(detected.as_deref(), Some(root.as_path()));
-
-        Ok(())
-    }
 }

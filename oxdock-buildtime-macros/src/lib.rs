@@ -301,14 +301,15 @@ fn build_assets(
 
     let resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let build_context = resolver.build_context().clone();
+    let workspace_root = detect_workspace_root(&resolver, span)?;
 
-    let host_resolver =
-        PathResolver::new_guarded(temp_root_guard.clone(), build_context.clone())
+    let mut host_resolver =
+        PathResolver::new_guarded(temp_root_guard.clone(), workspace_root.clone())
             .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
+    host_resolver.set_workspace_root(workspace_root);
 
     let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps).map_err(|e| {
-        // Use alternate formatting to include the full error chain and filesystem snapshot.
+        // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
         syn::Error::new(span, format!("execution error: {e:#}"))
     })?;
 
@@ -381,6 +382,58 @@ fn build_assets(
 
     let _ = tempdir.persist();
     Ok(final_cwd)
+}
+
+fn read_workspace_env(
+    key: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<Option<GuardedPath>> {
+    match std::env::var(key) {
+        Ok(value) => {
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let guard = GuardedPath::new_root_from_str(&value).map_err(|e| {
+                syn::Error::new(span, format!("invalid {key} {value}: {e}"))
+            })?;
+            Ok(Some(guard))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(syn::Error::new(
+            span,
+            format!("failed to read {key}: {e}"),
+        )),
+    }
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn detect_workspace_root(
+    manifest_resolver: &PathResolver,
+    span: proc_macro2::Span,
+) -> syn::Result<GuardedPath> {
+    if let Some(root) = workspace_root_override(span)? {
+        return Ok(root);
+    }
+
+    let manifest_path = manifest_resolver.root().as_path();
+    let mut cur: Option<&std::path::Path> = Some(manifest_path);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return GuardedPath::new_root(dir).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to guard workspace root {}: {e}", dir.display()),
+                )
+            });
+        }
+        cur = dir.parent();
+    }
+
+    Ok(manifest_resolver.root().clone())
+}
+
+fn workspace_root_override(span: proc_macro2::Span) -> syn::Result<Option<GuardedPath>> {
+    read_workspace_env("OXDOCK_WORKSPACE_ROOT", span)
 }
 
 // `copy_dir_contents` replaced by `PathResolver::copy_dir_from_external`.

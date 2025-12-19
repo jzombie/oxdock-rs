@@ -39,11 +39,25 @@ impl PathResolver {
         }
         let candidate = self.build_context.as_path().join(from);
 
-        let guarded = self
+        match self
             .check_access_with_root(&self.build_context, &candidate, AccessMode::Read)
-            .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))?;
-
-        self.backend.resolve_copy_source(guarded)
+            .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
+        {
+            Ok(guarded) => self.backend.resolve_copy_source(guarded),
+            Err(primary) => {
+                if let Some(workspace_root) = &self.workspace_root {
+                    let workspace_candidate = workspace_root.as_path().join(from);
+                    if let Ok(workspace_guarded) = self.check_access_with_root(
+                        workspace_root,
+                        &workspace_candidate,
+                        AccessMode::Read,
+                    ) {
+                        return self.backend.resolve_copy_source(workspace_guarded);
+                    }
+                }
+                Err(primary)
+            }
+        }
     }
 
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {

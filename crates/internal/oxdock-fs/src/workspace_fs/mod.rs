@@ -132,6 +132,7 @@ impl AccessMode {
 pub struct PathResolver {
     root: GuardedPath,
     build_context: GuardedPath,
+    workspace_root: Option<GuardedPath>,
     backend: Backend,
 }
 
@@ -155,6 +156,7 @@ impl PathResolver {
         Ok(Self {
             root: root_guard,
             build_context: build_guard,
+            workspace_root: None,
             backend,
         })
     }
@@ -164,6 +166,7 @@ impl PathResolver {
         Ok(Self {
             root,
             build_context,
+            workspace_root: None,
             backend,
         })
     }
@@ -174,6 +177,14 @@ impl PathResolver {
 
     pub fn build_context(&self) -> &GuardedPath {
         &self.build_context
+    }
+
+    pub fn workspace_root(&self) -> Option<&GuardedPath> {
+        self.workspace_root.as_ref()
+    }
+
+    pub fn set_workspace_root(&mut self, root: GuardedPath) {
+        self.workspace_root = Some(root);
     }
 
     pub fn set_root(&mut self, root: GuardedPath) {
