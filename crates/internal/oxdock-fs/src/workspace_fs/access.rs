@@ -178,15 +178,30 @@ fn normalize_under_root(root_abs: &Path, candidate: &Path, mode: AccessMode) -> 
     use std::path::Component;
 
     let rel = if candidate.is_absolute() {
-        candidate.strip_prefix(root_abs).map_err(|_| {
-            anyhow::anyhow!(
-                "{} access to {} escapes allowed root {}",
-                mode.name(),
-                candidate.display(),
-                root_abs.display()
-            )
-        })?
-        .to_path_buf()
+        if let Ok(canon) = std::fs::canonicalize(candidate) {
+            if !canon.starts_with(root_abs) {
+                bail!(
+                    "{} access to {} escapes allowed root {}",
+                    mode.name(),
+                    candidate.display(),
+                    root_abs.display()
+                );
+            }
+            canon
+                .strip_prefix(root_abs)
+                .unwrap_or_else(|_| std::path::Path::new(""))
+                .to_path_buf()
+        } else {
+            candidate.strip_prefix(root_abs).map_err(|_| {
+                anyhow::anyhow!(
+                    "{} access to {} escapes allowed root {}",
+                    mode.name(),
+                    candidate.display(),
+                    root_abs.display()
+                )
+            })?
+            .to_path_buf()
+        }
     } else {
         candidate.to_path_buf()
     };
