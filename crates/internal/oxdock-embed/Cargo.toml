@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-embed"
-description = "Embedded-asset runtime compatibility layer for OxDock."
+description = "OxDock binary embedding layer."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

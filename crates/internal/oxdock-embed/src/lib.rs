@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 
-pub mod rust_embed {
+pub mod runtime {
     extern crate alloc;
     use alloc::borrow::Cow;
 
@@ -246,7 +246,7 @@ pub fn emit_embed_module(name: &syn::Ident, assets: &[AssetRecord]) -> syn::Resu
             extern crate alloc;
 
             use alloc::borrow::Cow;
-            use oxdock_embed::rust_embed::{EmbeddedFile, Filenames, Metadata};
+            use oxdock_embed::runtime::{EmbeddedFile, Filenames, Metadata};
 
             #[derive(Clone)]
             struct AssetEntry {

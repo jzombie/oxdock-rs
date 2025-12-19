@@ -114,7 +114,7 @@ fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
         mod #mod_ident {
             extern crate alloc;
 
-            use oxdock_embed::rust_embed::{EmbeddedFile, Filenames};
+            use oxdock_embed::runtime::{EmbeddedFile, Filenames};
 
             pub struct #name;
 
