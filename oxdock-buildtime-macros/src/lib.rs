@@ -307,8 +307,10 @@ fn build_assets(
         PathResolver::new_guarded(temp_root_guard.clone(), build_context.clone())
             .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
 
-    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps)
-        .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps).map_err(|e| {
+        // Use alternate formatting to include the full error chain and filesystem snapshot.
+        syn::Error::new(span, format!("execution error: {e:#}"))
+    })?;
 
     if debug_embed {
         eprintln!(
