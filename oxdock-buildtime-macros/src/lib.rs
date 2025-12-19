@@ -1,4 +1,4 @@
-use oxdock_embed::{emit_embed_module, gather_assets};
+use oxdock_embed::{emit_embed_module, gather_assets, runtime_support_tokens};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_parser::{DslMacroInput, ScriptSource};
 use proc_macro::TokenStream;
@@ -109,12 +109,11 @@ fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
 
 fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
     let mod_ident = embed_module_ident(name);
+    let runtime_support = runtime_support_tokens();
     quote! {
         #[allow(clippy::disallowed_methods, clippy::disallowed_types, non_snake_case)]
-        mod #mod_ident {
-            extern crate alloc;
-
-            use oxdock_embed::runtime::{EmbeddedFile, Filenames};
+        pub mod #mod_ident {
+            #runtime_support
 
             pub struct #name;
 

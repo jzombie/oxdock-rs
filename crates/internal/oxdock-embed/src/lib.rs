@@ -5,65 +5,68 @@ use quote::{format_ident, quote};
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 
-pub mod runtime {
-    extern crate alloc;
-    use alloc::borrow::Cow;
+pub fn runtime_support_tokens() -> TokenStream {
+    quote! {
+        extern crate alloc;
 
-    #[derive(Clone)]
-    pub struct Metadata {
-        hash: [u8; 32],
-        last_modified: Option<u64>,
-        created: Option<u64>,
-    }
+        use alloc::borrow::Cow;
 
-    impl Metadata {
-        pub const fn __oxdock_new(
+        #[derive(Clone)]
+        pub struct Metadata {
             hash: [u8; 32],
             last_modified: Option<u64>,
             created: Option<u64>,
-        ) -> Self {
-            Self {
-                hash,
-                last_modified,
-                created,
+        }
+
+        impl Metadata {
+            pub const fn __oxdock_new(
+                hash: [u8; 32],
+                last_modified: Option<u64>,
+                created: Option<u64>,
+            ) -> Self {
+                Self {
+                    hash,
+                    last_modified,
+                    created,
+                }
+            }
+
+            pub fn sha256_hash(&self) -> [u8; 32] {
+                self.hash
+            }
+
+            pub fn last_modified(&self) -> Option<u64> {
+                self.last_modified
+            }
+
+            pub fn created(&self) -> Option<u64> {
+                self.created
             }
         }
 
-        pub fn sha256_hash(&self) -> [u8; 32] {
-            self.hash
+        #[derive(Clone)]
+        pub struct EmbeddedFile {
+            pub data: Cow<'static, [u8]>,
+            pub metadata: Metadata,
         }
 
-        pub fn last_modified(&self) -> Option<u64> {
-            self.last_modified
+        pub enum Filenames {
+            Embedded(core::slice::Iter<'static, &'static str>),
         }
 
-        pub fn created(&self) -> Option<u64> {
-            self.created
+        impl Filenames {
+            pub fn from_slice(slice: &'static [&'static str]) -> Self {
+                Self::Embedded(slice.iter())
+            }
         }
-    }
 
-    #[derive(Clone)]
-    pub struct EmbeddedFile {
-        pub data: Cow<'static, [u8]>,
-        pub metadata: Metadata,
-    }
+        impl Iterator for Filenames {
+            type Item = Cow<'static, str>;
 
-    pub enum Filenames {
-        Embedded(core::slice::Iter<'static, &'static str>),
-    }
-
-    impl Filenames {
-        pub fn from_slice(slice: &'static [&'static str]) -> Self {
-            Self::Embedded(slice.iter())
-        }
-    }
-
-    impl Iterator for Filenames {
-        type Item = Cow<'static, str>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            match self {
-                Filenames::Embedded(iter) => iter.next().map(|s| Cow::Borrowed(*s)),
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    Filenames::Embedded(iter) => iter.next().map(|s| Cow::Borrowed(*s)),
+                }
             }
         }
     }
@@ -173,6 +176,7 @@ fn collect_assets_recursive(
 
 pub fn emit_embed_module(name: &syn::Ident, assets: &[AssetRecord]) -> syn::Result<TokenStream> {
     let mod_ident = format_ident!("__oxdock_embed_{}", name);
+    let runtime_support = runtime_support_tokens();
     let bytes_idents: Vec<_> = (0..assets.len())
         .map(|idx| format_ident!("__OXDOCK_EMBED_BYTES_{idx}"))
         .collect();
@@ -242,11 +246,8 @@ pub fn emit_embed_module(name: &syn::Ident, assets: &[AssetRecord]) -> syn::Resu
 
     Ok(quote! {
         #[allow(clippy::disallowed_methods, clippy::disallowed_types, non_snake_case)]
-        mod #mod_ident {
-            extern crate alloc;
-
-            use alloc::borrow::Cow;
-            use oxdock_embed::runtime::{EmbeddedFile, Filenames, Metadata};
+        pub mod #mod_ident {
+            #runtime_support
 
             #[derive(Clone)]
             struct AssetEntry {
