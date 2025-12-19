@@ -462,9 +462,6 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
 fn embed_execution_is_skipped() -> bool {
     #[cfg(rust_analyzer)]
     {
-        // build.rs sets cfg(rust_analyzer) when rust-analyzer's proc-macro server is expanding the
-        // macro; running the DSL would try to build user assets (npm, etc.) and crash IntelliSense,
-        // so we immediately bail out when completions invoke the macro.
         return true;
     }
 
@@ -474,6 +471,10 @@ fn embed_execution_is_skipped() -> bool {
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
             .unwrap_or(false);
         if explicit_skip {
+            return true;
+        }
+
+        if std::env::var("RA_PROC_MACRO_SERVER").is_ok() {
             return true;
         }
 
