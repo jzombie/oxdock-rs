@@ -57,18 +57,24 @@ pub fn run_steps_with_context_result(
         Err(err) => {
             // Compose a single error message with the top cause plus a compact fs snapshot.
             let chain = err.chain().map(|e| e.to_string()).collect::<Vec<_>>();
-            let primary = chain
+            let mut primary = chain
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "unknown error".into());
             let rest = if chain.len() > 1 {
-                let causes = chain
-                    .iter()
-                    .skip(1)
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n  ");
-                format!("\ncauses:\n  {}", causes)
+                let first_cause = chain[1].clone();
+                primary = format!("{primary} ({first_cause})");
+                if chain.len() > 2 {
+                    let causes = chain
+                        .iter()
+                        .skip(2)
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n  ");
+                    format!("\ncauses:\n  {}", causes)
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };
@@ -684,6 +690,39 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(mock.killed(), vec!["bg-task"]);
+    }
+
+    #[test]
+    fn symlink_errors_report_underlying_cause() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = temp.as_guarded_path().clone();
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Mkdir("client".into()),
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Symlink {
+                    from: "client".into(),
+                    to: "client".into(),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+        ];
+        let err = run_steps(&root, &steps).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("step 2: SYMLINK client client"),
+            "error should include step context: {msg}"
+        );
+        assert!(
+            msg.contains("SYMLINK destination already exists"),
+            "error should surface underlying cause: {msg}"
+        );
     }
 
     #[test]
