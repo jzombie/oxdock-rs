@@ -110,7 +110,7 @@ fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
 fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
     let mod_ident = embed_module_ident(name);
     quote! {
-        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types, non_snake_case)]
         mod #mod_ident {
             extern crate alloc;
 
@@ -890,10 +890,9 @@ mod tests {
                     .last()
                     .map(|seg| seg.ident == "include_bytes")
                     .unwrap_or(false)
+                    && let Ok(lit) = syn::parse2::<syn::LitStr>(mac.tokens.clone())
                 {
-                    if let Ok(lit) = syn::parse2::<syn::LitStr>(mac.tokens.clone()) {
-                        self.matches.push(lit.value());
-                    }
+                    self.matches.push(lit.value());
                 }
                 syn::visit::visit_macro(self, mac);
             }

@@ -84,7 +84,7 @@ pub fn gather_assets(
 ) -> Result<Vec<AssetRecord>> {
     let mut assets = Vec::new();
     collect_assets_recursive(resolver, asset_root, asset_root, &mut assets)?;
-    assets.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    assets.sort_by_key(|asset| asset.rel_path.clone());
     Ok(assets)
 }
 
@@ -97,7 +97,7 @@ fn collect_assets_recursive(
     let mut entries = resolver
         .read_dir_entries(dir)
         .with_context(|| format!("failed to read assets in {}", dir.as_path().display()))?;
-    entries.sort_by(|a, b| a.path().cmp(&b.path()));
+    entries.sort_by_key(|entry| entry.path());
 
     for entry in entries {
         let entry_path = entry.path();
@@ -241,7 +241,7 @@ pub fn emit_embed_module(name: &syn::Ident, assets: &[AssetRecord]) -> syn::Resu
         .collect();
 
     Ok(quote! {
-        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types, non_snake_case)]
         mod #mod_ident {
             extern crate alloc;
 
