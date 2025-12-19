@@ -1,6 +1,10 @@
 use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, VecDeque};
 
+mod lexer;
+pub use lexer::LANGUAGE_SPEC;
+use lexer::{CommandToken, GuardToken, Token};
+
 #[cfg(feature = "token-input")]
 mod macro_input;
 #[cfg(feature = "token-input")]
@@ -173,202 +177,6 @@ pub enum WorkspaceTarget {
     Local,
 }
 
-#[derive(Clone)]
-struct ScriptLine {
-    line_no: usize,
-    text: String,
-}
-
-fn strip_comments(input: &str) -> Result<String> {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    let mut in_line_comment = false;
-    let mut block_depth = 0usize;
-    let mut in_double_quote = false;
-    let mut in_single_quote = false;
-    let mut double_escape = false;
-    let mut single_escape = false;
-
-    while let Some(ch) = chars.next() {
-        if in_line_comment {
-            if ch == '\n' {
-                in_line_comment = false;
-                output.push(ch);
-            }
-            continue;
-        }
-
-        if block_depth > 0 {
-            if ch == '/' && matches!(chars.peek(), Some('*')) {
-                chars.next();
-                block_depth += 1;
-                continue;
-            }
-            if ch == '*' && matches!(chars.peek(), Some('/')) {
-                chars.next();
-                block_depth -= 1;
-                continue;
-            }
-            if ch == '\n' {
-                output.push('\n');
-            }
-            continue;
-        }
-
-        if !in_double_quote && !in_single_quote && ch == '/' {
-            match chars.peek() {
-                Some('/') => {
-                    chars.next();
-                    in_line_comment = true;
-                    continue;
-                }
-                Some('*') => {
-                    chars.next();
-                    block_depth = 1;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-
-        output.push(ch);
-
-        if in_double_quote {
-            if double_escape {
-                double_escape = false;
-            } else if ch == '\\' {
-                double_escape = true;
-            } else if ch == '"' {
-                in_double_quote = false;
-            }
-            continue;
-        }
-
-        if in_single_quote {
-            if single_escape {
-                single_escape = false;
-            } else if ch == '\\' {
-                single_escape = true;
-            } else if ch == '\'' {
-                in_single_quote = false;
-            }
-            continue;
-        }
-
-        if ch == '"' {
-            in_double_quote = true;
-            double_escape = false;
-        } else if ch == '\'' {
-            in_single_quote = true;
-            single_escape = false;
-        }
-    }
-
-    if block_depth > 0 {
-        bail!("unclosed block comment in DSL script");
-    }
-
-    Ok(output)
-}
-
-fn parse_guard(raw: &str, line_no: usize) -> Result<Guard> {
-    let mut text = raw.trim();
-    let mut invert_prefix = false;
-    if let Some(rest) = text.strip_prefix('!') {
-        invert_prefix = true;
-        text = rest.trim();
-    }
-
-    if let Some(after) = text.strip_prefix("platform") {
-        let after = after.trim_start();
-        if let Some(rest) = after.strip_prefix(':').or_else(|| after.strip_prefix('=')) {
-            let tag = rest.trim().to_ascii_lowercase();
-            let target = match tag.as_str() {
-                "unix" => PlatformGuard::Unix,
-                "windows" => PlatformGuard::Windows,
-                "mac" | "macos" => PlatformGuard::Macos,
-                "linux" => PlatformGuard::Linux,
-                _ => bail!("line {}: unknown platform '{}'", line_no, rest.trim()),
-            };
-            return Ok(Guard::Platform {
-                target,
-                invert: invert_prefix,
-            });
-        }
-    }
-
-    if let Some(rest) = text.strip_prefix("env:") {
-        let rest = rest.trim();
-        if let Some(pos) = rest.find("!=") {
-            let key = rest[..pos].trim();
-            let value = rest[pos + 2..].trim();
-            if key.is_empty() || value.is_empty() {
-                bail!("line {}: guard env: requires key and value", line_no);
-            }
-            return Ok(Guard::EnvEquals {
-                key: key.to_string(),
-                value: value.to_string(),
-                invert: true,
-            });
-        }
-        if let Some(pos) = rest.find('=') {
-            let key = rest[..pos].trim();
-            let value = rest[pos + 1..].trim();
-            if key.is_empty() || value.is_empty() {
-                bail!("line {}: guard env: requires key and value", line_no);
-            }
-            return Ok(Guard::EnvEquals {
-                key: key.to_string(),
-                value: value.to_string(),
-                invert: invert_prefix,
-            });
-        }
-        if rest.is_empty() {
-            bail!("line {}: guard env: requires a variable name", line_no);
-        }
-        return Ok(Guard::EnvExists {
-            key: rest.to_string(),
-            invert: invert_prefix,
-        });
-    }
-
-    let tag = text.to_ascii_lowercase();
-    let target = match tag.as_str() {
-        "unix" => PlatformGuard::Unix,
-        "windows" => PlatformGuard::Windows,
-        "mac" | "macos" => PlatformGuard::Macos,
-        "linux" => PlatformGuard::Linux,
-        _ => bail!("line {}: unknown guard '{}'", line_no, raw),
-    };
-    Ok(Guard::Platform {
-        target,
-        invert: invert_prefix,
-    })
-}
-
-fn parse_guard_groups(block: &str, line_no: usize) -> Result<Vec<Vec<Guard>>> {
-    let mut groups: Vec<Vec<Guard>> = Vec::new();
-    for alt in block.split('|') {
-        let mut group: Vec<Guard> = Vec::new();
-        for entry in alt.split(',') {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            group.push(parse_guard(trimmed, line_no)?);
-        }
-        if !group.is_empty() {
-            groups.push(group);
-        }
-    }
-    if groups.is_empty() {
-        bail!(
-            "line {}: guard block must contain at least one guard",
-            line_no
-        );
-    }
-    Ok(groups)
-}
 
 fn combine_guard_groups(a: &[Vec<Guard>], b: &[Vec<Guard>]) -> Vec<Vec<Guard>> {
     if a.is_empty() {
@@ -395,10 +203,11 @@ struct ScopeFrame {
 }
 
 struct ScriptParser {
-    lines: VecDeque<ScriptLine>,
+    tokens: VecDeque<Token>,
     steps: Vec<Step>,
     guard_stack: Vec<Vec<Vec<Guard>>>,
     pending_guards: Option<Vec<Vec<Guard>>>,
+    pending_inline_guards: Option<Vec<Vec<Guard>>>,
     pending_can_open_block: bool,
     pending_scope_enters: usize,
     scope_stack: Vec<ScopeFrame>,
@@ -406,20 +215,13 @@ struct ScriptParser {
 
 impl ScriptParser {
     fn new(input: &str) -> Result<Self> {
-        let stripped = strip_comments(input)?;
-        let lines = stripped
-            .lines()
-            .enumerate()
-            .map(|(idx, raw)| ScriptLine {
-                line_no: idx + 1,
-                text: raw.to_string(),
-            })
-            .collect::<VecDeque<_>>();
+        let tokens = VecDeque::from(lexer::lex_script(input)?);
         Ok(Self {
-            lines,
+            tokens,
             steps: Vec::new(),
             guard_stack: vec![Vec::new()],
             pending_guards: None,
+            pending_inline_guards: None,
             pending_can_open_block: false,
             pending_scope_enters: 0,
             scope_stack: Vec::new(),
@@ -427,24 +229,13 @@ impl ScriptParser {
     }
 
     fn parse(mut self) -> Result<Vec<Step>> {
-        while let Some(line) = self.next_line() {
-            let trimmed = line.text.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
+        while let Some(token) = self.tokens.pop_front() {
+            match token {
+                Token::Guard(guard) => self.handle_guard_token(guard)?,
+                Token::BlockStart { line_no } => self.start_block_from_pending(line_no)?,
+                Token::BlockEnd { line_no } => self.end_block(line_no)?,
+                Token::Command(cmd) => self.handle_command_token(cmd)?,
             }
-            if trimmed == "{" {
-                self.start_block_from_pending(line.line_no)?;
-                continue;
-            }
-            if trimmed == "}" {
-                self.end_block(line.line_no)?;
-                continue;
-            }
-            if trimmed.starts_with('[') {
-                self.handle_guard_line(line)?;
-                continue;
-            }
-            self.handle_command(line.line_no, line.text, None)?;
         }
 
         if self.guard_stack.len() != 1 {
@@ -459,77 +250,22 @@ impl ScriptParser {
         Ok(self.steps)
     }
 
-    fn next_line(&mut self) -> Option<ScriptLine> {
-        while let Some(line) = self.lines.pop_front() {
-            if line.text.trim().is_empty() {
-                continue;
+    fn handle_guard_token(&mut self, guard: GuardToken) -> Result<()> {
+        if let Some(Token::Command(cmd)) = self.tokens.front() {
+            if cmd.line_no == guard.line_end {
+                self.pending_inline_guards = Some(guard.groups);
+                self.pending_can_open_block = false;
+                return Ok(());
             }
-            if line.text.trim_start().starts_with('#') {
-                continue;
-            }
-            return Some(line);
         }
-        None
+        self.stash_pending_guard(guard.groups);
+        self.pending_can_open_block = true;
+        Ok(())
     }
 
-    fn push_front(&mut self, line_no: usize, text: String) {
-        self.lines.push_front(ScriptLine { line_no, text });
-    }
-
-    fn handle_guard_line(&mut self, first_line: ScriptLine) -> Result<()> {
-        let mut buf = String::new();
-        let remainder: String;
-        let mut current = first_line.text.trim_start().to_string();
-        let mut closing_line = first_line.line_no;
-        if !current.starts_with('[') {
-            bail!("line {}: guard must start with '['", first_line.line_no);
-        }
-        current.remove(0);
-
-        loop {
-            if let Some(idx) = current.find(']') {
-                buf.push_str(&current[..idx]);
-                remainder = current[idx + 1..].to_string();
-                break;
-            } else {
-                buf.push_str(&current);
-                buf.push('\n');
-                let next = self
-                    .lines
-                    .pop_front()
-                    .ok_or_else(|| anyhow!("line {}: guard must close with ']'", closing_line))?;
-                closing_line = next.line_no;
-                current = next.text.trim().to_string();
-            }
-        }
-
-        let groups = parse_guard_groups(&buf, first_line.line_no)?;
-        let remainder_trimmed = {
-            let trimmed = remainder.trim();
-            if trimmed.starts_with('#') {
-                ""
-            } else {
-                trimmed
-            }
-        };
-
-        if let Some(after_brace) = remainder_trimmed.strip_prefix('{') {
-            let after = after_brace.trim_start();
-            if !after.is_empty() {
-                self.push_front(closing_line, after.to_string());
-            }
-            self.start_block(groups, first_line.line_no)?;
-            return Ok(());
-        }
-
-        if remainder_trimmed.is_empty() {
-            self.stash_pending_guard(groups);
-            self.pending_can_open_block = true;
-            return Ok(());
-        }
-
-        self.pending_can_open_block = false;
-        self.handle_command(closing_line, remainder_trimmed.to_string(), Some(groups))
+    fn handle_command_token(&mut self, token: CommandToken) -> Result<()> {
+        let inline = self.pending_inline_guards.take();
+        self.handle_command(token.line_no, token.text, inline)
     }
 
     fn stash_pending_guard(&mut self, groups: Vec<Vec<Guard>>) {
@@ -641,32 +377,10 @@ impl ScriptParser {
         if trimmed.is_empty() {
             return Ok(());
         }
-        if let Some(idx) = trimmed.find(';') {
-            let command_token = trimmed[..idx].trim();
-            if !command_token.is_empty() && !command_token.chars().any(|c| c.is_whitespace()) {
-                let after = trimmed[idx + 1..].trim();
-                if !after.is_empty() {
-                    self.push_front(line_no, after.to_string());
-                }
-                return self.handle_command(line_no, command_token.to_string(), inline_guards);
-            }
-        }
         let (op_str, rest_str) = split_op_and_rest(trimmed);
         let cmd = Command::parse(op_str)
             .ok_or_else(|| anyhow!("line {}: unknown instruction '{}'", line_no, op_str))?;
-        let mut remainder = rest_str.to_string();
-        if cmd != Command::Run
-            && cmd != Command::RunBg
-            && let Some(idx) = remainder.find(';')
-        {
-            let first = remainder[..idx].trim().to_string();
-            let tail = remainder[idx + 1..].trim();
-            if !tail.is_empty() {
-                self.push_front(line_no, tail.to_string());
-            }
-            remainder = first;
-        }
-
+        let remainder = rest_str.to_string();
         let guards = self.guard_context(inline_guards);
         let kind = build_step_kind(cmd, &remainder, line_no)?;
         let scope_enter = self.pending_scope_enters;
@@ -951,7 +665,7 @@ mod tests {
     fn string_dsl_errors_on_unclosed_block_comment() {
         let err = parse_script("RUN echo hi /*").expect_err("unclosed block comment should error");
         assert!(
-            err.to_string().contains("unclosed block comment"),
+            err.to_string().contains("expected"),
             "unexpected error message: {err}"
         );
     }

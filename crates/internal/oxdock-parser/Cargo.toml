@@ -17,6 +17,8 @@ anyhow.workspace = true
 proc-macro2 = { workspace = true, optional = true }
 quote = { workspace = true, optional = true }
 syn = { workspace = true, optional = true }
+pest = { version = "2.7", default-features = false, features = ["std"] }
+pest_derive = "2.7"
 
 [dev-dependencies]
 indoc.workspace = true
