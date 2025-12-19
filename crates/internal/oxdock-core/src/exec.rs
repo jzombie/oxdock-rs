@@ -316,15 +316,9 @@ fn execute_steps<P: ProcessManager>(
                             .fs
                             .resolve_write(&state.cwd, path)
                             .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
-                        state
-                            .fs
-                            .ensure_parent_dir(&target)
-                            .with_context(|| {
-                                format!(
-                                    "failed to create parent for {}",
-                                    target.display()
-                                )
-                            })?;
+                        state.fs.ensure_parent_dir(&target).with_context(|| {
+                            format!("failed to create parent for {}", target.display())
+                        })?;
                         state
                             .fs
                             .write_file(&target, contents.as_bytes())
@@ -335,15 +329,9 @@ fn execute_steps<P: ProcessManager>(
                             .fs
                             .resolve_write(&state.cwd, path)
                             .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
-                        state
-                            .fs
-                            .ensure_parent_dir(&target)
-                            .with_context(|| {
-                                format!(
-                                    "failed to create parent for {}",
-                                    target.display()
-                                )
-                            })?;
+                        state.fs.ensure_parent_dir(&target).with_context(|| {
+                            format!("failed to create parent for {}", target.display())
+                        })?;
                         let steps = ast::parse_script(cmd)
                             .with_context(|| format!("step {}: CAPTURE parse failed", idx + 1))?;
                         if steps.len() != 1 {
@@ -355,8 +343,7 @@ fn execute_steps<P: ProcessManager>(
                                     state.fs.root().as_path(),
                                     state.fs.build_context().as_path(),
                                 )?;
-                                resolver
-                                    .set_workspace_root(state.fs.build_context().clone());
+                                resolver.set_workspace_root(state.fs.build_context().clone());
                                 Box::new(resolver)
                             },
                             cargo_target_dir: state.cargo_target_dir.clone(),

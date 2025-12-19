@@ -1,6 +1,9 @@
 #[cfg(not(miri))]
 use anyhow::Context;
 use anyhow::{Result, bail};
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
+use std::ffi::OsString;
 #[allow(clippy::disallowed_types)]
 use std::path::Path;
 #[cfg(miri)]
@@ -9,9 +12,6 @@ use std::path::PathBuf;
 #[cfg(not(miri))]
 #[allow(clippy::disallowed_types)]
 use std::path::PathBuf;
-#[cfg(not(miri))]
-#[allow(clippy::disallowed_types)]
-use std::ffi::OsString;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
