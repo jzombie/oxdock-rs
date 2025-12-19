@@ -6,6 +6,9 @@ use std::path::Path;
 #[cfg(miri)]
 #[cfg_attr(miri, allow(clippy::disallowed_types, clippy::disallowed_methods))]
 use std::path::PathBuf;
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
+use std::path::PathBuf;
 
 use super::{AccessMode, GuardedPath, PathResolver};
 
@@ -29,6 +32,10 @@ pub(crate) fn guard_path(
         }
         let root_abs = std::fs::canonicalize(root)
             .with_context(|| format!("failed to canonicalize root {}", root.display()))?;
+
+        if matches!(mode, AccessMode::Passthru) {
+            return normalize_under_root(&root_abs, candidate, mode);
+        }
 
         if let Ok(cand_abs) = std::fs::canonicalize(candidate) {
             if !cand_abs.starts_with(&root_abs) {
@@ -163,6 +170,51 @@ fn normalize_no_fs(path: &Path) -> PathBuf {
         out.push(seg);
     }
     out
+}
+
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn normalize_under_root(root_abs: &Path, candidate: &Path, mode: AccessMode) -> Result<PathBuf> {
+    use std::path::Component;
+
+    let rel = if candidate.is_absolute() {
+        candidate.strip_prefix(root_abs).map_err(|_| {
+            anyhow::anyhow!(
+                "{} access to {} escapes allowed root {}",
+                mode.name(),
+                candidate.display(),
+                root_abs.display()
+            )
+        })?
+        .to_path_buf()
+    } else {
+        candidate.to_path_buf()
+    };
+
+    let mut parts: Vec<std::ffi::OsString> = Vec::new();
+    for comp in rel.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    bail!(
+                        "{} access to {} escapes allowed root {}",
+                        mode.name(),
+                        candidate.display(),
+                        root_abs.display()
+                    );
+                }
+            }
+            Component::Normal(seg) => parts.push(seg.to_os_string()),
+            Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+
+    let mut out = root_abs.to_path_buf();
+    for part in parts {
+        out.push(part);
+    }
+    Ok(out)
 }
 
 // Guard and canonicalize paths under the configured roots.
