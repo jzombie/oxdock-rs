@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 
 mod lexer;
 pub use lexer::LANGUAGE_SPEC;
-use lexer::{CommandToken, GuardToken, Token};
+use lexer::{GuardToken, LexedCommand, Token};
 
 #[cfg(feature = "token-input")]
 mod macro_input;
@@ -263,9 +263,9 @@ impl ScriptParser {
         Ok(())
     }
 
-    fn handle_command_token(&mut self, token: CommandToken) -> Result<()> {
+    fn handle_command_token(&mut self, token: LexedCommand) -> Result<()> {
         let inline = self.pending_inline_guards.take();
-        self.handle_command(token.line_no, token.text, inline)
+        self.handle_command(token.line_no, token.kind, inline)
     }
 
     fn stash_pending_guard(&mut self, groups: Vec<Vec<Guard>>) {
@@ -369,20 +369,11 @@ impl ScriptParser {
 
     fn handle_command(
         &mut self,
-        line_no: usize,
-        text: String,
+        _line_no: usize,
+        kind: StepKind,
         inline_guards: Option<Vec<Vec<Guard>>>,
     ) -> Result<()> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Ok(());
-        }
-        let (op_str, rest_str) = split_op_and_rest(trimmed);
-        let cmd = Command::parse(op_str)
-            .ok_or_else(|| anyhow!("line {}: unknown instruction '{}'", line_no, op_str))?;
-        let remainder = rest_str.to_string();
         let guards = self.guard_context(inline_guards);
-        let kind = build_step_kind(cmd, &remainder, line_no)?;
         let scope_enter = self.pending_scope_enters;
         self.pending_scope_enters = 0;
         for frame in self.scope_stack.iter_mut() {
@@ -396,176 +387,6 @@ impl ScriptParser {
         });
         Ok(())
     }
-}
-
-fn split_op_and_rest(input: &str) -> (&str, &str) {
-    if let Some((idx, _)) = input.char_indices().find(|(_, ch)| ch.is_whitespace()) {
-        let op = &input[..idx];
-        let rest = input[idx..].trim();
-        (op, rest)
-    } else {
-        (input, "")
-    }
-}
-
-fn build_step_kind(cmd: Command, remainder: &str, line_no: usize) -> Result<StepKind> {
-    let kind = match cmd {
-        Command::Workdir => {
-            if remainder.is_empty() {
-                bail!("line {}: WORKDIR requires a path", line_no);
-            }
-            StepKind::Workdir(remainder.to_string())
-        }
-        Command::Workspace => {
-            let target = match remainder {
-                "SNAPSHOT" | "snapshot" => WorkspaceTarget::Snapshot,
-                "LOCAL" | "local" => WorkspaceTarget::Local,
-                _ => bail!("line {}: WORKSPACE requires LOCAL or SNAPSHOT", line_no),
-            };
-            StepKind::Workspace(target)
-        }
-        Command::Env => {
-            let mut parts = remainder.splitn(2, '=');
-            let key = parts
-                .next()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("line {}: ENV requires KEY=VALUE", line_no))?;
-            let value = parts
-                .next()
-                .map(str::to_string)
-                .ok_or_else(|| anyhow!("line {}: ENV requires KEY=VALUE", line_no))?;
-            StepKind::Env {
-                key: key.to_string(),
-                value,
-            }
-        }
-        Command::Echo => {
-            if remainder.is_empty() {
-                bail!("line {}: ECHO requires a message", line_no);
-            }
-            StepKind::Echo(remainder.to_string())
-        }
-        Command::Run => {
-            if remainder.is_empty() {
-                bail!("line {}: RUN requires a command", line_no);
-            }
-            StepKind::Run(remainder.to_string())
-        }
-        Command::RunBg => {
-            if remainder.is_empty() {
-                bail!("line {}: RUN_BG requires a command", line_no);
-            }
-            StepKind::RunBg(remainder.to_string())
-        }
-        Command::Copy => {
-            let mut p = remainder.split_whitespace();
-            let from = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: COPY requires <from> <to>", line_no))?;
-            let to = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: COPY requires <from> <to>", line_no))?;
-            StepKind::Copy {
-                from: from.to_string(),
-                to: to.to_string(),
-            }
-        }
-        Command::Capture => {
-            let mut p = remainder.splitn(2, ' ');
-            let path = p
-                .next()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("line {}: CAPTURE requires <path> <command>", line_no))?;
-            let cmd = p
-                .next()
-                .map(str::to_string)
-                .ok_or_else(|| anyhow!("line {}: CAPTURE requires <path> <command>", line_no))?;
-            StepKind::Capture {
-                path: path.to_string(),
-                cmd,
-            }
-        }
-        Command::CopyGit => {
-            let mut p = remainder.split_whitespace();
-            let rev = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no))?;
-            let from = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no))?;
-            let to = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: COPY_GIT requires <rev> <from> <to>", line_no))?;
-            StepKind::CopyGit {
-                rev: rev.to_string(),
-                from: from.to_string(),
-                to: to.to_string(),
-            }
-        }
-        Command::Symlink => {
-            let mut p = remainder.split_whitespace();
-            let from = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: SYMLINK requires <link> <target>", line_no))?;
-            let to = p
-                .next()
-                .ok_or_else(|| anyhow!("line {}: SYMLINK requires <link> <target>", line_no))?;
-            StepKind::Symlink {
-                from: from.to_string(),
-                to: to.to_string(),
-            }
-        }
-        Command::Mkdir => {
-            if remainder.is_empty() {
-                bail!("line {}: MKDIR requires a path", line_no);
-            }
-            StepKind::Mkdir(remainder.to_string())
-        }
-        Command::Ls => {
-            let path = remainder
-                .split_whitespace()
-                .next()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            StepKind::Ls(path)
-        }
-        Command::Cwd => StepKind::Cwd,
-        Command::Write => {
-            let mut p = remainder.splitn(2, ' ');
-            let path = p
-                .next()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("line {}: WRITE requires <path> <contents>", line_no))?;
-            let contents = p
-                .next()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("line {}: WRITE requires <path> <contents>", line_no))?;
-            StepKind::Write {
-                path: path.to_string(),
-                contents: contents.to_string(),
-            }
-        }
-        Command::Cat => {
-            let path = remainder
-                .split_whitespace()
-                .next()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("line {}: CAT requires <path>", line_no))?;
-            StepKind::Cat(path.to_string())
-        }
-        Command::Exit => {
-            if remainder.is_empty() {
-                bail!("line {}: EXIT requires a code", line_no);
-            }
-            let code: i32 = remainder
-                .parse()
-                .map_err(|_| anyhow!("line {}: EXIT code must be an integer", line_no))?;
-            StepKind::Exit(code)
-        }
-    };
-    Ok(kind)
 }
 
 pub fn parse_script(input: &str) -> Result<Vec<Step>> {
@@ -607,11 +428,7 @@ mod tests {
     #[test]
     fn commands_are_case_sensitive() {
         for bad in ["run echo hi", "Run echo hi", "rUn echo hi", "write foo bar"] {
-            let err = parse_script(bad).expect_err("mixed/lowercase commands must fail");
-            assert!(
-                err.to_string().contains("unknown instruction"),
-                "unexpected error for '{bad}': {err}"
-            );
+            parse_script(bad).expect_err("mixed/lowercase commands must fail");
         }
     }
 

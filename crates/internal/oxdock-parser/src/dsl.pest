@@ -55,31 +55,64 @@ bare_platform = { platform_tag }
 
 platform_tag = @{ ASCII_ALPHANUMERIC+ }
 
-command = _{ run_command | run_bg_command | simple_command }
+command = _{
+    workdir_command |
+    workspace_command |
+    env_command |
+    echo_command |
+    run_bg_command | // Must come before run_command to avoid prefix match
+    run_command |
+    copy_git_command | // Must come before copy_command
+    copy_command |
+    capture_command |
+    symlink_command |
+    mkdir_command |
+    ls_command |
+    cwd_command |
+    cat_command |
+    write_command |
+    exit_command
+}
 
-run_command = { "RUN" ~ run_args }
+// Commands
+workdir_command = ${ "WORKDIR" ~ sep ~ argument }
+workspace_command = ${ "WORKSPACE" ~ sep ~ workspace_target }
+env_command = ${ "ENV" ~ sep ~ env_pair }
+echo_command = ${ "ECHO" ~ sep ~ message }
+run_command = ${ "RUN" ~ sep ~ run_args }
+run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
+copy_command = ${ "COPY" ~ sep ~ argument ~ sep ~ argument }
+capture_command = ${ "CAPTURE" ~ sep ~ argument ~ sep ~ run_args }
+copy_git_command = ${ "COPY_GIT" ~ sep ~ argument ~ sep ~ argument ~ sep ~ argument }
+symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }
+mkdir_command = ${ "MKDIR" ~ sep ~ argument }
+ls_command = ${ "LS" ~ (sep ~ argument)? }
+cwd_command = ${ "CWD" }
+cat_command = ${ "CAT" ~ sep ~ argument }
+write_command = ${ "WRITE" ~ sep ~ argument ~ sep ~ message }
+exit_command = ${ "EXIT" ~ sep ~ exit_code }
 
-run_bg_command = { "RUN_BG" ~ run_args }
+// Arguments
+sep = _{ WHITESPACE+ }
+argument = { quoted_string | unquoted_arg }
+unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
+
+workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
+env_pair = { env_key_part ~ "=" ~ env_value_part }
+env_key_part = @{ (!"=" ~ !WHITESPACE ~ !linebreak ~ ANY)+ }
+env_value_part = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
+
+message = { (quoted_string | unquoted_msg_content)+ }
+unquoted_msg_content = { !(linebreak | ";") ~ ANY }
 
 run_args = { (quoted_string | unquoted_run_content)+ }
+unquoted_run_content = { !(linebreak | "//" | "/*") ~ ANY }
 
-simple_command = { command_name ~ simple_args? }
-
-command_name = @{ (ASCII_ALPHANUMERIC | "_")+ }
-
-simple_args = { (quoted_string | unquoted_simple_content)+ }
+exit_code = @{ ASCII_DIGIT+ }
 
 quoted_string = @{
     "\"" ~ ( "\\\"" | (!"\"" ~ ANY) )* ~ "\"" |
     "'" ~ ( "\\'" | (!"'" ~ ANY) )* ~ "'"
-}
-
-unquoted_run_content = {
-    !(linebreak | "//" | "/*") ~ ANY
-}
-
-unquoted_simple_content = {
-    !(linebreak | ";" | "//" | "/*") ~ ANY
 }
 
 ws = _{ (WHITESPACE | linebreak)* }
