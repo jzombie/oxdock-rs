@@ -19,3 +19,6 @@ anyhow.workspace = true
 oxdock-fs.workspace = true
 oxdock-process.workspace = true
 toml_edit.workspace = true
+
+[dev-dependencies]
+indoc.workspace = true

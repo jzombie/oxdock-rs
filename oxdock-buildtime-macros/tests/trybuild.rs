@@ -59,6 +59,112 @@ fn trybuild_exit_fail() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_run_failure_reports_cause() {
+    let fixture = instantiate_fixture("run_failure_reporting");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("run")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
+        .arg("--quiet");
+    let output = cmd.output().expect("failed to spawn cargo");
+
+    assert!(
+        !output.success(),
+        "fixture run_failure_reporting should fail during RUN. stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("__oxdock_missing_command__"),
+        "stderr should mention the failing command, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("failed with status"),
+        "stderr should include the command failure status, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("filesystem snapshot"),
+        "stderr should include the filesystem snapshot context, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("(command"),
+        "stderr should embed the underlying command failure inside the error chain, stderr:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_skip_exec_rust_analyzer_env() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("RUST_ANALYZER_INTERNALS_DO_NOT_USE", "this is unstable")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "detecting rust-analyzer env should skip execution automatically"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_skip_exec_vscode_background() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("VSCODE_PID", "1234")
+        .env_remove("TERM") // Ensure TERM is missing
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "detecting VS Code background env (VSCODE_PID set, TERM missing) should skip execution"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_exec_vscode_integrated_terminal() {
+    let fixture = instantiate_fixture("build_exit_fail");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check")
+        .env("VSCODE_PID", "1234")
+        .env("TERM", "xterm-256color") // TERM is present in integrated terminal
+        .arg("--quiet");
+    let output = cmd.output().expect("failed to spawn cargo");
+
+    assert!(
+        !output.success(),
+        "VS Code integrated terminal (VSCODE_PID set, TERM set) should NOT skip execution"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_guard_scope() {
     let fixture = instantiate_fixture("guard_scope");
 
@@ -70,6 +176,46 @@ fn trybuild_guard_scope() {
     let status = cmd.status().expect("failed to spawn cargo");
 
     assert!(status.success(), "guard scope fixture should succeed");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_no_std_embed() {
+    let fixture = instantiate_fixture("no_std_embed");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check").arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "no_std embed fixture should compile successfully"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_workspace_root_override() {
+    let fixture = instantiate_fixture("workspace_root_override");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("run")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
+        .arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "workspace root override fixture should compile and run"
+    );
 }
 
 fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
@@ -97,8 +243,10 @@ fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
             "oxdock-fs",
             workspace_path.join("crates/internal/oxdock-fs"),
         )
-        .with_workspace_snapshot_from(&workspace_path)
-        .expect("workspace snapshot")
+        .with_path_dependency(
+            "oxdock-embed",
+            workspace_path.join("crates/internal/oxdock-embed"),
+        )
         .instantiate()
         .expect("failed to instantiate fixture")
 }

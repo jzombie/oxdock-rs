@@ -27,7 +27,7 @@ pub struct GuardedPath {
 impl GuardedPath {
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn new(root: &Path, candidate: &Path) -> Result<Self> {
-        let guarded = guard_path(root, candidate, AccessMode::Passthru)?;
+        let guarded = guard_path(root, candidate, AccessMode::Read)?;
         Ok(Self {
             root: root.to_path_buf(),
             path: guarded,
@@ -43,7 +43,7 @@ impl GuardedPath {
     /// Create a guard where the root is the path itself.
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn new_root(root: &Path) -> Result<Self> {
-        let guarded = guard_path(root, root, AccessMode::Passthru)?;
+        let guarded = guard_path(root, root, AccessMode::Read)?;
         Ok(Self {
             root: guarded.clone(),
             path: guarded,
@@ -351,13 +351,13 @@ pub fn command_path(path: &GuardedPath) -> Cow<'_, std::path::Path> {
 }
 
 /// Normalize a path string to use forward slashes, replacing backslashes.
-/// This is useful for consistent path representation (e.g. in `rust-embed` or mocks).
+/// This is useful for consistent path representation (e.g. when embedding files or in mocks).
 pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
 
 /// Convert a guarded path into a string with forward slashes, suitable for
-/// use with `rust-embed` or other tools that require normalized paths.
+/// use with embedded-asset tooling or other helpers that require normalized paths.
 /// This strips Windows verbatim prefixes and ensures separators are `/`.
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub fn embed_path(path: &GuardedPath) -> String {

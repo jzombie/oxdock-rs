@@ -5,7 +5,7 @@ This crate provides a compile-time proc-macro `embed!` that runs a OxDock DSL sc
 What this crate does:
 
 - Executes a OxDock script at compile-time (when possible) and materializes the script output into an `out_dir` inside the crate.
-- Uses `rust-embed` to generate a struct that exposes the produced files with a filesystem-like API (for example, `MyAssets::get("path")` returns embedded file bytes).
+- Generates a lightweight struct that exposes the produced files with a filesystem-like API (for example, `MyAssets::get("path")` returns embedded file bytes) without requiring `std` at runtime.
 - Runs the script in an isolated snapshot of the repository (via `git archive`) so outputs are reproducible and your working tree is not modified during generation.
 - Fails the compilation if any scripted step fails (or if the script contains an `EXIT` with a non-zero code), making build-time generation explicit and visible.
 - When no `.git` checkout is present (for example, a crates.io tarball), the macro requires a prebuilt `out_dir` rather than attempting to run the script.
@@ -43,7 +43,7 @@ embed! {
 // Blocks use scoped environments: WORKDIR/WORKSPACE/ENV changes inside the braces
 // reset automatically after the block ends, so temporary setup stays contained.
 
-// At runtime you can use the generated rust-embed struct:
+// At runtime you can use the generated struct directly:
 // if let Some(bytes) = DemoAssets::get("client/dist/index.html") { ... }
 ```
 

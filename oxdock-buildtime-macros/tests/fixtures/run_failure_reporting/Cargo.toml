@@ -1,5 +1,5 @@
 [package]
-name = "fixture-build-exit-fail"
+name = "fixture-run-failure-reporting"
 version = "0.4.0-alpha"
 edition = "2024"
 publish = false

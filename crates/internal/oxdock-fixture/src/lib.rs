@@ -121,9 +121,7 @@ impl FixtureBuilder {
             patch_manifest(&resolver, &root, &self.replacements)?;
         }
 
-        let workspace_root_env = self
-            .workspace_root_env
-            .or_else(|| detect_workspace_root(self.template.as_path()));
+        let workspace_root_env = self.workspace_root_env;
 
         Ok(FixtureInstance {
             tempdir,
@@ -254,17 +252,69 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-fn detect_workspace_root(template: &Path) -> Option<PathBuf> {
-    let mut cur = template;
-    while let Some(parent) = cur.parent() {
-        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-        {
-            if parent.join(".git").exists() {
-                return Some(parent.to_path_buf());
-            }
-        }
-        cur = parent;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+    use std::collections::BTreeMap;
+    use toml_edit::DocumentMut;
+
+    #[test]
+    fn patch_manifest_applies_replacements_to_all_sections() -> Result<()> {
+        let tempdir = GuardedPath::tempdir()?;
+        let root = tempdir.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
+
+        let manifest = indoc! {r#"
+            [package]
+            name = "fixture"
+            version = "0.1.0"
+
+            [dependencies]
+            foo = { version = "0.1.0", workspace = true }
+
+            [dev-dependencies]
+            bar = "0.2.0"
+
+            [build-dependencies]
+            baz = { version = "0.3.0", workspace = true }
+        "#};
+
+        let manifest_path = root.join("Cargo.toml")?;
+        resolver.write_file(&manifest_path, manifest.as_bytes())?;
+
+        let mut replacements = BTreeMap::new();
+        let foo_path = root.join("local_dep")?;
+        replacements.insert(
+            "foo".to_string(),
+            DependencyReplacement::Path(foo_path.as_path().to_path_buf()),
+        );
+        replacements.insert(
+            "bar".to_string(),
+            DependencyReplacement::Version("1.2.3".to_string()),
+        );
+        replacements.insert(
+            "baz".to_string(),
+            DependencyReplacement::Version("4.5.6".to_string()),
+        );
+
+        patch_manifest(&resolver, &root, &replacements)?;
+
+        let rewritten = resolver.read_to_string(&manifest_path)?;
+        let doc = rewritten.parse::<DocumentMut>()?;
+
+        let foo_path_string = path_string(foo_path.as_path());
+        assert_eq!(
+            doc["dependencies"]["foo"]["path"].as_str(),
+            Some(foo_path_string.as_str())
+        );
+        assert!(doc["dependencies"]["foo"].get("workspace").is_none());
+        assert_eq!(doc["dev-dependencies"]["bar"].as_str(), Some("1.2.3"));
+        assert_eq!(
+            doc["build-dependencies"]["baz"]["version"].as_str(),
+            Some("4.5.6")
+        );
+
+        Ok(())
     }
-    None
 }
