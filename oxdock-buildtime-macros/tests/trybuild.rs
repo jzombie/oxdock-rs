@@ -59,6 +59,47 @@ fn trybuild_exit_fail() {
     ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
 )]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_run_failure_reports_cause() {
+    let fixture = instantiate_fixture("run_failure_reporting");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("run")
+        .env("OXDOCK_EMBED_FORCE_REBUILD", "1")
+        .arg("--quiet");
+    let output = cmd.output().expect("failed to spawn cargo");
+
+    assert!(
+        !output.success(),
+        "fixture run_failure_reporting should fail during RUN. stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("__oxdock_missing_command__"),
+        "stderr should mention the failing command, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("failed with status"),
+        "stderr should include the command failure status, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("filesystem snapshot"),
+        "stderr should include the filesystem snapshot context, stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("(command"),
+        "stderr should embed the underlying command failure inside the error chain, stderr:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn trybuild_guard_scope() {
     let fixture = instantiate_fixture("guard_scope");
 

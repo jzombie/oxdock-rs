@@ -1,0 +1,12 @@
+[package]
+name = "fixture-run-failure-reporting"
+version = "0.3.0-alpha"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+oxdock-buildtime-macros.workspace = true
+oxdock-embed.workspace = true

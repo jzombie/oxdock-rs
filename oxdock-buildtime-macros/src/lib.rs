@@ -303,16 +303,12 @@ fn build_assets(
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let workspace_root = detect_workspace_root(&resolver, span)?;
 
-    let mut host_resolver =
-        PathResolver::new_guarded(temp_root_guard.clone(), workspace_root.clone())
-            .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
-    host_resolver.set_workspace_root(workspace_root);
-
     let final_cwd =
-        oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps).map_err(|e| {
-            // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
-            syn::Error::new(span, format!("execution error: {e:#}"))
-        })?;
+        oxdock_core::run_steps_with_context_result(&temp_root_guard, &workspace_root, &steps)
+    .map_err(|e| {
+        // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
+        syn::Error::new(span, format!("execution error: {e:#}"))
+    })?;
 
     if debug_embed {
         eprintln!(
