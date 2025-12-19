@@ -108,19 +108,15 @@ impl BackendImpl for HostBackend {
 
     fn resolve_workdir(&self, resolved: GuardedPath) -> Result<GuardedPath> {
         if let Ok(meta) = fs::metadata(resolved.as_path()) {
-            if meta.is_dir() {
-                let canon =
-                    fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
-                return GuardedPath::new(resolved.root(), &canon);
+            if !meta.is_dir() {
+                bail!("WORKDIR path is not a directory: {}", resolved.display());
             }
-            bail!("WORKDIR path is not a directory: {}", resolved.display());
+            return Ok(resolved);
         }
 
         fs::create_dir_all(resolved.as_path())
             .with_context(|| format!("failed to create WORKDIR {}", resolved.display()))?;
-        let final_abs =
-            fs::canonicalize(resolved.as_path()).unwrap_or_else(|_| resolved.to_path_buf());
-        GuardedPath::new(resolved.root(), &final_abs)
+        Ok(resolved)
     }
 
     fn resolve_copy_source(&self, guarded: GuardedPath) -> Result<GuardedPath> {

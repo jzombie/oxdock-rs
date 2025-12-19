@@ -1,5 +1,5 @@
 [package]
-name = "fixture-no-std-embed"
+name = "fixture-workspace-root-override"
 version = "0.4.0-alpha"
 edition = "2024"
 publish = false
@@ -7,4 +7,3 @@ license = "Apache-2.0"
 
 [dependencies]
 oxdock-buildtime-macros.workspace = true
-oxdock-embed.workspace = true

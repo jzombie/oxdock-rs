@@ -1,4 +1,6 @@
-use oxdock_core::{Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context};
+use oxdock_core::{
+    Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context, run_steps_with_fs,
+};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
 use oxdock_process::CommandBuilder;
 
@@ -705,6 +707,69 @@ fn read_symlink_escape_is_blocked() {
     );
 
     let _ = parent_fs.remove_file(&secret);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn workdir_accepts_symlink_into_workspace_root() {
+    let temp_workspace = GuardedPath::tempdir().unwrap();
+    let workspace_root = guard_root(&temp_workspace);
+    let temp_build = GuardedPath::tempdir().unwrap();
+    let build_root = guard_root(&temp_build);
+
+    let client = workspace_root.join("client").unwrap();
+    create_dirs(&client);
+    write_text(&client.join("version.txt").unwrap(), "1.2.3");
+
+    let mut resolver =
+        PathResolver::new_guarded(build_root.clone(), workspace_root.clone()).unwrap();
+    resolver.set_workspace_root(workspace_root.clone());
+
+    let steps = vec![
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Symlink {
+                from: "client".into(),
+                to: "client".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Workdir("client".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::Capture {
+                path: "seen.txt".into(),
+                cmd: "CAT version.txt".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+
+    run_steps_with_fs(Box::new(resolver), &steps).unwrap();
+
+    let workspace_resolver =
+        PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
+    let seen_path = workspace_root.join("client/seen.txt").unwrap();
+    assert_eq!(
+        workspace_resolver
+            .read_to_string(&seen_path)
+            .unwrap()
+            .trim(),
+        "1.2.3"
+    );
 }
 
 #[test]

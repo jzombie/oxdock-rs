@@ -38,60 +38,59 @@ pub fn prepare(input: TokenStream) -> TokenStream {
 }
 
 fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
-    let (script_src, span) = match &input.script {
-        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
-        ScriptSource::Braced(ts) => (
-            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
-                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
-            })?,
-            proc_macro2::Span::call_site(),
-        ),
-    };
-
-    let manifest_resolver =
-        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let manifest_root = manifest_resolver.root().clone();
-
-    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    let has_git = manifest_resolver
-        .has_git_dir()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
-
-    let should_build = has_git || is_primary;
-
-    let out_dir_str = input.out_dir.value();
-    let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
-
-    if should_build {
-        preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
-        tracing::info!("prepare: rebuilding assets into {}", out_dir_abs.display());
-        let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        return Ok(());
-    }
-
-    if out_dir_abs.as_path().exists() {
-        if !out_dir_abs.as_path().is_dir() {
-            return Err(syn::Error::new(
-                input.out_dir.span(),
-                format!(
-                    "out_dir exists but is not a directory: {}",
-                    out_dir_abs.display()
-                ),
-            ));
+    match prepare_macro_plan(input)? {
+        MacroPlan::Skip => {
+            tracing::info!("prepare: skipping build due to embed skip flag");
+            Ok(())
         }
-        tracing::info!("prepare: reusing assets at {}", out_dir_abs.display());
-        return Ok(());
-    }
+        MacroPlan::Ready(plan) => {
+            let PreparedMacroPlan {
+                script_src,
+                script_span,
+                manifest_resolver: _,
+                out_dir,
+                out_dir_span,
+                should_build,
+                force_rebuild,
+            } = *plan;
 
-    Err(syn::Error::new(
-        span,
-        format!(
-            "prepare: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
-            out_dir_abs.display()
-        ),
-    ))
+            if should_build {
+                preflight_out_dir_for_build(&out_dir, out_dir_span)?;
+                if force_rebuild {
+                    tracing::info!(
+                        "prepare: force rebuilding assets into {}",
+                        out_dir.display()
+                    );
+                } else {
+                    tracing::info!("prepare: rebuilding assets into {}", out_dir.display());
+                }
+                let _final_folder = build_assets(&script_src, script_span, &out_dir)?;
+                return Ok(());
+            }
+
+            if out_dir.as_path().exists() {
+                if !out_dir.as_path().is_dir() {
+                    return Err(syn::Error::new(
+                        out_dir_span,
+                        format!(
+                            "out_dir exists but is not a directory: {}",
+                            out_dir.display()
+                        ),
+                    ));
+                }
+                tracing::info!("prepare: reusing assets at {}", out_dir.display());
+                return Ok(());
+            }
+
+            Err(syn::Error::new(
+                script_span,
+                format!(
+                    "prepare: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
+                    out_dir.display()
+                ),
+            ))
+        }
+    }
 }
 fn join_guard(base: &GuardedPath, rel: &str, span: proc_macro2::Span) -> syn::Result<GuardedPath> {
     base.join(rel)
@@ -150,89 +149,62 @@ fn expand_embed_tokens(input: &DslMacroInput) -> proc_macro2::TokenStream {
 }
 
 fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
-    let (script_src, span) = match &input.script {
-        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
-        ScriptSource::Braced(ts) => (
-            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
-                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
-            })?,
-            proc_macro2::Span::call_site(),
-        ),
-    };
-
-    let manifest_resolver =
-        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let manifest_root = manifest_resolver.root().clone();
-
-    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-
-    let has_git = manifest_resolver
-        .has_git_dir()
-        .map_err(|e| syn::Error::new(span, e.to_string()))?;
-
-    // Allow building whenever the crate is the primary package or a Git checkout is present.
-    // In a crates.io tarball (no .git) or when compiling as a non-primary package, we
-    // require the caller to supply an out_dir instead of trying to rebuild. Tests can force a
-    // rebuild even if an out_dir already exists via OXDOCK_EMBED_FORCE_REBUILD.
-    let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    let should_build = has_git || is_primary || force_rebuild;
-
     let name = &input.name;
 
-    // If the filesystem is isolated (e.g. under Miri), we cannot safely access the host filesystem.
-    // In this case, we skip the build process to avoid errors.
-    if oxdock_fs::is_isolated() {
-        tracing::info!("embed: skipping build under isolated fs");
-        return Ok(embed_error_stub(name));
-    }
-
-    let out_dir_str = input.out_dir.value();
-    let out_dir_abs = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
-
-    if should_build {
-        preflight_out_dir_for_build(&out_dir_abs, input.out_dir.span())?;
-        if force_rebuild {
-            tracing::info!(
-                "embed: force rebuilding assets into {}",
-                out_dir_abs.display()
-            );
-        } else {
-            tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
+    match prepare_macro_plan(input)? {
+        MacroPlan::Skip => {
+            tracing::info!("embed: skipping build due to embed skip flag");
+            Ok(embed_error_stub(name))
         }
-        let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        let assets = gather_assets(&manifest_resolver, &out_dir_abs)
-            .map_err(|e| syn::Error::new(span, e.to_string()))?;
-        return emit_embed_module(name, &assets);
-    }
+        MacroPlan::Ready(plan) => {
+            let PreparedMacroPlan {
+                script_src,
+                script_span,
+                manifest_resolver,
+                out_dir,
+                out_dir_span,
+                should_build,
+                force_rebuild,
+            } = *plan;
 
-    if out_dir_abs.as_path().exists() {
-        if !out_dir_abs.as_path().is_dir() {
-            return Err(syn::Error::new(
-                input.out_dir.span(),
+            if should_build {
+                preflight_out_dir_for_build(&out_dir, out_dir_span)?;
+                if force_rebuild {
+                    tracing::info!("embed: force rebuilding assets into {}", out_dir.display());
+                } else {
+                    tracing::info!("embed: rebuilding assets into {}", out_dir.display());
+                }
+                let _final_folder = build_assets(&script_src, script_span, &out_dir)?;
+                let assets = gather_assets(&manifest_resolver, &out_dir)
+                    .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+                return emit_embed_module(name, &assets);
+            }
+
+            if out_dir.as_path().exists() {
+                if !out_dir.as_path().is_dir() {
+                    return Err(syn::Error::new(
+                        out_dir_span,
+                        format!(
+                            "out_dir exists but is not a directory: {}",
+                            out_dir.display()
+                        ),
+                    ));
+                }
+                tracing::info!("embed: reusing assets at {}", out_dir.display());
+                let assets = gather_assets(&manifest_resolver, &out_dir)
+                    .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+                return emit_embed_module(name, &assets);
+            }
+
+            Err(syn::Error::new(
+                script_span,
                 format!(
-                    "out_dir exists but is not a directory: {}",
-                    out_dir_abs.display()
+                    "embed: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
+                    out_dir.display()
                 ),
-            ));
+            ))
         }
-        tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
-        let assets = gather_assets(&manifest_resolver, &out_dir_abs)
-            .map_err(|e| syn::Error::new(span, e.to_string()))?;
-        return emit_embed_module(name, &assets);
     }
-
-    Err(syn::Error::new(
-        span,
-        format!(
-            "embed: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
-            out_dir_abs.display()
-        ),
-    ))
 }
 
 fn preflight_out_dir_for_build(
@@ -301,14 +273,14 @@ fn build_assets(
 
     let resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let build_context = resolver.build_context().clone();
+    let workspace_root = detect_workspace_root(&resolver, span)?;
 
-    let host_resolver =
-        PathResolver::new_guarded(temp_root_guard.clone(), build_context.clone())
-            .map_err(|e| syn::Error::new(span, format!("failed to create resolver: {e}")))?;
-
-    let final_cwd = oxdock_core::run_steps_with_fs(Box::new(host_resolver), &steps)
-        .map_err(|e| syn::Error::new(span, format!("execution error: {e}")))?;
+    let final_cwd =
+        oxdock_core::run_steps_with_context_result(&temp_root_guard, &workspace_root, &steps)
+            .map_err(|e| {
+                // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
+                syn::Error::new(span, format!("execution error: {e:#}"))
+            })?;
 
     if debug_embed {
         eprintln!(
@@ -381,6 +353,51 @@ fn build_assets(
     Ok(final_cwd)
 }
 
+fn read_workspace_env(key: &str, span: proc_macro2::Span) -> syn::Result<Option<GuardedPath>> {
+    match std::env::var(key) {
+        Ok(value) => {
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let guard = GuardedPath::new_root_from_str(&value)
+                .map_err(|e| syn::Error::new(span, format!("invalid {key} {value}: {e}")))?;
+            Ok(Some(guard))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(syn::Error::new(span, format!("failed to read {key}: {e}"))),
+    }
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn detect_workspace_root(
+    manifest_resolver: &PathResolver,
+    span: proc_macro2::Span,
+) -> syn::Result<GuardedPath> {
+    if let Some(root) = workspace_root_override(span)? {
+        return Ok(root);
+    }
+
+    let manifest_path = manifest_resolver.root().as_path();
+    let mut cur: Option<&std::path::Path> = Some(manifest_path);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return GuardedPath::new_root(dir).map_err(|e| {
+                syn::Error::new(
+                    span,
+                    format!("failed to guard workspace root {}: {e}", dir.display()),
+                )
+            });
+        }
+        cur = dir.parent();
+    }
+
+    Ok(manifest_resolver.root().clone())
+}
+
+fn workspace_root_override(span: proc_macro2::Span) -> syn::Result<Option<GuardedPath>> {
+    read_workspace_env("OXDOCK_WORKSPACE_ROOT", span)
+}
+
 // `copy_dir_contents` replaced by `PathResolver::copy_dir_from_external`.
 
 fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
@@ -440,6 +457,98 @@ fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usiz
         .read_dir_entries(dir)
         .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
     Ok(entries.len())
+}
+
+/// Determines if the macro execution should be skipped to prevent heavy build operations
+/// during IDE analysis.
+///
+/// This is used to prevent IDE warnings and performance issues resulting from
+/// `rust-analyzer` (or other tools) executing the macro logic in a background process.
+/// Since `embed!` and `prepare!` can involve significant work (script execution,
+/// file I/O), running them during every keystroke analysis is undesirable.
+fn embed_execution_is_skipped() -> bool {
+    // Runtime check: rust-analyzer sets this variable in the proc-macro server process.
+    if std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok() {
+        return true;
+    }
+
+    // Fallback: Check executable name
+    if std::env::current_exe()
+        .ok()
+        .map(|pb| pb.to_string_lossy().contains("rust-analyzer"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Fallback 2: VS Code background task detection
+    // If we are running inside VS Code (detected via VSCODE_PID), but TERM is missing,
+    // it is likely a background analysis task (like rust-analyzer running cargo check)
+    // rather than a user-initiated terminal command.
+    if std::env::var("VSCODE_PID").is_ok() && std::env::var("TERM").is_err() {
+        return true;
+    }
+
+    false
+}
+
+enum MacroPlan {
+    Skip,
+    Ready(Box<PreparedMacroPlan>),
+}
+
+struct PreparedMacroPlan {
+    script_src: String,
+    script_span: proc_macro2::Span,
+    manifest_resolver: PathResolver,
+    out_dir: GuardedPath,
+    out_dir_span: proc_macro2::Span,
+    should_build: bool,
+    force_rebuild: bool,
+}
+
+fn prepare_macro_plan(input: &DslMacroInput) -> syn::Result<MacroPlan> {
+    let (script_src, script_span) = match &input.script {
+        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
+        ScriptSource::Braced(ts) => (
+            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
+                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
+            })?,
+            proc_macro2::Span::call_site(),
+        ),
+    };
+
+    let manifest_resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+
+    if oxdock_fs::is_isolated() || embed_execution_is_skipped() {
+        return Ok(MacroPlan::Skip);
+    }
+
+    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let has_git = manifest_resolver
+        .has_git_dir()
+        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+    let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let should_build = has_git || is_primary || force_rebuild;
+
+    let manifest_root = manifest_resolver.root().clone();
+    let out_dir_str = input.out_dir.value();
+    let out_dir = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
+
+    Ok(MacroPlan::Ready(Box::new(PreparedMacroPlan {
+        script_src,
+        script_span,
+        manifest_resolver,
+        out_dir,
+        out_dir_span: input.out_dir.span(),
+        should_build,
+        force_rebuild,
+    })))
 }
 
 #[cfg(test)]

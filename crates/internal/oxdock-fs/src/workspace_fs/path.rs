@@ -27,7 +27,7 @@ pub struct GuardedPath {
 impl GuardedPath {
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn new(root: &Path, candidate: &Path) -> Result<Self> {
-        let guarded = guard_path(root, candidate, AccessMode::Passthru)?;
+        let guarded = guard_path(root, candidate, AccessMode::Read)?;
         Ok(Self {
             root: root.to_path_buf(),
             path: guarded,
@@ -43,7 +43,7 @@ impl GuardedPath {
     /// Create a guard where the root is the path itself.
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn new_root(root: &Path) -> Result<Self> {
-        let guarded = guard_path(root, root, AccessMode::Passthru)?;
+        let guarded = guard_path(root, root, AccessMode::Read)?;
         Ok(Self {
             root: guarded.clone(),
             path: guarded,

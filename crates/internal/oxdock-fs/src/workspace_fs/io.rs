@@ -1,6 +1,4 @@
-#[cfg(not(miri))]
-use anyhow::bail;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 #[cfg(not(miri))]
 use std::fs;
 
@@ -70,16 +68,25 @@ impl PathResolver {
         self.backend.write_file(&guarded, contents)
     }
 
+    pub fn ensure_parent_dir(&self, path: &GuardedPath) -> Result<()> {
+        if let Some(parent) = path.as_path().parent() {
+            let parent_guard = self
+                .check_access(parent, AccessMode::Write)
+                .or_else(|_| {
+                    self.check_access_with_root(&self.build_context, parent, AccessMode::Write)
+                })
+                .with_context(|| format!("parent {} escapes root", parent.display()))?;
+            self.backend.create_dir_all(&self.root, &parent_guard)?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::disallowed_methods)]
     pub fn canonicalize(&self, path: &GuardedPath) -> Result<GuardedPath> {
         let cand = self
-            .check_access(path.as_path(), AccessMode::Passthru)
+            .check_access(path.as_path(), AccessMode::Read)
             .or_else(|_| {
-                self.check_access_with_root(
-                    &self.build_context,
-                    path.as_path(),
-                    AccessMode::Passthru,
-                )
+                self.check_access_with_root(&self.build_context, path.as_path(), AccessMode::Read)
             })
             .with_context(|| format!("canonicalize denied for {}", path.display()))?;
         self.backend.canonicalize(cand)
@@ -299,6 +306,13 @@ impl PathResolver {
         let guarded_dst = self
             .check_access_with_root(&self.root, dst.as_path(), AccessMode::Write)
             .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
+
+        if self.entry_kind(&guarded_dst).is_ok() {
+            bail!(
+                "SYMLINK destination already exists: {}",
+                guarded_dst.display()
+            );
+        }
 
         let kind = self.entry_kind(&guarded_src)?;
 

@@ -80,6 +80,7 @@ pub trait WorkspaceFs {
     fn create_dir_all(&self, path: &GuardedPath) -> Result<()>;
     #[allow(clippy::disallowed_types)]
     fn create_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()>;
+    fn ensure_parent_dir(&self, path: &GuardedPath) -> Result<()>;
 
     fn remove_file(&self, path: &GuardedPath) -> Result<()>;
     #[allow(clippy::disallowed_types)]
@@ -210,6 +211,10 @@ impl WorkspaceFs for PathResolver {
     fn create_dir_all_unguarded(&self, path: &UnguardedPath) -> Result<()> {
         #[allow(clippy::disallowed_methods)]
         Ok(std::fs::create_dir_all(path.as_path())?)
+    }
+
+    fn ensure_parent_dir(&self, path: &GuardedPath) -> Result<()> {
+        PathResolver::ensure_parent_dir(self, path)
     }
 
     fn remove_file(&self, path: &GuardedPath) -> Result<()> {
