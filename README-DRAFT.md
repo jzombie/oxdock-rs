@@ -26,7 +26,7 @@
 # OxDock
 
 
-OxDock is a Docker-inspired language that is [run during compile-time](./oxdock-buildtime-macros/) of Rust programs, which embeds resources into the binary's data section, not allocating to heap when the program starts. It uses [rust-embed](https://crates.io/crates/rust-embed) under the hood, for file-like access to embedded resources.
+OxDock is a Docker-inspired language that is [run during compile-time](./oxdock-buildtime-macros/) of Rust programs, embedding resources directly into the binary's data section without allocating heap space when the program starts. The generated asset structs are pure Rust and work in `no_std` targets, providing simple file-like access to embedded resources without depending on `std`.
 
 Beyond the macro, the same DSL drives a native CLI so scripts can orchestrate cross-platform workflows without containers. Unlike Docker, commands execute directly on the host, can be guarded by platform/env conditions, and can run inside scoped blocks so changes to `ENV` or `WORKDIR` don’t leak. OxDock happily complements container workflows too: you can invoke Docker from an OxDock script—or even install Docker—while still keeping the DSL portable.
 

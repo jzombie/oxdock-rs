@@ -105,7 +105,6 @@ pub use path::UnguardedPath;
 
 #[cfg(feature = "embed")]
 pub mod embed;
-
 pub mod policy;
 pub use policy::{GuardPolicy, PolicyPath};
 

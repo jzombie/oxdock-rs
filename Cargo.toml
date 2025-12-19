@@ -31,10 +31,10 @@ oxdock-parser = { path = "crates/internal/oxdock-parser", version = "0.3.0-alpha
 oxdock-process = { path = "crates/internal/oxdock-process", version = "0.3.0-alpha" }
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
-rust-embed = { version = "8.9.0", features = ["include-exclude"] }
-syn = { version = "2.0", features = ["full"] }
+syn = { version = "2.0", features = ["full", "visit"] }
 tempfile = "3.23.0"
 toml_edit = "0.24.0"
+sha2 = "0.10.8"
 
 # Logging/tracing
 tracing = "0.1.44"

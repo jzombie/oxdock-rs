@@ -72,6 +72,25 @@ fn trybuild_guard_scope() {
     assert!(status.success(), "guard scope fixture should succeed");
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires spawning cargo inside a copied workspace; Miri isolation forbids std::fs metadata"
+)]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn trybuild_no_std_embed() {
+    let fixture = instantiate_fixture("no_std_embed");
+
+    let mut cmd = fixture.cargo();
+    cmd.arg("check").arg("--quiet");
+    let status = cmd.status().expect("failed to spawn cargo");
+
+    assert!(
+        status.success(),
+        "no_std embed fixture should compile successfully"
+    );
+}
+
 fn instantiate_fixture(name: &str) -> oxdock_fixture::FixtureInstance {
     let crate_root =
         GuardedPath::new_root_from_str(env!("CARGO_MANIFEST_DIR")).expect("crate root guard");

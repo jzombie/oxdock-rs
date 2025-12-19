@@ -1,32 +1,62 @@
-#[cfg(feature = "embed")]
-pub use rust_embed;
+extern crate alloc;
 
-#[macro_export]
-macro_rules! define_embed {
-    ($name:ident, $folder:expr) => {
-        #[cfg(not(miri))]
-        use $crate::workspace_fs::embed::rust_embed;
+use alloc::borrow::Cow;
 
-        #[cfg(not(miri))]
-        #[derive($crate::workspace_fs::embed::rust_embed::RustEmbed)]
-        #[folder = $folder]
-        // Force inclusion of all files, overriding .gitignore which might ignore the generated folder
-        #[include = "**/*"]
-        pub struct $name;
+/// Compatibility shim for the rust-embed public API so downstream crates can
+/// continue using `DemoAssets::get` / `::iter` without the upstream crate.
+pub mod rust_embed {
+    use super::Cow;
 
-        #[cfg(miri)]
-        pub struct $name;
+    #[derive(Clone)]
+    pub struct Metadata {
+        hash: [u8; 32],
+        last_modified: Option<u64>,
+        created: Option<u64>,
+    }
 
-        #[cfg(miri)]
-        impl $name {
-            pub fn get(
-                _file: &str,
-            ) -> Option<$crate::workspace_fs::embed::rust_embed::EmbeddedFile> {
-                None
-            }
-            pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
-                std::iter::empty()
+    impl Metadata {
+        pub const fn __oxdock_new(
+            hash: [u8; 32],
+            last_modified: Option<u64>,
+            created: Option<u64>,
+        ) -> Self {
+            Self {
+                hash,
+                last_modified,
+                created,
             }
         }
-    };
+
+        pub fn sha256_hash(&self) -> [u8; 32] {
+            self.hash
+        }
+
+        pub fn last_modified(&self) -> Option<u64> {
+            self.last_modified
+        }
+
+        pub fn created(&self) -> Option<u64> {
+            self.created
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct EmbeddedFile {
+        pub data: Cow<'static, [u8]>,
+        pub metadata: Metadata,
+    }
+
+    pub enum Filenames {
+        Embedded(core::slice::Iter<'static, &'static str>),
+    }
+
+    impl Iterator for Filenames {
+        type Item = Cow<'static, str>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self {
+                Filenames::Embedded(iter) => iter.next().map(|s| Cow::Borrowed(*s)),
+            }
+        }
+    }
 }

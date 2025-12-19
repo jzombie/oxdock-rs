@@ -1,12 +1,15 @@
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_parser::{DslMacroInput, ScriptSource};
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
+use sha2::{Digest, Sha256};
+#[allow(unused_imports)]
+use std::time::SystemTime;
 use syn::parse_macro_input;
 
 // TODO: Update example and don't ignore
 /// Macro that runs the DSL at compile-time, materializes assets into a temp
-/// dir, and emits a rust-embed struct pointing at that dir.
+/// dir, and emits a lightweight struct with embedded bytes pointing at that dir.
 ///
 /// ```rust,ignore
 /// use oxdock_buildtime_macros::embed;
@@ -25,8 +28,8 @@ pub fn embed(input: TokenStream) -> TokenStream {
 
 /// Macro similar to `embed!` but only prepares (builds/copies) the
 /// out_dir at compile time and emits no runtime struct. Use this when you
-/// want the assets present on disk during build but don't want a
-/// `rust-embed` struct generated into the consuming crate.
+/// want the assets present on disk during build but don't want an embedded
+/// struct generated into the consuming crate.
 #[proc_macro]
 pub fn prepare(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
@@ -97,13 +100,8 @@ fn join_guard(base: &GuardedPath, rel: &str, span: proc_macro2::Span) -> syn::Re
         .map_err(|e| syn::Error::new(span, e.to_string()))
 }
 
-/// Produce a rust-embed-friendly literal path by reusing the shared
-/// path normalizer in oxdock-fs (it strips Windows verbatim prefixes).
-fn embed_path_lit(path: &GuardedPath, span: proc_macro2::Span) -> syn::Result<syn::LitStr> {
-    let forward = oxdock_fs::embed_path(path);
-    Ok(syn::LitStr::new(&forward, span))
-}
-
+/// Produce a normalized literal path by reusing the shared path normalizer in
+/// oxdock-fs (it strips Windows verbatim prefixes).
 fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
         &format!("__oxdock_embed_{}", name),
@@ -111,22 +109,279 @@ fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
     )
 }
 
+struct EmbeddedAsset {
+    rel_path: String,
+    include_path: String,
+    sha256: [u8; 32],
+    last_modified: Option<u64>,
+    created: Option<u64>,
+}
+
+fn collect_embedded_assets(
+    resolver: &PathResolver,
+    out_dir: &GuardedPath,
+    span: proc_macro2::Span,
+) -> syn::Result<Vec<EmbeddedAsset>> {
+    let mut assets = Vec::new();
+    collect_embedded_assets_recursive(resolver, out_dir, out_dir, &mut assets, span)?;
+    assets.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok(assets)
+}
+
+fn collect_embedded_assets_recursive(
+    resolver: &PathResolver,
+    root: &GuardedPath,
+    dir: &GuardedPath,
+    assets: &mut Vec<EmbeddedAsset>,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    let mut entries = resolver.read_dir_entries(dir).map_err(|e| {
+        syn::Error::new(
+            span,
+            format!("failed to read assets in {}: {e}", dir.as_path().display()),
+        )
+    })?;
+    entries.sort_by(|a, b| a.path().cmp(&b.path()));
+
+    for entry in entries {
+        let entry_path = entry.path();
+        let entry_guard = GuardedPath::new(root.root(), entry_path.as_path())
+            .map_err(|e| syn::Error::new(span, e.to_string()))?;
+        let file_type = entry.file_type().map_err(|e| {
+            syn::Error::new(
+                span,
+                format!(
+                    "failed to read file type for {}: {e}",
+                    entry_guard.as_path().display()
+                ),
+            )
+        })?;
+
+        if file_type.is_dir() {
+            collect_embedded_assets_recursive(resolver, root, &entry_guard, assets, span)?;
+            continue;
+        }
+
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let rel_path = entry_guard
+            .as_path()
+            .strip_prefix(root.as_path())
+            .map_err(|_| {
+                syn::Error::new(
+                    span,
+                    format!(
+                        "embedded file {} not under {}",
+                        entry_guard.as_path().display(),
+                        root.as_path().display()
+                    ),
+                )
+            })?;
+        let rel_str = rel_path.to_str().ok_or_else(|| {
+            syn::Error::new(
+                span,
+                format!(
+                    "embedded file path is not valid UTF-8: {}",
+                    entry_guard.as_path().display()
+                ),
+            )
+        })?;
+        let rel_forward = oxdock_fs::to_forward_slashes(rel_str);
+        let include_path = oxdock_fs::embed_path(&entry_guard);
+
+        let bytes = resolver.read_file(&entry_guard).map_err(|e| {
+            syn::Error::new(
+                span,
+                format!(
+                    "failed to read {} for hashing: {e}",
+                    entry_guard.as_path().display()
+                ),
+            )
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let sha256: [u8; 32] = hasher.finalize().into();
+
+        let metadata = resolver.metadata(&entry_guard).map_err(|e| {
+            syn::Error::new(
+                span,
+                format!(
+                    "failed to read metadata for {}: {e}",
+                    entry_guard.as_path().display()
+                ),
+            )
+        })?;
+        let last_modified = metadata
+            .modified()
+            .ok()
+            .and_then(|mtime| mtime.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let created = metadata
+            .created()
+            .ok()
+            .and_then(|ctime| ctime.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+
+        assets.push(EmbeddedAsset {
+            rel_path: rel_forward,
+            include_path,
+            sha256,
+            last_modified,
+            created,
+        });
+    }
+
+    Ok(())
+}
+
+fn emit_embed_module(
+    name: &syn::Ident,
+    assets: &[EmbeddedAsset],
+) -> syn::Result<proc_macro2::TokenStream> {
+    let mod_ident = embed_module_ident(name);
+    let bytes_idents: Vec<_> = (0..assets.len())
+        .map(|idx| format_ident!("__OXDOCK_EMBED_BYTES_{idx}"))
+        .collect();
+    let abs_paths: Vec<_> = assets
+        .iter()
+        .map(|asset| syn::LitStr::new(&asset.include_path, proc_macro2::Span::call_site()))
+        .collect();
+    let rel_paths: Vec<_> = assets
+        .iter()
+        .map(|asset| syn::LitStr::new(&asset.rel_path, proc_macro2::Span::call_site()))
+        .collect();
+
+    let bytes_consts = bytes_idents
+        .iter()
+        .zip(abs_paths.iter())
+        .map(|(ident, abs)| quote! { const #ident: &[u8] = include_bytes!(#abs); });
+
+    let metadata_tokens: Vec<_> = assets
+        .iter()
+        .map(|asset| {
+            let hash_bytes: Vec<_> = asset
+                .sha256
+                .iter()
+                .map(|b| {
+                    let lit = proc_macro2::Literal::u8_unsuffixed(*b);
+                    quote! { #lit }
+                })
+                .collect();
+            let last_modified = match asset.last_modified {
+                Some(v) => {
+                    let lit = syn::LitInt::new(&v.to_string(), proc_macro2::Span::call_site());
+                    quote! { Some(#lit) }
+                }
+                None => quote! { None },
+            };
+            let created = match asset.created {
+                Some(v) => {
+                    let lit = syn::LitInt::new(&v.to_string(), proc_macro2::Span::call_site());
+                    quote! { Some(#lit) }
+                }
+                None => quote! { None },
+            };
+            quote! {
+                oxdock_fs::workspace_fs::embed::rust_embed::Metadata::__oxdock_new(
+                    [#(#hash_bytes),*],
+                    #last_modified,
+                    #created
+                )
+            }
+        })
+        .collect();
+
+    let asset_entries: Vec<_> = rel_paths
+        .iter()
+        .zip(bytes_idents.iter())
+        .zip(metadata_tokens.iter())
+        .map(|((rel, ident), metadata)| {
+            quote! {
+                AssetEntry {
+                    rel: #rel,
+                    data: #ident,
+                    metadata: #metadata,
+                }
+            }
+        })
+        .collect();
+
+    Ok(quote! {
+        #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+        mod #mod_ident {
+            extern crate alloc;
+
+            use alloc::borrow::Cow;
+            use oxdock_fs::workspace_fs::embed::rust_embed::{EmbeddedFile, Filenames, Metadata};
+
+            #[derive(Clone)]
+            struct AssetEntry {
+                rel: &'static str,
+                data: &'static [u8],
+                metadata: Metadata,
+            }
+
+            #( #bytes_consts )*
+            const __OXDOCK_EMBED_FILENAMES: &[&str] = &[
+                #(#rel_paths),*
+            ];
+            const __OXDOCK_EMBED_ASSETS: &[AssetEntry] = &[
+                #(#asset_entries),*
+            ];
+
+            static __OXDOCK_EMBED_EMPTY: [&str; 0] = [];
+
+
+            pub struct #name;
+
+            impl #name {
+                pub fn get(path: &str) -> Option<EmbeddedFile> {
+                    __OXDOCK_EMBED_ASSETS
+                        .iter()
+                        .find(|entry| entry.rel == path)
+                        .map(|entry| EmbeddedFile {
+                            data: Cow::Borrowed(entry.data),
+                            metadata: entry.metadata.clone(),
+                        })
+                }
+
+                pub fn iter() -> Filenames {
+                    if __OXDOCK_EMBED_FILENAMES.is_empty() {
+                        Filenames::Embedded(__OXDOCK_EMBED_EMPTY.iter())
+                    } else {
+                        Filenames::Embedded(__OXDOCK_EMBED_FILENAMES.iter())
+                    }
+                }
+            }
+        }
+
+        pub use #mod_ident::#name;
+    })
+}
+
 fn embed_error_stub(name: &syn::Ident) -> proc_macro2::TokenStream {
     let mod_ident = embed_module_ident(name);
     quote! {
         #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
         mod #mod_ident {
+            extern crate alloc;
+
+            use oxdock_fs::workspace_fs::embed::rust_embed::{EmbeddedFile, Filenames};
+
             pub struct #name;
 
             impl #name {
                 pub fn get(
                     _file: &str,
-                ) -> Option<oxdock_fs::workspace_fs::embed::rust_embed::EmbeddedFile> {
+                ) -> Option<EmbeddedFile> {
                     None
                 }
 
-                pub fn iter() -> impl Iterator<Item = std::borrow::Cow<'static, str>> {
-                    std::iter::empty()
+                pub fn iter() -> Filenames {
+                    static EMPTY: [&str; 0] = [];
+                    Filenames::Embedded(EMPTY.iter())
                 }
             }
         }
@@ -188,19 +443,7 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
     // In this case, we skip the build process to avoid errors.
     if oxdock_fs::is_isolated() {
         tracing::info!("embed: skipping build under isolated fs");
-        let mod_ident = embed_module_ident(name);
-
-        // Emit a dummy struct that matches the public API but has no assets.
-        // We use the oxdock_fs::define_embed macro to handle the struct definition
-        // and ensure the correct cfg(miri) behavior is applied in the generated code.
-        // Note: We pass a dummy folder path because the macro requires it, but it won't be used under Miri.
-        return Ok(quote! {
-            #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-            mod #mod_ident {
-                oxdock_fs::define_embed!(#name, ".");
-            }
-            pub use #mod_ident::#name;
-        });
+        return Ok(embed_error_stub(name));
     }
 
     let out_dir_str = input.out_dir.value();
@@ -217,21 +460,8 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
             tracing::info!("embed: rebuilding assets into {}", out_dir_abs.display());
         }
         let _final_folder = build_assets(&script_src, span, &out_dir_abs)?;
-        let folder_lit = embed_path_lit(&out_dir_abs, span)?;
-
-        // Wrap the generated struct in a private module annotated with an
-        // allow, then re-export it. This keeps the lint suppression scoped to
-        // the generated item while avoiding call-site attributes. Tests that
-        // inspect the output are updated to look through this wrapper.
-        let mod_ident = embed_module_ident(name);
-
-        return Ok(quote! {
-            #[allow(clippy::disallowed_methods,clippy::disallowed_types)]
-            mod #mod_ident {
-                oxdock_fs::define_embed!(#name, #folder_lit);
-            }
-            pub use #mod_ident::#name;
-        });
+        let assets = collect_embedded_assets(&manifest_resolver, &out_dir_abs, span)?;
+        return emit_embed_module(name, &assets);
     }
 
     if out_dir_abs.as_path().exists() {
@@ -245,16 +475,8 @@ fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::Toke
             ));
         }
         tracing::info!("embed: reusing assets at {}", out_dir_abs.display());
-        let out_dir_lit = embed_path_lit(&out_dir_abs, input.out_dir.span())?;
-        let mod_ident = embed_module_ident(name);
-
-        return Ok(quote! {
-            #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-            mod #mod_ident {
-                oxdock_fs::define_embed!(#name, #out_dir_lit);
-            }
-            pub use #mod_ident::#name;
-        });
+        let assets = collect_embedded_assets(&manifest_resolver, &out_dir_abs, span)?;
+        return emit_embed_module(name, &assets);
     }
 
     Err(syn::Error::new(
@@ -481,7 +703,7 @@ mod tests {
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
     use oxdock_process::serial_cargo_env::manifest_env_guard;
-    use syn::{Ident, LitStr, parse::Parser};
+    use syn::{Ident, LitStr, visit::Visit};
 
     macro_rules! dsl_tokens {
         ($($tt:tt)*) => {{
@@ -592,8 +814,8 @@ mod tests {
             "stub should expose get() method: {stub}"
         );
         assert!(
-            stub.contains("std :: iter :: empty"),
-            "stub iter() should use std::iter::empty: {stub}"
+            stub.contains("Filenames :: Embedded"),
+            "stub iter() should construct Filenames::Embedded: {stub}"
         );
     }
 
@@ -628,15 +850,6 @@ mod tests {
         let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
         let module = super::embed_module_ident(&name);
         assert_eq!(module.to_string(), "__oxdock_embed_DemoAssets");
-    }
-
-    #[test]
-    fn embed_path_lit_matches_embed_path_helper() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let guard = temp.as_guarded_path().clone();
-        let lit =
-            super::embed_path_lit(&guard, proc_macro2::Span::call_site()).expect("lit should work");
-        assert_eq!(lit.value(), oxdock_fs::embed_path(&guard));
     }
 
     #[test]
@@ -735,6 +948,10 @@ mod tests {
         let assets_abs = manifest_dir.join(assets_rel).unwrap();
         let resolver = resolver_for(&manifest_dir);
         resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
+        let sample_file = assets_abs.join("existing.txt").unwrap();
+        resolver
+            .write_file(&sample_file, b"prebuilt content")
+            .expect("seed prebuilt file");
 
         // Simulate crates.io tarball: no .git, not primary package.
         let _env = manifest_env_guard(&manifest_dir, false);
@@ -749,16 +966,16 @@ mod tests {
         let out = ts.to_string();
         assert!(out.contains("DemoAssets"), "should define struct name");
 
-        let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new(
-            manifest_dir.root(),
-            UnguardedPath::new(&folder_path).as_path(),
-        )
-        .expect("guard folder path");
+        let include_paths = include_bytes_paths(&ts);
         assert_eq!(
-            folder_guard.as_path(),
-            assets_abs.as_path(),
-            "should point folder to out_dir abs path"
+            include_paths.len(),
+            1,
+            "preseeded out_dir should expose embedded paths"
+        );
+        assert_eq!(
+            include_paths[0],
+            oxdock_fs::embed_path(&sample_file),
+            "embed should reference files under out_dir"
         );
     }
 
@@ -816,6 +1033,8 @@ mod tests {
         resolver
             .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
+        let assets_rel = "prebuilt";
+        let assets_abs = manifest_dir.join(assets_rel).unwrap();
 
         // Source file only exists under the provided manifest dir; COPY should succeed from there.
         resolver
@@ -833,19 +1052,20 @@ mod tests {
                 "COPY source.txt copied.txt",
                 proc_macro2::Span::call_site(),
             )),
-            out_dir: LitStr::new("prebuilt", proc_macro2::Span::call_site()),
+            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
         };
 
         let ts = expand_embed_internal(&input).expect("should build using manifest dir");
-        let folder_path = folder_attr_path(&ts);
-        let folder_guard = GuardedPath::new(
-            manifest_dir.root(),
-            UnguardedPath::new(&folder_path).as_path(),
-        )
-        .expect("guard folder path");
-        let copied = folder_guard.join("copied.txt").expect("join copied.txt");
+        let copied_guard = assets_abs.join("copied.txt").unwrap();
+        let include_paths = include_bytes_paths(&ts);
+        assert!(
+            include_paths
+                .iter()
+                .any(|p| p == &oxdock_fs::embed_path(&copied_guard)),
+            "embed should include copied.txt under out_dir"
+        );
         let contents = resolver
-            .read_to_string(&copied)
+            .read_to_string(&copied_guard)
             .expect("copied file readable");
         assert_eq!(
             contents, "hello from manifest",
@@ -863,6 +1083,7 @@ mod tests {
             .create_dir_all(&manifest_dir.join(".git").unwrap())
             .expect("mkdir .git");
         let assets_rel = "prebuilt";
+        let assets_abs = manifest_dir.join(assets_rel).unwrap();
 
         let _env = manifest_env_guard(&manifest_dir, true);
 
@@ -881,77 +1102,59 @@ mod tests {
         };
 
         let ts = expand_embed_internal(&input).expect("should build using final WORKDIR");
-        let folder_path = folder_attr_path(&ts);
+        let include_paths = include_bytes_paths(&ts);
+        assert_eq!(
+            include_paths.len(),
+            1,
+            "only final WORKDIR file should be embedded"
+        );
+        let asset_path = &include_paths[0];
         assert!(
-            folder_path.ends_with(assets_rel),
-            "folder should be the out_dir path"
+            asset_path.ends_with(&format!("{assets_rel}/hello.txt")),
+            "embedded file should live under out_dir"
         );
 
-        let folder_guard = GuardedPath::new(
-            manifest_dir.root(),
-            UnguardedPath::new(&folder_path).as_path(),
-        )
-        .expect("guard folder path");
-        let inside = folder_guard.join("hello.txt").expect("join hello.txt");
+        let inside = assets_abs.join("hello.txt").expect("join hello.txt");
         assert!(
             inside.as_path().exists(),
             "file in final WORKDIR should exist in out_dir"
         );
 
-        let outside = folder_guard.join("outside.txt").expect("join outside.txt");
+        let outside = assets_abs.join("outside.txt").expect("join outside.txt");
         assert!(
             !outside.as_path().exists(),
             "only final WORKDIR contents should be copied into out_dir"
         );
     }
 
-    fn folder_attr_path(ts: &proc_macro2::TokenStream) -> String {
-        // The macro now emits a call to oxdock_fs::define_embed!(Name, "path").
-        // We need to parse this macro call and extract the second argument.
+    fn include_bytes_paths(ts: &proc_macro2::TokenStream) -> Vec<String> {
         let file: syn::File = syn::parse2(ts.clone()).expect("parse output as file");
 
-        fn extract_folder_from_macro(m: &syn::ItemMacro) -> Option<String> {
-            if m.mac.path.segments.last().unwrap().ident == "define_embed" {
-                let tokens = &m.mac.tokens;
-                // Parse the tokens as a comma-separated list of expressions
-                let parser =
-                    syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
-                let args = parser.parse2(tokens.clone()).ok()?;
+        struct IncludeVisitor {
+            matches: Vec<String>,
+        }
 
-                if args.len() >= 2
-                    && let syn::Expr::Lit(expr_lit) = &args[1]
-                    && let syn::Lit::Str(ref litstr) = expr_lit.lit
+        impl<'ast> Visit<'ast> for IncludeVisitor {
+            fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+                if mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|seg| seg.ident == "include_bytes")
+                    .unwrap_or(false)
                 {
-                    return Some(litstr.value());
-                }
-            }
-            None
-        }
-
-        // Search top-level items
-        for item in &file.items {
-            if let syn::Item::Macro(m) = item
-                && let Some(f) = extract_folder_from_macro(m)
-            {
-                return f;
-            }
-        }
-
-        // Search inside modules
-        for item in &file.items {
-            if let syn::Item::Mod(m) = item
-                && let Some((_, items)) = &m.content
-            {
-                for inner in items {
-                    if let syn::Item::Macro(inner_macro) = inner
-                        && let Some(f) = extract_folder_from_macro(inner_macro)
-                    {
-                        return f;
+                    if let Ok(lit) = syn::parse2::<syn::LitStr>(mac.tokens.clone()) {
+                        self.matches.push(lit.value());
                     }
                 }
+                syn::visit::visit_macro(self, mac);
             }
         }
 
-        panic!("folder attribute or define_embed! macro not found");
+        let mut visitor = IncludeVisitor {
+            matches: Vec::new(),
+        };
+        visitor.visit_file(&file);
+        visitor.matches
     }
 }

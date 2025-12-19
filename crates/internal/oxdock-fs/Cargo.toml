@@ -16,10 +16,9 @@ build = []
 
 [features]
 mock-fs = []
-embed = ["dep:rust-embed"]
+embed = []
 
 [dependencies]
 anyhow.workspace = true
-rust-embed = { workspace = true, optional = true }
 tempfile.workspace = true
 tracing = { workspace = true }
