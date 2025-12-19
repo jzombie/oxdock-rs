@@ -1,6 +1,4 @@
-#[cfg(not(miri))]
-use anyhow::bail;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 #[cfg(not(miri))]
 use std::fs;
 
@@ -308,6 +306,13 @@ impl PathResolver {
         let guarded_dst = self
             .check_access_with_root(&self.root, dst.as_path(), AccessMode::Write)
             .with_context(|| format!("symlink destination denied for {}", dst.display()))?;
+
+        if self.entry_kind(&guarded_dst).is_ok() {
+            bail!(
+                "SYMLINK destination already exists: {}",
+                guarded_dst.display()
+            );
+        }
 
         let kind = self.entry_kind(&guarded_src)?;
 
