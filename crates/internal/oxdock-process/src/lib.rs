@@ -78,6 +78,108 @@ impl CommandContext {
     }
 }
 
+fn expand_with_lookup<F>(input: &str, mut lookup: F) -> String
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            if let Some(&'{') = chars.peek() {
+                chars.next();
+                let mut name = String::new();
+                while let Some(&ch) = chars.peek() {
+                    chars.next();
+                    if ch == '}' {
+                        break;
+                    }
+                    name.push(ch);
+                }
+                if !name.is_empty() {
+                    out.push_str(&lookup(&name).unwrap_or_default());
+                }
+            } else {
+                let mut name = String::new();
+                while let Some(&ch) = chars.peek() {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        name.push(ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    out.push('$');
+                } else {
+                    out.push_str(&lookup(&name).unwrap_or_default());
+                }
+            }
+        } else if c == '{' {
+            let mut name = String::new();
+            for ch in chars.by_ref() {
+                if ch == '}' {
+                    break;
+                }
+                name.push(ch);
+            }
+            if !name.is_empty() {
+                out.push_str(&lookup(&name).unwrap_or_default());
+            }
+        } else if c == '%' {
+            let mut lookahead = chars.clone();
+            let mut has_end = false;
+            while let Some(ch) = lookahead.next() {
+                if ch == '%' {
+                    has_end = true;
+                    break;
+                }
+            }
+            if !has_end {
+                out.push('%');
+                continue;
+            }
+            let mut name = String::new();
+            while let Some(&ch) = chars.peek() {
+                chars.next();
+                if ch == '%' {
+                    break;
+                }
+                name.push(ch);
+            }
+            if name.is_empty() {
+                out.push('%');
+            } else {
+                out.push_str(&lookup(&name).unwrap_or_default());
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> String {
+    expand_with_lookup(input, |name| {
+        script_envs
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+    })
+}
+
+pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
+    expand_with_lookup(input, |name| {
+        if name == "CARGO_TARGET_DIR" {
+            return Some(ctx.cargo_target_dir().display().to_string());
+        }
+        ctx.envs()
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+    })
+}
+
 /// Handle for background processes spawned by a [`ProcessManager`].
 pub trait BackgroundHandle {
     fn try_wait(&mut self) -> Result<Option<ExitStatus>>;
@@ -481,57 +583,7 @@ fn extract_body(cmd: &str, prefix: &str) -> String {
 
 #[cfg(miri)]
 fn expand_env(input: &str, ctx: &CommandContext) -> String {
-    let mut out = String::new();
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            if let Some(&'{') = chars.peek() {
-                chars.next();
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    chars.next();
-                    if ch == '}' {
-                        break;
-                    }
-                    name.push(ch);
-                }
-                out.push_str(&env_lookup(&name, ctx));
-            } else {
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_ascii_alphanumeric() || ch == '_' {
-                        name.push(ch);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if name.is_empty() {
-                    out.push('$');
-                } else {
-                    out.push_str(&env_lookup(&name, ctx));
-                }
-            }
-        } else if c == '%' {
-            // Windows-style %VAR%
-            let mut name = String::new();
-            while let Some(&ch) = chars.peek() {
-                chars.next();
-                if ch == '%' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if name.is_empty() {
-                out.push('%');
-            } else {
-                out.push_str(&env_lookup(&name, ctx));
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    expand_with_lookup(input, |name| Some(env_lookup(name, ctx)))
 }
 
 #[cfg(miri)]

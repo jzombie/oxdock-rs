@@ -7,6 +7,7 @@ use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{
     BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
+    expand_command_env,
 };
 
 struct ExecState<P: ProcessManager> {
@@ -198,23 +199,27 @@ fn execute_steps<P: ProcessManager>(
                         }
                     },
                     StepKind::Env { key, value } => {
-                        state.envs.insert(key.clone(), value.clone());
+                        let ctx = state.command_ctx();
+                        let rendered = expand_command_env(value, &ctx);
+                        state.envs.insert(key.clone(), rendered);
                     }
                     StepKind::Run(cmd) => {
                         let ctx = state.command_ctx();
+                        let rendered = expand_command_env(cmd, &ctx);
                         if capture_output {
                             let output = process
-                                .run_capture(&ctx, cmd)
-                                .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+                                .run_capture(&ctx, &rendered)
+                                .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?;
                             out.write_all(&output)?;
                         } else {
                             process
-                                .run(&ctx, cmd)
-                                .with_context(|| format!("step {}: RUN {}", idx + 1, cmd))?;
+                                .run(&ctx, &rendered)
+                                .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?;
                         }
                     }
                     StepKind::Echo(msg) => {
-                        let rendered = interpolate(msg, &state.envs);
+                        let ctx = state.command_ctx();
+                        let rendered = expand_command_env(msg, &ctx);
                         writeln!(out, "{}", rendered)?;
                     }
                     StepKind::RunBg(cmd) => {
@@ -222,9 +227,10 @@ fn execute_steps<P: ProcessManager>(
                             bail!("RUN_BG is not supported inside CAPTURE");
                         }
                         let ctx = state.command_ctx();
+                        let rendered = expand_command_env(cmd, &ctx);
                         let child = process
-                            .spawn_bg(&ctx, cmd)
-                            .with_context(|| format!("step {}: RUN_BG {}", idx + 1, cmd))?;
+                            .spawn_bg(&ctx, &rendered)
+                            .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?;
                         state.bg_children.push(child);
                     }
                     StepKind::Copy { from, to } => {
@@ -323,9 +329,11 @@ fn execute_steps<P: ProcessManager>(
                         state.fs.ensure_parent_dir(&target).with_context(|| {
                             format!("failed to create parent for {}", target.display())
                         })?;
+                        let ctx = state.command_ctx();
+                        let rendered = expand_command_env(contents, &ctx);
                         state
                             .fs
-                            .write_file(&target, contents.as_bytes())
+                            .write_file(&target, rendered.as_bytes())
                             .with_context(|| format!("failed to write {}", target.display()))?;
                     }
                     StepKind::Capture { path, cmd } => {
@@ -519,73 +527,6 @@ fn describe_dir(
     out
 }
 
-fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            if let Some(&'{') = chars.peek() {
-                chars.next();
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    chars.next();
-                    if ch == '}' {
-                        break;
-                    }
-                    name.push(ch);
-                }
-                if !name.is_empty() {
-                    let val = script_envs
-                        .get(&name)
-                        .cloned()
-                        .or_else(|| std::env::var(&name).ok())
-                        .unwrap_or_default();
-                    out.push_str(&val);
-                }
-            } else {
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_ascii_alphanumeric() || ch == '_' {
-                        name.push(ch);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if !name.is_empty() {
-                    let val = script_envs
-                        .get(&name)
-                        .cloned()
-                        .or_else(|| std::env::var(&name).ok())
-                        .unwrap_or_default();
-                    out.push_str(&val);
-                } else {
-                    out.push('$');
-                }
-            }
-        } else if c == '{' {
-            let mut name = String::new();
-            for ch in chars.by_ref() {
-                if ch == '}' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if !name.is_empty() {
-                let val = script_envs
-                    .get(&name)
-                    .cloned()
-                    .or_else(|| std::env::var(&name).ok())
-                    .unwrap_or_default();
-                out.push_str(&val);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,6 +573,34 @@ mod tests {
             &root.join(".cargo-target").unwrap().to_path_buf()
         );
         assert_eq!(envs.get("FOO"), Some(&"bar".into()));
+    }
+
+    #[test]
+    fn run_expands_env_values() {
+        let root = GuardedPath::new_root_from_str(".").unwrap();
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "FOO".into(),
+                    value: "bar".into(),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Run("echo ${FOO}".into()),
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+        ];
+        let mock = MockProcessManager::default();
+        let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
+        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        let runs = mock.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].script, "echo bar");
     }
 
     #[test]
@@ -898,6 +867,45 @@ mod tests {
             .find(|(k, _)| k.ends_with("app/out.txt"))
             .map(|(_, v)| String::from_utf8_lossy(v).to_string());
         assert_eq!(written, Some("hi".into()));
+    }
+
+    #[test]
+    fn write_interpolates_env_values() {
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "FOO".into(),
+                    value: "bar".into(),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Env {
+                    key: "BAZ".into(),
+                    value: "${FOO}-baz".into(),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::Write {
+                    path: "out.txt".into(),
+                    contents: "val ${BAZ}".into(),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+        ];
+        let (_cwd, files) = run_with_mock_fs(&steps);
+        let written = files
+            .iter()
+            .find(|(k, _)| k.ends_with("out.txt"))
+            .map(|(_, v)| String::from_utf8_lossy(v).to_string());
+        assert_eq!(written, Some("val bar-baz".into()));
     }
 
     #[test]
