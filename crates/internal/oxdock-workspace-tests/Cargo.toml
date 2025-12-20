@@ -11,9 +11,9 @@ publish = false
 [dev-dependencies]
 anyhow.workspace = true
 libtest-mimic.workspace = true
-oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
+oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 proc-macro2.workspace = true
 
 [[test]]
