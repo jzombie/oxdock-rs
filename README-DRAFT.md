@@ -6,9 +6,9 @@
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/Made%20with-Rust-black?&logo=Rust" alt="Made with Rust" />
   </a>
-  <a href="https://docs.rs/oxdock">
+  <!-- <a href="https://docs.rs/oxdock">
     <img src="https://img.shields.io/docsrs/oxdock" alt="docs.rs" />
-  </a>
+  </a> -->
   <a href="https://github.com/jzombie/oxdock-rs/actions/workflows/rust-tests.yml?query=branch%3Amain+event%3Apush">
     <img src="https://img.shields.io/github/actions/workflow/status/jzombie/oxdock-rs/rust-tests.yml?branch=main&label=Miri&logo=github" alt="Miri status" />
   </a>
@@ -24,7 +24,6 @@
 </div>
 
 # OxDock
-
 
 OxDock is a Docker-inspired language that is [run during compile-time](./oxdock-buildtime-macros/) of Rust programs, embedding resources directly into the binary's data section without allocating heap space when the program starts. The generated asset structs are pure Rust and work in `no_std` targets, providing simple file-like access to embedded resources without depending on `std`.
 
