@@ -37,6 +37,10 @@ fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires symlink support; Miri synthetic fs cannot create symlinks"
+)]
 fn commands_behave_cross_platform() {
     let snapshot_dir = GuardedPath::tempdir().unwrap();
     let snapshot = guard_root(&snapshot_dir);

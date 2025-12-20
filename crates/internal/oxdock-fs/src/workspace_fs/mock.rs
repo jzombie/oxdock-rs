@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 
 use anyhow::{Result, bail};
@@ -24,19 +24,6 @@ pub struct MockFs {
 struct MockState {
     files: HashMap<String, Vec<u8>>,
     dirs: HashSet<String>,
-}
-
-fn root_relative_path(path: &Path) -> PathBuf {
-    let mut rel = PathBuf::new();
-    for comp in path.components() {
-        match comp {
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => rel.push(".."),
-            std::path::Component::Normal(seg) => rel.push(seg),
-        }
-    }
-    rel
 }
 
 impl MockFs {

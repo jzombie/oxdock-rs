@@ -2,8 +2,6 @@ use anyhow::{Context, Result, bail};
 #[cfg(not(miri))]
 use std::fs;
 
-#[cfg(miri)]
-use super::EntryKind;
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 

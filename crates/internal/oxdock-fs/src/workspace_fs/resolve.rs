@@ -121,12 +121,14 @@ mod tests {
         let mut resolver =
             PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
         resolver.set_workspace_root(workspace_root.clone());
+        let workspace_resolver =
+            PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone()).unwrap();
         let client = GuardedPath::new(
             workspace_root.root(),
             &workspace_root.as_path().join("client"),
         )
         .unwrap();
-        resolver.create_dir_all(&client).unwrap();
+        workspace_resolver.create_dir_all(&client).unwrap();
         let resolved = resolver.resolve_copy_source("/client").unwrap();
         assert_eq!(resolved.as_path(), workspace_root.as_path().join("client"));
     }
