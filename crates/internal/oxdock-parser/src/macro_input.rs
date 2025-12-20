@@ -263,11 +263,7 @@ fn walk(
                 *last_span_end = Some(span.end());
             }
             TokenTree::Literal(lit) => {
-                push_fragment(
-                    line,
-                    &lit.to_string(),
-                    *last_was_command || gap_space,
-                );
+                push_fragment(line, &lit.to_string(), *last_was_command || gap_space);
                 *last_was_command = false;
                 *last_span_end = Some(span.end());
             }
@@ -386,10 +382,9 @@ mod tests {
 
     #[test]
     fn braced_script_preserves_dot_path_spacing() {
-        let input: DslMacroInput = parse_str(
-            "name: foo, script: { SYMLINK ./client ./client }, out_dir: \"out\"",
-        )
-        .expect("parse braced script");
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { SYMLINK ./client ./client }, out_dir: \"out\"")
+                .expect("parse braced script");
         let ScriptSource::Braced(ts) = input.script else {
             panic!("expected braced script");
         };

@@ -24,8 +24,7 @@ impl PathResolver {
     #[allow(clippy::disallowed_macros)]
     fn is_absolute_or_rooted(path: &Path) -> bool {
         path.is_absolute()
-            || (cfg!(windows)
-                && path.components().next() == Some(std::path::Component::RootDir))
+            || (cfg!(windows) && path.components().next() == Some(std::path::Component::RootDir))
     }
 
     pub fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
