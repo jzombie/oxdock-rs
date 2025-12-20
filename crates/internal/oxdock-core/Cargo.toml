@@ -14,10 +14,6 @@ normal = ["tracing"]
 development = []
 build = []
 
-[features]
-default = []
-proc-macro-api = ["oxdock-parser/proc-macro-api"]
-
 [dependencies]
 anyhow.workspace = true
 oxdock-fs.workspace = true

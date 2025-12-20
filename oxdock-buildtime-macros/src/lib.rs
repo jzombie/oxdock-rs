@@ -268,7 +268,7 @@ fn build_assets(
         .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     let temp_root_guard = tempdir.as_guarded_path().clone();
 
-    let steps = oxdock_core::parse_script(script)
+    let steps = oxdock_parser::parse_script(script)
         .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
     let resolver =
@@ -555,9 +555,9 @@ fn prepare_macro_plan(input: &DslMacroInput) -> syn::Result<MacroPlan> {
 #[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
-    use oxdock_core::StepKind;
     #[allow(clippy::disallowed_types)]
     use oxdock_fs::{GuardedPath, UnguardedPath};
+    use oxdock_parser::StepKind;
     use oxdock_process::serial_cargo_env::manifest_env_guard;
     use syn::{Ident, LitStr, visit::Visit};
 

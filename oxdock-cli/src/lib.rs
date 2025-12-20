@@ -8,10 +8,8 @@ use std::io::{self, IsTerminal, Read};
 #[cfg(test)]
 use std::sync::Mutex;
 
-pub use oxdock_core::{
-    Guard, Step, StepKind, parse_script, run_steps, run_steps_with_context,
-    run_steps_with_context_result,
-};
+pub use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result};
+pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
 pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
