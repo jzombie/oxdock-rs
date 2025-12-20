@@ -180,10 +180,7 @@ fn walk(
                 }
             }
             TokenTree::Literal(lit) => {
-                let text = syn::parse_str::<LitStr>(&lit.to_string())
-                    .map(|s| s.value())
-                    .unwrap_or_else(|_| lit.to_string());
-                push_fragment(line, &text, *last_was_command);
+                push_fragment(line, &lit.to_string(), *last_was_command);
                 *last_was_command = false;
             }
             TokenTree::Punct(p) => {

@@ -1,4 +1,4 @@
-use crate::{Guard, PlatformGuard, StepKind, WorkspaceTarget};
+use crate::ast::{Guard, PlatformGuard, StepKind, WorkspaceTarget};
 use anyhow::{Result, anyhow, bail};
 use pest::Parser;
 use pest_derive::Parser;
@@ -293,7 +293,7 @@ fn parse_raw_concatenated_string(pair: pest::iterators::Pair<Rule>) -> Result<St
             }
         }
         match part.as_rule() {
-            Rule::quoted_string => body.push_str(part.as_str()),
+            Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
             Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
             _ => {}
         }

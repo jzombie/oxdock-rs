@@ -736,7 +736,7 @@ mod tests {
         let expected = [
             "WORKDIR /",
             "MKDIR assets;",
-            "WRITE assets/hello.txt hi there;",
+            "WRITE assets/hello.txt \"hi there\";",
             "LS;",
             "LS;",
             "LS;",

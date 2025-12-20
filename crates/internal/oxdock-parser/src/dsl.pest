@@ -106,7 +106,7 @@ message = { (quoted_string | unquoted_msg_content)+ }
 unquoted_msg_content = { !(linebreak | ";") ~ ANY }
 
 run_args = { (quoted_string | unquoted_run_content)+ }
-unquoted_run_content = { !(linebreak | "//" | "/*") ~ ANY }
+unquoted_run_content = { !(linebreak | "//" | "/*" | ";") ~ ANY }
 
 exit_code = @{ ASCII_DIGIT+ }
 

@@ -1,0 +1,100 @@
+use oxdock_parser::ast::*;
+use oxdock_parser::parse_script;
+#[cfg(feature = "token-input")]
+use oxdock_parser::parse_braced_tokens;
+use proptest::prelude::*;
+
+// Strategies
+
+fn arb_platform_guard() -> impl Strategy<Value = PlatformGuard> {
+    prop_oneof![
+        Just(PlatformGuard::Unix),
+        Just(PlatformGuard::Windows),
+        Just(PlatformGuard::Macos),
+        Just(PlatformGuard::Linux),
+    ]
+}
+
+fn arb_guard() -> impl Strategy<Value = Guard> {
+    prop_oneof![
+        (arb_platform_guard(), any::<bool>()).prop_map(|(target, invert)| Guard::Platform { target, invert }),
+        ("[a-zA-Z_][a-zA-Z0-9_]*", any::<bool>()).prop_map(|(key, invert)| Guard::EnvExists { key, invert }),
+        ("[a-zA-Z_][a-zA-Z0-9_]*", "[a-zA-Z0-9_]+", any::<bool>()).prop_map(|(key, value, invert)| Guard::EnvEquals { key, value, invert }),
+    ]
+}
+
+fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
+    prop::collection::vec(
+        prop::collection::vec(arb_guard(), 1..3),
+        0..2
+    )
+}
+
+fn safe_string() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9_./-]+"
+}
+
+fn safe_msg() -> impl Strategy<Value = String> {
+    // Allow spaces and some punctuation, but avoid things that break the simple parser
+    "[a-zA-Z0-9_./-][a-zA-Z0-9_./ -]*"
+}
+
+fn arb_step_kind() -> impl Strategy<Value = StepKind> {
+    prop_oneof![
+        safe_string().prop_map(StepKind::Workdir),
+        prop_oneof![Just(WorkspaceTarget::Snapshot), Just(WorkspaceTarget::Local)].prop_map(StepKind::Workspace),
+        (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env { key, value }),
+        safe_msg().prop_map(StepKind::Run),
+        safe_msg().prop_map(StepKind::Echo),
+        safe_msg().prop_map(StepKind::RunBg),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy { from, to }),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Symlink { from, to }),
+        safe_string().prop_map(StepKind::Mkdir),
+        prop::option::of(safe_string()).prop_map(StepKind::Ls),
+        Just(StepKind::Cwd),
+        safe_string().prop_map(StepKind::Cat),
+        (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
+        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::Capture { path, cmd }),
+        (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| StepKind::CopyGit { rev, from, to }),
+        (0i32..255).prop_map(|code| StepKind::Exit(code)),
+    ]
+}
+
+fn arb_step() -> impl Strategy<Value = Step> {
+    (arb_guards(), arb_step_kind()).prop_map(|(guards, kind)| Step {
+        guards,
+        kind,
+        scope_enter: 0,
+        scope_exit: 0,
+    })
+}
+
+proptest! {
+    #[test]
+    fn fuzz_parity(step in arb_step()) {
+        let s = step.to_string();
+        
+        // 1. Parse string
+        let parsed_steps = parse_script(&s).expect("failed to parse generated string");
+        assert_eq!(parsed_steps.len(), 1);
+        let mut parsed_step = parsed_steps[0].clone();
+        parsed_step.scope_enter = 0;
+        parsed_step.scope_exit = 0;
+        
+        assert_eq!(parsed_step, step, "String parse mismatch: {}", s);
+
+        // 2. Parse tokens (if feature enabled)
+        #[cfg(feature = "token-input")]
+        {
+            let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
+            let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");
+            
+            assert_eq!(token_steps.len(), 1);
+            let mut token_step = token_steps[0].clone();
+            token_step.scope_enter = 0;
+            token_step.scope_exit = 0;
+            
+            assert_eq!(token_step, step, "Token parse mismatch: {}", s);
+        }
+    }
+}
