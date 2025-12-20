@@ -349,7 +349,10 @@ impl WorkspaceFs for MockFs {
         let candidate = Path::new(from);
         if candidate.is_absolute() {
             let rel = root_relative_path(candidate);
-            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
+            return GuardedPath::new(
+                self.build_context.root(),
+                &self.build_context.as_path().join(rel),
+            );
         }
         let rel = self.split_components(from).join("/");
         self.guard_from_rel(rel)

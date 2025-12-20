@@ -50,9 +50,10 @@ impl PathResolver {
     pub fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         if Path::new(from).is_absolute() {
             let rel = Self::root_relative_path(Path::new(from));
-            let candidate = self.root().as_path().join(rel);
+            let root = self.workspace_root.as_ref().unwrap_or(&self.build_context);
+            let candidate = root.as_path().join(rel);
             return self
-                .check_access_with_root(&self.root, &candidate, AccessMode::Read)
+                .check_access_with_root(root, &candidate, AccessMode::Read)
                 .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
                 .and_then(|guarded| self.backend.resolve_copy_source(guarded));
         }
@@ -103,5 +104,24 @@ mod tests {
         let resolver = PathResolver::new_guarded(root.clone(), root.clone()).unwrap();
         let resolved = resolver.resolve_write(&root, "/client").unwrap();
         assert_eq!(resolved.as_path(), root.as_path().join("client"));
+    }
+
+    #[test]
+    fn absolute_copy_source_resolves_under_workspace_root() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let workspace = GuardedPath::tempdir().unwrap();
+        let snapshot_root = snapshot.as_guarded_path().clone();
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut resolver =
+            PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
+        resolver.set_workspace_root(workspace_root.clone());
+        let client = GuardedPath::new(
+            workspace_root.root(),
+            &workspace_root.as_path().join("client"),
+        )
+        .unwrap();
+        resolver.create_dir_all(&client).unwrap();
+        let resolved = resolver.resolve_copy_source("/client").unwrap();
+        assert_eq!(resolved.as_path(), workspace_root.as_path().join("client"));
     }
 }
