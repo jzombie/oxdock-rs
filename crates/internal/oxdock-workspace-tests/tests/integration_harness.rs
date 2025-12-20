@@ -129,6 +129,18 @@ fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
                 .to_string(),
         )
         .with_path_dependency(
+            "oxdock-core",
+            workspace_root
+                .join("crates/internal/oxdock-core")?
+                .to_string(),
+        )
+        .with_path_dependency(
+            "oxdock-parser",
+            workspace_root
+                .join("crates/internal/oxdock-parser")?
+                .to_string(),
+        )
+        .with_path_dependency(
             "oxdock-process",
             workspace_root
                 .join("crates/internal/oxdock-process")?
