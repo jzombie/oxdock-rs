@@ -5,7 +5,9 @@ use std::process::ExitStatus;
 
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
-use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, default_process_manager};
+use oxdock_process::{
+    BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
+};
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -113,10 +115,7 @@ fn run_steps_with_manager<P: ProcessManager>(
     let fs_root = fs.root().clone();
     let cwd = fs.root().clone();
     let build_context = fs.build_context().clone();
-    let mut envs = HashMap::new();
-    if let Ok(Some(commit)) = oxdock_fs::current_head_commit(&build_context) {
-        envs.insert("WORKSPACE_GIT_COMMIT".to_string(), commit);
-    }
+    let envs = BuiltinEnv::collect(&build_context).into_envs();
     let mut state = ExecState {
         fs,
         cargo_target_dir: fs_root.join(".cargo-target")?,
