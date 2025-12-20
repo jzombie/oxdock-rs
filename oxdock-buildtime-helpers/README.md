@@ -28,6 +28,15 @@ fn main() {
 - `emit_cfg_envs()`: forward `CARGO_CFG_*` derived from `rustc --print cfg`
 - `emit_feature_and_cfg_envs()`: calls both
 
+## When This Helper Is Needed
+
+| Item | Helper Necessary? |
+| --- | --- |
+| `FOO=1 cargo build` | No |
+| CLI args sent to `cargo run -- ...` | TBD |
+| Available cargo features / cfgs | Yes |
+| All other environment variables | No |
+
 ## License
 
 Licensed under the [Apache-2.0 License](../LICENSE).
