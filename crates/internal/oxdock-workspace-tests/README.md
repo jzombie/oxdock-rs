@@ -27,10 +27,17 @@ Without it, the harness defaults to `cargo run --quiet` and expects success.
 - `stderr_not_contains: <text>` (optional, repeatable)
 - `---` separates multiple cases
 
+## Integration fixtures
+
+Non-parity fixtures live under `fixtures/integration/`, for example:
+
+- `fixtures/integration/build_from_manifest/`
+- `fixtures/integration/buildtime_macros/<name>/`
+
 ## Build-time macro fixtures
 
 Fixtures used by the build-time macro integration tests live under
-`fixtures/buildtime_macros/<name>/`. These are exercised by the same fixture
+`fixtures/integration/buildtime_macros/<name>/`. These are exercised by the same fixture
 harness via `expectations.txt` cases.
 
 ## DSL parity cases

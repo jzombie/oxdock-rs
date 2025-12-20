@@ -67,62 +67,8 @@ fn main() {
 
 fn discover_fixtures(resolver: &PathResolver) -> Result<Vec<FixtureSpec>> {
     let fixtures_root = resolver.root().join("fixtures")?;
-    let entries = resolver
-        .read_dir_entries(&fixtures_root)
-        .context("failed to read fixtures directory")?;
-
     let mut fixtures = Vec::new();
-    for entry in entries {
-        let file_type = entry
-            .file_type()
-            .context("failed to read fixtures entry type")?;
-        if !file_type.is_dir() {
-            continue;
-        }
-
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-
-        let candidate = fixtures_root.join(&name)?;
-        let manifest = candidate.join("Cargo.toml")?;
-        if resolver.entry_kind(&manifest).is_ok() {
-            fixtures.push(FixtureSpec {
-                name,
-                template: candidate.to_string(),
-            });
-            continue;
-        }
-
-        let nested_entries = match resolver.read_dir_entries(&candidate) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for nested in nested_entries {
-            let file_type = nested
-                .file_type()
-                .context("failed to read fixtures entry type")?;
-            if !file_type.is_dir() {
-                continue;
-            }
-
-            let nested_name = nested.file_name().to_string_lossy().to_string();
-            if nested_name.starts_with('.') {
-                continue;
-            }
-
-            let nested_candidate = candidate.join(&nested_name)?;
-            let manifest = nested_candidate.join("Cargo.toml")?;
-            if resolver.entry_kind(&manifest).is_ok() {
-                fixtures.push(FixtureSpec {
-                    name: format!("{name}/{nested_name}"),
-                    template: nested_candidate.to_string(),
-                });
-            }
-        }
-    }
+    discover_fixtures_recursive(resolver, &fixtures_root, "", &mut fixtures)?;
 
     fixtures.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(fixtures)
@@ -366,5 +312,49 @@ fn assert_not_contains(
             ));
         }
     }
+    Ok(())
+}
+
+fn discover_fixtures_recursive(
+    resolver: &PathResolver,
+    root: &oxdock_fs::GuardedPath,
+    rel: &str,
+    fixtures: &mut Vec<FixtureSpec>,
+) -> Result<()> {
+    let entries = resolver
+        .read_dir_entries(root)
+        .context("failed to read fixtures directory")?;
+
+    for entry in entries {
+        let file_type = entry
+            .file_type()
+            .context("failed to read fixtures entry type")?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "target" {
+            continue;
+        }
+
+        let candidate = root.join(&name)?;
+        let manifest = candidate.join("Cargo.toml")?;
+        let rel_name = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
+
+        if resolver.entry_kind(&manifest).is_ok() {
+            fixtures.push(FixtureSpec {
+                name: rel_name,
+                template: candidate.to_string(),
+            });
+        } else {
+            discover_fixtures_recursive(resolver, &candidate, &rel_name, fixtures)?;
+        }
+    }
+
     Ok(())
 }
