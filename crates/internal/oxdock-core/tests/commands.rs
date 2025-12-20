@@ -583,6 +583,45 @@ fn copy_git_directory_via_script() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "initializes git repos to resolve WORKSPACE_GIT_COMMIT")]
+fn env_exposes_git_commit_hash() {
+    let repo_temp = GuardedPath::tempdir().unwrap();
+    let repo = guard_root(&repo_temp);
+    write_text(&repo.join("hello.txt").unwrap(), "hello");
+
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = git_cmd(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let steps =
+        oxdock_parser::parse_script("CAPTURE out.txt ECHO ${WORKSPACE_GIT_COMMIT}").unwrap();
+    run_steps(&repo, &steps).unwrap();
+
+    assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
+}
+
+#[test]
 fn workdir_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);

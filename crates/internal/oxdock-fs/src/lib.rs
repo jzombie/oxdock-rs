@@ -9,7 +9,7 @@ pub fn is_isolated() -> bool {
 
 pub mod workspace_fs;
 pub use workspace_fs::git::{
-    GitIdentity, WorkspaceSnapshot, copy_workspace_to, ensure_git_identity,
+    GitIdentity, WorkspaceSnapshot, copy_workspace_to, current_head_commit, ensure_git_identity,
 };
 pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};

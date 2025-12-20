@@ -112,11 +112,16 @@ fn run_steps_with_manager<P: ProcessManager>(
 ) -> Result<GuardedPath> {
     let fs_root = fs.root().clone();
     let cwd = fs.root().clone();
+    let build_context = fs.build_context().clone();
+    let mut envs = HashMap::new();
+    if let Ok(Some(commit)) = oxdock_fs::current_head_commit(&build_context) {
+        envs.insert("WORKSPACE_GIT_COMMIT".to_string(), commit);
+    }
     let mut state = ExecState {
         fs,
         cargo_target_dir: fs_root.join(".cargo-target")?,
         cwd,
-        envs: HashMap::new(),
+        envs,
         bg_children: Vec::new(),
         scope_stack: Vec::new(),
     };
