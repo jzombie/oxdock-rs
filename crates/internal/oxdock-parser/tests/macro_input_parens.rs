@@ -11,15 +11,11 @@ mod tests {
             TokenTree::Ident(Ident::new("echo", Span::call_site())),
             TokenTree::Group(Group::new(
                 Delimiter::Parenthesis,
-                TokenStream::from(TokenTree::Ident(Ident::new(
-                    "foo",
-                    Span::call_site(),
-                ))),
+                TokenStream::from(TokenTree::Ident(Ident::new("foo", Span::call_site()))),
             )),
         ]);
 
-        let script =
-            script_from_braced_tokens(&ts).expect("failed to render parentheses group");
+        let script = script_from_braced_tokens(&ts).expect("failed to render parentheses group");
         assert!(
             script.contains("( foo )"),
             "expected parentheses group in script: {script}"
@@ -34,15 +30,11 @@ mod tests {
             TokenTree::Ident(Ident::new("echo", Span::call_site())),
             TokenTree::Group(Group::new(
                 Delimiter::None,
-                TokenStream::from(TokenTree::Ident(Ident::new(
-                    "BAR",
-                    Span::call_site(),
-                ))),
+                TokenStream::from(TokenTree::Ident(Ident::new("BAR", Span::call_site()))),
             )),
         ]);
 
-        let script =
-            script_from_braced_tokens(&ts).expect("failed to render none-delimiter group");
+        let script = script_from_braced_tokens(&ts).expect("failed to render none-delimiter group");
         assert!(
             script.contains("BAR"),
             "expected none-delimiter content in script: {script}"
