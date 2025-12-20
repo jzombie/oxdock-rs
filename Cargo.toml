@@ -23,8 +23,8 @@ publish = true
 [workspace.dependencies]
 anyhow = "1.0.100"
 indoc = "2.0.7"
-oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.4.0-alpha" }
 oxdock-buildtime-helpers = { path = "oxdock-buildtime-helpers", version = "0.4.0-alpha" }
+oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.4.0-alpha" }
 
 # Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.4.0-alpha" }
