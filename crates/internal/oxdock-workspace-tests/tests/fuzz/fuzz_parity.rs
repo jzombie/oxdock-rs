@@ -110,6 +110,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
                 include_dirty: false,
             }
         }),
+        safe_string().prop_map(|path| StepKind::HashSha256 { path }),
         (0i32..255).prop_map(StepKind::Exit),
     ]
 }

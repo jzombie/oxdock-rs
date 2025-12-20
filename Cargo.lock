@@ -365,6 +365,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "sha2",
 ]
 
 [[package]]

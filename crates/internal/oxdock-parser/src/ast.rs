@@ -11,6 +11,7 @@ pub enum Command {
     Copy,
     Capture,
     CopyGit,
+    HashSha256,
     Symlink,
     Mkdir,
     Ls,
@@ -30,6 +31,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Copy,
     Command::Capture,
     Command::CopyGit,
+    Command::HashSha256,
     Command::Symlink,
     Command::Mkdir,
     Command::Ls,
@@ -51,6 +53,7 @@ impl Command {
             Command::Copy => "COPY",
             Command::Capture => "CAPTURE",
             Command::CopyGit => "COPY_GIT",
+            Command::HashSha256 => "HASH_SHA256",
             Command::Symlink => "SYMLINK",
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
@@ -76,6 +79,7 @@ impl Command {
             "COPY" => Some(Command::Copy),
             "CAPTURE" => Some(Command::Capture),
             "COPY_GIT" => Some(Command::CopyGit),
+            "HASH_SHA256" => Some(Command::HashSha256),
             "SYMLINK" => Some(Command::Symlink),
             "MKDIR" => Some(Command::Mkdir),
             "LS" => Some(Command::Ls),
@@ -149,6 +153,9 @@ pub enum StepKind {
         from: String,
         to: String,
         include_dirty: bool,
+    },
+    HashSha256 {
+        path: String,
     },
     Exit(i32),
 }
@@ -375,6 +382,7 @@ impl fmt::Display for StepKind {
                     )
                 }
             }
+            StepKind::HashSha256 { path } => write!(f, "HASH_SHA256 {}", quote_arg(path)),
             StepKind::Exit(code) => write!(f, "EXIT {}", code),
         }
     }

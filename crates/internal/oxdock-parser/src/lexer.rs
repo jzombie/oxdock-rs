@@ -54,6 +54,7 @@ pub fn tokenize(input: &str) -> Result<Vec<RawToken<'_>>> {
             | Rule::copy_command
             | Rule::capture_command
             | Rule::copy_git_command
+            | Rule::hash_sha256_command
             | Rule::symlink_command
             | Rule::mkdir_command
             | Rule::ls_command

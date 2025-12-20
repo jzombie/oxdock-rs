@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::ExitStatus;
 
-use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
+use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
+use sha2::{Digest, Sha256};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{
     BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
@@ -260,6 +261,18 @@ fn execute_steps<P: ProcessManager>(
                             .with_context(|| {
                                 format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                             })?;
+                    }
+                    StepKind::HashSha256 { path } => {
+                        let target = state
+                            .fs
+                            .resolve_read(&state.cwd, path)
+                            .with_context(|| {
+                                format!("step {}: HASH_SHA256 {}", idx + 1, path)
+                            })?;
+                        let mut hasher = Sha256::new();
+                        hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
+                        let digest = hasher.finalize();
+                        writeln!(out, "{:x}", digest)?;
                     }
 
                     StepKind::Symlink { from, to } => {
@@ -530,6 +543,42 @@ fn describe_dir(
     let mut left = max_entries;
     helper(fs, root, root, 0, max_depth, &mut left, &mut out);
     out
+}
+
+fn hash_path(
+    fs: &dyn WorkspaceFs,
+    path: &GuardedPath,
+    rel: &str,
+    hasher: &mut Sha256,
+) -> Result<()> {
+    match fs.entry_kind(path)? {
+        EntryKind::Dir => {
+            hasher.update(b"D\0");
+            hasher.update(rel.as_bytes());
+            hasher.update(b"\0");
+            let mut entries = fs.read_dir_entries(path)?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let child = path.join(&name)?;
+                let child_rel = if rel.is_empty() {
+                    name
+                } else {
+                    format!("{}/{}", rel, name)
+                };
+                let child_rel = to_forward_slashes(&child_rel);
+                hash_path(fs, &child, &child_rel, hasher)?;
+            }
+        }
+        EntryKind::File => {
+            hasher.update(b"F\0");
+            hasher.update(rel.as_bytes());
+            hasher.update(b"\0");
+            let data = fs.read_file(path)?;
+            hasher.update(&data);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

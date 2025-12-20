@@ -283,6 +283,10 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 include_dirty,
             }
         }
+        Rule::hash_sha256_command => {
+            let arg = parse_single_arg(pair)?;
+            StepKind::HashSha256 { path: arg }
+        }
         Rule::symlink_command => {
             let mut args = parse_args(pair)?;
             StepKind::Symlink {

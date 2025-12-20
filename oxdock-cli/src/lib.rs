@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
@@ -73,6 +73,45 @@ impl Options {
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     execute_with_shell_runner(opts, workspace_root, run_shell, true)
+}
+
+pub struct ExecutionResult {
+    pub tempdir: GuardedTempDir,
+    pub final_cwd: GuardedPath,
+}
+
+pub fn execute_with_result(opts: Options, workspace_root: GuardedPath) -> Result<ExecutionResult> {
+    if opts.shell {
+        bail!("execute_with_result does not support --shell");
+    }
+
+    let tempdir = GuardedPath::tempdir().context("failed to create temp dir")?;
+    let temp_root = tempdir.as_guarded_path().clone();
+
+    let script = match &opts.script {
+        ScriptSource::Path(path) => {
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+            resolver
+                .read_to_string(path)
+                .with_context(|| format!("failed to read script at {}", path.display()))?
+        }
+        ScriptSource::Stdin => {
+            let mut buf = String::new();
+            io::stdin()
+                .lock()
+                .read_to_string(&mut buf)
+                .context("failed to read script from stdin")?;
+            buf
+        }
+    };
+
+    let mut final_cwd = temp_root.clone();
+    if !script.trim().is_empty() {
+        let steps = parse_script(&script)?;
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
+    }
+
+    Ok(ExecutionResult { tempdir, final_cwd })
 }
 
 fn execute_with_shell_runner<F>(

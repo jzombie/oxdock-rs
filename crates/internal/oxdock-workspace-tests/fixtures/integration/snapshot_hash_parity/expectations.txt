@@ -1,0 +1,3 @@
+case: snapshot_hash_parity
+args: run --quiet
+expect: success
