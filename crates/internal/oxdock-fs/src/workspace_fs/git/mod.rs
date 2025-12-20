@@ -20,6 +20,45 @@ pub mod snapshot;
 pub use config::{GitIdentity, ensure_git_identity};
 pub use snapshot::{WorkspaceSnapshot, copy_workspace_to};
 
+#[allow(clippy::disallowed_types)]
+pub fn git_root_from_path(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut cur: Option<&std::path::Path> = Some(start);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+pub fn current_head_commit(root: &GuardedPath) -> Result<Option<String>> {
+    #[cfg(miri)]
+    {
+        let _ = root;
+        Ok(None)
+    }
+
+    #[cfg(not(miri))]
+    {
+        let mut cmd = GitCommand::new(root.as_path());
+        cmd.arg("rev-parse").arg("HEAD");
+        let output = match cmd.output() {
+            Ok(out) => out,
+            Err(_) => return Ok(None),
+        };
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if hash.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hash))
+        }
+    }
+}
+
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 impl PathResolver {
     #[cfg(not(miri))]

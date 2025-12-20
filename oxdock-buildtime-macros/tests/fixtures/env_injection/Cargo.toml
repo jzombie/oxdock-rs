@@ -1,12 +1,17 @@
 [package]
-name = "fixture-run-failure-reporting"
+name = "fixture-env-injection"
 version = "0.5.0-alpha"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
 
-[workspace]
+[features]
+default = ["oxdock_test"]
+oxdock_test = []
 
 [dependencies]
 oxdock-buildtime-macros.workspace = true
 oxdock-embed.workspace = true
+
+[build-dependencies]
+oxdock-buildtime-helpers.workspace = true

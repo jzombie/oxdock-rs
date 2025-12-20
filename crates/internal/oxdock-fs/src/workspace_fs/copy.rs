@@ -1,11 +1,38 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+use std::path::Path;
 
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
 
 #[allow(clippy::disallowed_types)]
 use crate::UnguardedPath;
+
+enum CopyEntryKind {
+    Dir,
+    File,
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn entry_kind_follow_symlink(file_type: &fs::FileType, src_path: &Path) -> Result<CopyEntryKind> {
+    if file_type.is_dir() {
+        return Ok(CopyEntryKind::Dir);
+    }
+    if file_type.is_file() {
+        return Ok(CopyEntryKind::File);
+    }
+    if file_type.is_symlink() {
+        let meta = fs::metadata(src_path)?;
+        if meta.is_dir() {
+            return Ok(CopyEntryKind::Dir);
+        }
+        if meta.is_file() {
+            return Ok(CopyEntryKind::File);
+        }
+    }
+    bail!("unsupported file type: {}", src_path.display());
+}
 
 // Copy helpers for guarded and external sources.
 impl PathResolver {
@@ -79,25 +106,26 @@ impl PathResolver {
                 .check_access(&dst_path, AccessMode::Write)
                 .with_context(|| format!("copy destination denied for {}", dst_path.display()))?;
 
-            if file_type.is_dir() {
-                self.create_dir_all(&guarded_dst)
-                    .with_context(|| format!("creating dir {}", guarded_dst.display()))?;
-                self.copy_dir_recursive(&guarded_src, &guarded_dst)?;
-            } else if file_type.is_file() {
-                if let Some(parent) = guarded_dst.as_path().parent() {
-                    let parent_guard = GuardedPath::new(guarded_dst.root(), parent)?;
-                    self.create_dir_all(&parent_guard)
-                        .with_context(|| format!("creating dir {}", parent.display()))?;
+            match entry_kind_follow_symlink(&file_type, &src_path)? {
+                CopyEntryKind::Dir => {
+                    self.create_dir_all(&guarded_dst)
+                        .with_context(|| format!("creating dir {}", guarded_dst.display()))?;
+                    self.copy_dir_recursive(&guarded_src, &guarded_dst)?;
                 }
-                fs::copy(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
-                    format!(
-                        "copying {} to {}",
-                        guarded_src.display(),
-                        guarded_dst.display()
-                    )
-                })?;
-            } else {
-                bail!("unsupported file type: {}", src_path.display());
+                CopyEntryKind::File => {
+                    if let Some(parent) = guarded_dst.as_path().parent() {
+                        let parent_guard = GuardedPath::new(guarded_dst.root(), parent)?;
+                        self.create_dir_all(&parent_guard)
+                            .with_context(|| format!("creating dir {}", parent.display()))?;
+                    }
+                    fs::copy(guarded_src.as_path(), guarded_dst.as_path()).with_context(|| {
+                        format!(
+                            "copying {} to {}",
+                            guarded_src.display(),
+                            guarded_dst.display()
+                        )
+                    })?;
+                }
             }
         }
         Ok(())
@@ -156,23 +184,24 @@ impl PathResolver {
             let src_path = entry.path();
             let dst_path = guarded_dst_root.as_path().join(entry.file_name());
 
-            if file_type.is_dir() {
-                fs::create_dir_all(&dst_path)
-                    .with_context(|| format!("creating dir {}", dst_path.display()))?;
-                self.copy_dir_from_unguarded(
-                    &UnguardedPath::new(src_path),
-                    &GuardedPath::new(guarded_dst_root.root(), &dst_path)?,
-                )?;
-            } else if file_type.is_file() {
-                if let Some(parent) = dst_path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("creating dir {}", parent.display()))?;
+            match entry_kind_follow_symlink(&file_type, &src_path)? {
+                CopyEntryKind::Dir => {
+                    fs::create_dir_all(&dst_path)
+                        .with_context(|| format!("creating dir {}", dst_path.display()))?;
+                    self.copy_dir_from_unguarded(
+                        &UnguardedPath::new(src_path),
+                        &GuardedPath::new(guarded_dst_root.root(), &dst_path)?,
+                    )?;
                 }
-                fs::copy(&src_path, &dst_path).with_context(|| {
-                    format!("copying {} to {}", src_path.display(), dst_path.display())
-                })?;
-            } else {
-                bail!("unsupported file type: {}", src_path.display());
+                CopyEntryKind::File => {
+                    if let Some(parent) = dst_path.parent() {
+                        fs::create_dir_all(parent)
+                            .with_context(|| format!("creating dir {}", parent.display()))?;
+                    }
+                    fs::copy(&src_path, &dst_path).with_context(|| {
+                        format!("copying {} to {}", src_path.display(), dst_path.display())
+                    })?;
+                }
             }
         }
         Ok(())
@@ -236,6 +265,35 @@ mod tests {
 
         let copied_file = dst_dir.join("nested").and_then(|n| n.join("file.txt"))?;
         assert_eq!(resolver.read_file(&copied_file)?, b"data");
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(miri), unix))]
+mod unix_tests {
+    use super::*;
+    use anyhow::Result;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn copy_dir_recursive_follows_symlink_files() -> Result<()> {
+        let temp = GuardedPath::tempdir()?;
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
+
+        let src_dir = root.join("src")?;
+        resolver.create_dir_all(&src_dir)?;
+        let src_file = src_dir.join("file.txt")?;
+        resolver.write_file(&src_file, b"hello")?;
+        let link_path = src_dir.join("link.txt")?;
+        symlink(src_file.as_path(), link_path.as_path())?;
+
+        let dst_dir = root.join("dst")?;
+        resolver.copy_dir_recursive(&src_dir, &dst_dir)?;
+
+        let copied_link = dst_dir.join("link.txt")?;
+        let data = resolver.read_file(&copied_link)?;
+        assert_eq!(data, b"hello");
         Ok(())
     }
 }

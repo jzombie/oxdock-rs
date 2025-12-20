@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
 /// where access to the host filesystem is restricted.
@@ -7,9 +7,30 @@ pub fn is_isolated() -> bool {
     cfg!(miri)
 }
 
+pub fn discover_workspace_root() -> Result<GuardedPath> {
+    if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
+        return GuardedPath::new_root_from_str(&root)
+            .with_context(|| format!("invalid OXDOCK_WORKSPACE_ROOT {}", root));
+    }
+
+    if let Ok(resolver) = PathResolver::from_manifest_env() {
+        let manifest_root = resolver.root().as_path();
+        if let Some(git_root) = workspace_fs::git::git_root_from_path(manifest_root) {
+            return GuardedPath::new_root(&git_root)
+                .with_context(|| format!("failed to guard workspace root {}", git_root.display()));
+        }
+        return GuardedPath::new_root(manifest_root)
+            .with_context(|| format!("failed to guard manifest root {}", manifest_root.display()));
+    }
+
+    let cwd = std::env::current_dir().context("failed to determine current directory")?;
+    GuardedPath::new_root(&cwd)
+        .with_context(|| format!("failed to guard current directory {}", cwd.display()))
+}
+
 pub mod workspace_fs;
 pub use workspace_fs::git::{
-    GitIdentity, WorkspaceSnapshot, copy_workspace_to, ensure_git_identity,
+    GitIdentity, WorkspaceSnapshot, copy_workspace_to, current_head_commit, ensure_git_identity,
 };
 pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};

@@ -299,6 +299,10 @@ impl WorkspaceFs for MockFs {
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         let candidate = Path::new(new_dir);
         if candidate.is_absolute() {
+            // Let `GuardedPath::new` (and its `guard_path`) decide whether the
+            // absolute candidate escapes the allowed root. Previously we silently
+            // remapped absolute paths into the mock root which allowed Windows
+            // drive-prefixed paths (e.g. `C:\...`) to bypass the guard.
             return GuardedPath::new(self.root.root(), candidate);
         }
         if new_dir == "/" {
@@ -332,7 +336,7 @@ impl WorkspaceFs for MockFs {
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         let candidate = Path::new(from);
         if candidate.is_absolute() {
-            return GuardedPath::new(self.root.root(), candidate);
+            return GuardedPath::new(self.build_context.root(), candidate);
         }
         let rel = self.split_components(from).join("/");
         self.guard_from_rel(rel)

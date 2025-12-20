@@ -45,6 +45,23 @@ fn safe_msg() -> impl Strategy<Value = String> {
         .prop_filter("Avoids comments", |s| {
             !s.contains("//") && !s.contains("/*")
         })
+        // Avoid hyphenated words without whitespace (ambiguous in TokenStream).
+        .prop_filter("Avoids ambiguous hyphens", |s| {
+            let chars: Vec<char> = s.chars().collect();
+            for i in 0..chars.len() {
+                if chars[i] != '-' {
+                    continue;
+                }
+                let prev = i.checked_sub(1).and_then(|idx| chars.get(idx)).copied();
+                let next = chars.get(i + 1).copied();
+                if prev.is_some_and(|c| !c.is_whitespace())
+                    && next.is_some_and(|c| !c.is_whitespace())
+                {
+                    return false;
+                }
+            }
+            true
+        })
         // Avoid sticky characters next to whitespace, as TokenStream loses this distinction
         // and macro_input.rs cannot perfectly reconstruct it without quotes.
         // Sticky chars: / . - : =
@@ -180,5 +197,26 @@ proptest! {
 
             assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
         }
+    }
+}
+
+#[test]
+#[cfg(feature = "proc-macro-api")]
+fn quoted_run_args_parity() {
+    let script = r#"RUN "ls -lsa""#;
+    let parsed = parse_script(script).expect("string parse");
+    let ts: proc_macro2::TokenStream = script.parse().expect("tokenize");
+    let token_steps = parse_braced_tokens(&ts).expect("token parse");
+    assert_eq!(parsed, token_steps, "quoted RUN args should match");
+}
+
+#[test]
+fn quoted_run_args_unquote_spaces() {
+    let script = r#"RUN "ls -lsa""#;
+    let parsed = parse_script(script).expect("string parse");
+    assert_eq!(parsed.len(), 1);
+    match &parsed[0].kind {
+        StepKind::Run(cmd) => assert_eq!(cmd, "ls -lsa"),
+        other => panic!("expected RUN, got {:?}", other),
     }
 }

@@ -11,7 +11,7 @@
 
 use super::{Command, Step, parse_script};
 use anyhow::Result;
-use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Delimiter, LineColumn, Spacing, TokenStream as TokenStream2, TokenTree};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token};
 
@@ -81,16 +81,17 @@ impl Parse for DslMacroInput {
     }
 }
 
-fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
+fn finalize_line(lines: &mut Vec<String>, line: &mut String, capture_has_inner: &mut bool) {
     let trimmed = line.trim();
     if !trimmed.is_empty() {
         lines.push(trimmed.to_string());
     }
     line.clear();
+    *capture_has_inner = false;
 }
 
 fn sticky(c: char) -> bool {
-    matches!(c, '/' | '.' | '-' | ':' | '=')
+    matches!(c, '/' | '.' | '-' | ':' | '=' | '$' | '{' | '}')
 }
 
 fn needs_space(prev: char, next: char) -> bool {
@@ -122,6 +123,10 @@ fn push_fragment(buf: &mut String, frag: &str, force_space: bool) {
     buf.push_str(frag);
 }
 
+fn span_gap_requires_space(prev: LineColumn, next: LineColumn) -> bool {
+    prev.line == next.line && next.column > prev.column
+}
+
 fn delim_pair(delim: Delimiter) -> Option<(char, char)> {
     match delim {
         Delimiter::Parenthesis => Some(('(', ')')),
@@ -137,75 +142,191 @@ fn current_line_command(line: &str) -> Option<Command> {
     Command::parse(head)
 }
 
+fn line_expects_inner_command(line: &str) -> bool {
+    matches!(
+        current_line_command(line),
+        Some(cmd) if cmd.expects_inner_command()
+    )
+}
+
+fn line_is_run_context(line: &str) -> bool {
+    matches!(
+        current_line_command(line),
+        Some(Command::Run | Command::RunBg | Command::Capture)
+    )
+}
+
 fn walk(
     ts: TokenStream2,
     line: &mut String,
     lines: &mut Vec<String>,
     last_was_command: &mut bool,
+    in_interpolation: bool,
+    capture_has_inner: &mut bool,
+    last_span_end: &mut Option<LineColumn>,
 ) -> Result<()> {
-    for tt in ts {
+    let tokens: Vec<TokenTree> = ts.into_iter().collect();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let tt = tokens[idx].clone();
+        let next = tokens.get(idx + 1);
+        let span = tt.span();
+        let gap_space = last_span_end
+            .map(|prev| span_gap_requires_space(prev, span.start()))
+            .unwrap_or(false);
         match tt {
             TokenTree::Group(g) => {
                 if let Some((open, close)) = delim_pair(g.delimiter()) {
                     match g.delimiter() {
                         Delimiter::Brace => {
-                            finalize_line(lines, line);
-                            line.push(open);
-                            finalize_line(lines, line);
-                            *last_was_command = false;
-                            walk(g.stream(), line, lines, last_was_command)?;
-                            finalize_line(lines, line);
-                            line.push(close);
-                            finalize_line(lines, line);
-                            *last_was_command = false;
+                            if line.trim_end().ends_with('$') {
+                                push_fragment(line, &open.to_string(), gap_space);
+                                *last_was_command = false;
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    true,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                push_fragment(line, &close.to_string(), false);
+                            } else {
+                                finalize_line(lines, line, capture_has_inner);
+                                line.push(open);
+                                finalize_line(lines, line, capture_has_inner);
+                                *last_was_command = false;
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    false,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                finalize_line(lines, line, capture_has_inner);
+                                line.push(close);
+                                finalize_line(lines, line, capture_has_inner);
+                                *last_was_command = false;
+                            }
                         }
                         Delimiter::Bracket => {
-                            finalize_line(lines, line);
-                            push_fragment(line, &open.to_string(), false);
-                            finalize_line(lines, line);
-                            walk(g.stream(), line, lines, last_was_command)?;
-                            finalize_line(lines, line);
+                            finalize_line(lines, line, capture_has_inner);
+                            push_fragment(line, &open.to_string(), gap_space);
+                            finalize_line(lines, line, capture_has_inner);
+                            let mut inner_span_end = None;
+                            walk(
+                                g.stream(),
+                                line,
+                                lines,
+                                last_was_command,
+                                false,
+                                capture_has_inner,
+                                &mut inner_span_end,
+                            )?;
+                            finalize_line(lines, line, capture_has_inner);
                             push_fragment(line, &close.to_string(), false);
-                            finalize_line(lines, line);
+                            finalize_line(lines, line, capture_has_inner);
                         }
                         _ => {
-                            push_fragment(line, &open.to_string(), *last_was_command);
+                            push_fragment(line, &open.to_string(), *last_was_command || gap_space);
                             *last_was_command = false;
-                            walk(g.stream(), line, lines, last_was_command)?;
+                            let mut inner_span_end = None;
+                            walk(
+                                g.stream(),
+                                line,
+                                lines,
+                                last_was_command,
+                                in_interpolation,
+                                capture_has_inner,
+                                &mut inner_span_end,
+                            )?;
                             push_fragment(line, &close.to_string(), *last_was_command);
                         }
                     }
                 } else {
-                    walk(g.stream(), line, lines, last_was_command)?;
+                    let mut inner_span_end = None;
+                    walk(
+                        g.stream(),
+                        line,
+                        lines,
+                        last_was_command,
+                        in_interpolation,
+                        capture_has_inner,
+                        &mut inner_span_end,
+                    )?;
                 }
+                *last_span_end = Some(span.end());
             }
             TokenTree::Literal(lit) => {
-                push_fragment(line, &lit.to_string(), *last_was_command);
+                push_fragment(line, &lit.to_string(), *last_was_command || gap_space);
                 *last_was_command = false;
+                *last_span_end = Some(span.end());
             }
             TokenTree::Punct(p) => {
                 let ch = p.as_char();
-                let force_space = *last_was_command && ch != ';';
+                let mut force_space = gap_space || (*last_was_command && ch != ';');
+                if ch == '-'
+                    && p.spacing() == Spacing::Alone
+                    && line_is_run_context(line)
+                    && matches!(next, Some(TokenTree::Ident(_) | TokenTree::Literal(_)))
+                    && let Some(prev) = line.chars().rev().find(|c| !c.is_whitespace())
+                    && (prev.is_ascii_alphanumeric() || matches!(prev, ')' | ']' | '"' | '\''))
+                {
+                    force_space = true;
+                }
                 push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;
+                *last_span_end = Some(span.end());
             }
             TokenTree::Ident(ident) => {
                 let ident_text = ident.to_string();
+                if in_interpolation {
+                    push_fragment(line, &ident_text, false);
+                    *last_was_command = false;
+                    idx += 1;
+                    continue;
+                }
                 let is_command = super::Command::parse(&ident_text).is_some();
                 let trimmed = line.trim();
+                let trimmed_empty = trimmed.is_empty();
                 let guard_prefix = trimmed.starts_with('[');
+                let line_requires_inner = line_expects_inner_command(trimmed);
                 let mut should_finalize = false;
-                if is_command && !trimmed.is_empty() && !guard_prefix {
+                if is_command && !trimmed_empty && !guard_prefix {
                     should_finalize =
                         !matches!(current_line_command(trimmed), Some(Command::Capture));
                 }
-                if should_finalize {
-                    finalize_line(lines, line);
+                if is_command
+                    && !trimmed_empty
+                    && !guard_prefix
+                    && *capture_has_inner
+                    && line_requires_inner
+                {
+                    finalize_line(lines, line, capture_has_inner);
                 }
-                push_fragment(line, &ident_text, *last_was_command);
+                if should_finalize {
+                    finalize_line(lines, line, capture_has_inner);
+                }
+                push_fragment(line, &ident_text, *last_was_command || gap_space);
+                if is_command
+                    && line_expects_inner_command(line)
+                    && !matches!(
+                        Command::parse(&ident_text),
+                        Some(cmd) if cmd.expects_inner_command()
+                    )
+                {
+                    *capture_has_inner = true;
+                }
                 *last_was_command = is_command;
+                *last_span_end = Some(span.end());
             }
         }
+        idx += 1;
     }
     Ok(())
 }
@@ -215,8 +336,18 @@ pub fn script_from_braced_tokens(ts: &TokenStream2) -> Result<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut last_was_command = false;
-    walk(ts.clone(), &mut current, &mut lines, &mut last_was_command)?;
-    finalize_line(&mut lines, &mut current);
+    let mut capture_has_inner = false;
+    let mut last_span_end = None;
+    walk(
+        ts.clone(),
+        &mut current,
+        &mut lines,
+        &mut last_was_command,
+        false,
+        &mut capture_has_inner,
+        &mut last_span_end,
+    )?;
+    finalize_line(&mut lines, &mut current, &mut capture_has_inner);
     Ok(lines.join("\n"))
 }
 
@@ -247,6 +378,21 @@ mod tests {
             parse_str("name: foo, script: { RUN echo hi }, out_dir: \"out\"")
                 .expect("parse braced script");
         assert!(matches!(input.script, ScriptSource::Braced(_)));
+    }
+
+    #[test]
+    fn braced_script_preserves_dot_path_spacing() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { SYMLINK ./client ./client }, out_dir: \"out\"")
+                .expect("parse braced script");
+        let ScriptSource::Braced(ts) = input.script else {
+            panic!("expected braced script");
+        };
+        let script = script_from_braced_tokens(&ts).expect("render braced script");
+        assert!(
+            script.contains("SYMLINK ./client ./client"),
+            "expected dot paths separated, got: {script}"
+        );
     }
 
     #[test]
@@ -301,10 +447,11 @@ mod tests {
     fn finalize_line_skips_empty_lines() {
         let mut lines = Vec::new();
         let mut buf = String::new();
-        finalize_line(&mut lines, &mut buf);
+        let mut capture_has_inner = false;
+        finalize_line(&mut lines, &mut buf, &mut capture_has_inner);
         assert!(lines.is_empty());
         buf.push_str("  RUN echo hi  ");
-        finalize_line(&mut lines, &mut buf);
+        finalize_line(&mut lines, &mut buf, &mut capture_has_inner);
         assert_eq!(lines, vec!["RUN echo hi"]);
     }
 

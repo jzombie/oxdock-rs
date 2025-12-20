@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver, copy_workspace_to};
+use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
@@ -13,8 +13,7 @@ pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
 pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
-    let workspace_root = GuardedPath::new_root_from_str(&discover_workspace_root()?)
-        .context("guard workspace root")?;
+    let workspace_root = discover_workspace_root().context("guard workspace root")?;
 
     let mut args = std::env::args().skip(1);
     let opts = Options::parse(&mut args, &workspace_root)?;
@@ -73,7 +72,7 @@ impl Options {
 }
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
-    execute_with_shell_runner(opts, workspace_root, run_shell, true, true)
+    execute_with_shell_runner(opts, workspace_root, run_shell, true)
 }
 
 fn execute_with_shell_runner<F>(
@@ -81,7 +80,6 @@ fn execute_with_shell_runner<F>(
     workspace_root: GuardedPath,
     shell_runner: F,
     require_tty: bool,
-    prepare_snapshot: bool,
 ) -> Result<()>
 where
     F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
@@ -91,11 +89,6 @@ where
 
     let tempdir = GuardedPath::tempdir().context("failed to create temp dir")?;
     let temp_root = tempdir.as_guarded_path().clone();
-
-    // Materialize source tree without .git
-    if prepare_snapshot {
-        copy_workspace_to(&workspace_root, &temp_root).context("failed to snapshot workspace")?;
-    }
 
     // Interpret a tiny Dockerfile-ish script
     let script = match &opts.script {
@@ -159,7 +152,7 @@ fn execute_for_test<F>(opts: Options, workspace_root: GuardedPath, shell_runner:
 where
     F: FnOnce(&GuardedPath, &GuardedPath) -> Result<()>,
 {
-    execute_with_shell_runner(opts, workspace_root, shell_runner, false, false)
+    execute_with_shell_runner(opts, workspace_root, shell_runner, false)
 }
 
 fn has_controlling_tty() -> bool {
@@ -228,35 +221,6 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     std::process::exit(0);
 }
 
-fn discover_workspace_root() -> Result<String> {
-    if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
-        return Ok(root);
-    }
-
-    if let Ok(resolver) = PathResolver::from_manifest_env()
-        && let Some(parent) = resolver.root().as_path().parent()
-    {
-        return Ok(parent.to_string_lossy().to_string());
-    }
-
-    // Prefer the git repository root of the current working directory.
-    if let Ok(output) = CommandBuilder::new("git")
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        && output.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(path);
-        }
-    }
-
-    Ok(std::env::current_dir()
-        .context("failed to determine current directory for workspace root")?
-        .to_string_lossy()
-        .to_string())
-}
 pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
 }
@@ -279,9 +243,9 @@ fn shell_banner(cwd: &GuardedPath, workspace_root: &GuardedPath) -> String {
     indoc::formatdoc! {"
         {pkg} shell workspace
           cwd: {cwd_disp}
-          source: git HEAD at {workspace_disp}
+          source: workspace root at {workspace_disp}
           lifetime: temporary directory created for this shell session; it disappears when you exit
-          creation: {pkg} archived the repo at HEAD into this temp workspace before launching the shell
+          creation: temp workspace starts empty unless your script copies files into it
 
           WARNING: This shell still runs on your host filesystem and is **not** isolated!
     "}

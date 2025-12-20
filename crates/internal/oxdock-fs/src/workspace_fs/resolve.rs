@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{AccessMode, PathResolver};
 use crate::GuardedPath;
@@ -8,13 +8,33 @@ use crate::GuardedPath;
 // Path resolution helpers (WORKDIR, READ/WRITE, COPY sources).
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 impl PathResolver {
+    fn root_relative_path(path: &Path) -> PathBuf {
+        let mut rel = PathBuf::new();
+        for comp in path.components() {
+            match comp {
+                std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => rel.push(".."),
+                std::path::Component::Normal(seg) => rel.push(seg),
+            }
+        }
+        rel
+    }
+
+    #[allow(clippy::disallowed_macros)]
+    fn is_absolute_or_rooted(path: &Path) -> bool {
+        path.is_absolute()
+            || (cfg!(windows) && path.components().next() == Some(std::path::Component::RootDir))
+    }
+
     pub fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         if new_dir == "/" {
             // Reset to the resolver root when WORKDIR is set to '/'.
             return Ok(self.root().clone());
         }
-        let candidate = if Path::new(new_dir).is_absolute() {
-            Path::new(new_dir).to_path_buf()
+        let candidate = if Self::is_absolute_or_rooted(Path::new(new_dir)) {
+            let rel = Self::root_relative_path(Path::new(new_dir));
+            self.root().as_path().join(rel)
         } else {
             current.as_path().join(new_dir)
         };
@@ -34,8 +54,14 @@ impl PathResolver {
     }
 
     pub fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
-        if Path::new(from).is_absolute() {
-            bail!("COPY source must be relative to build context");
+        if Self::is_absolute_or_rooted(Path::new(from)) {
+            let rel = Self::root_relative_path(Path::new(from));
+            let root = self.workspace_root.as_ref().unwrap_or(&self.build_context);
+            let candidate = root.as_path().join(rel);
+            return self
+                .check_access_with_root(root, &candidate, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
+                .and_then(|guarded| self.backend.resolve_copy_source(guarded));
         }
         let candidate = self.build_context.as_path().join(from);
 
@@ -61,12 +87,49 @@ impl PathResolver {
     }
 
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {
-        let candidate = if Path::new(rel).is_absolute() {
-            Path::new(rel).to_path_buf()
+        let candidate = if Self::is_absolute_or_rooted(Path::new(rel)) {
+            let rel = Self::root_relative_path(Path::new(rel));
+            self.root().as_path().join(rel)
         } else {
             cwd.as_path().join(rel)
         };
 
         self.check_access(&candidate, mode)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GuardedPath;
+
+    #[test]
+    fn absolute_paths_resolve_under_root() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone()).unwrap();
+        let resolved = resolver.resolve_write(&root, "/client").unwrap();
+        assert_eq!(resolved.as_path(), root.as_path().join("client"));
+    }
+
+    #[test]
+    fn absolute_copy_source_resolves_under_workspace_root() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let workspace = GuardedPath::tempdir().unwrap();
+        let snapshot_root = snapshot.as_guarded_path().clone();
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut resolver =
+            PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
+        resolver.set_workspace_root(workspace_root.clone());
+        let workspace_resolver =
+            PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone()).unwrap();
+        let client = GuardedPath::new(
+            workspace_root.root(),
+            &workspace_root.as_path().join("client"),
+        )
+        .unwrap();
+        workspace_resolver.create_dir_all(&client).unwrap();
+        let resolved = resolver.resolve_copy_source("/client").unwrap();
+        assert_eq!(resolved.as_path(), workspace_root.as_path().join("client"));
     }
 }
