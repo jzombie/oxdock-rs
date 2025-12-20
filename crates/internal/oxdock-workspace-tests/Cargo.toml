@@ -17,6 +17,7 @@ oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
 oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 proc-macro2.workspace = true
+proptest.workspace = true
 
 [[test]]
 name = "integration_harness"
