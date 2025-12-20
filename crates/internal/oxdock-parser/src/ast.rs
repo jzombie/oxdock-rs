@@ -306,7 +306,7 @@ fn quote_run(s: &str) -> String {
     s.split(' ')
         .map(|word| {
             let needs_quote = word.starts_with(|c: char| c.is_ascii_digit())
-                || word.starts_with(|c| matches!(c, '/' | '.' | '-' | ':' | '='));
+                || word.starts_with(['/', '.', '-', ':', '=']);
             if needs_quote {
                 format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
             } else {

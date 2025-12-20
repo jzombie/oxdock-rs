@@ -65,12 +65,12 @@ impl<'a> ScriptParser<'a> {
     }
 
     fn handle_guard_token(&mut self, line_end: usize, groups: Vec<Vec<Guard>>) -> Result<()> {
-        if let Some(RawToken::Command { line_no, .. }) = self.tokens.front() {
-            if *line_no == line_end {
-                self.pending_inline_guards = Some(groups);
-                self.pending_can_open_block = false;
-                return Ok(());
-            }
+        if let Some(RawToken::Command { line_no, .. }) = self.tokens.front()
+            && *line_no == line_end
+        {
+            self.pending_inline_guards = Some(groups);
+            self.pending_can_open_block = false;
+            return Ok(());
         }
         self.stash_pending_guard(groups);
         self.pending_can_open_block = true;
@@ -433,10 +433,10 @@ fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     let mut last_end = None;
     for part in pair.into_inner() {
         let span = part.as_span();
-        if let Some(end) = last_end {
-            if span.start() > end {
-                body.push(' ');
-            }
+        if let Some(end) = last_end
+            && span.start() > end
+        {
+            body.push(' ');
         }
         match part.as_rule() {
             Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
@@ -453,10 +453,10 @@ fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     let mut last_end = None;
     for part in pair.into_inner() {
         let span = part.as_span();
-        if let Some(end) = last_end {
-            if span.start() > end {
-                body.push(' ');
-            }
+        if let Some(end) = last_end
+            && span.start() > end
+        {
+            body.push(' ');
         }
         match part.as_rule() {
             Rule::quoted_string => {

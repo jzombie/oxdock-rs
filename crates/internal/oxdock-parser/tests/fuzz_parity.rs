@@ -83,7 +83,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::Capture { path, cmd }),
         (safe_string(), safe_string(), safe_string())
             .prop_map(|(rev, from, to)| StepKind::CopyGit { rev, from, to }),
-        (0i32..255).prop_map(|code| StepKind::Exit(code)),
+        (0i32..255).prop_map(StepKind::Exit),
     ]
 }
 

@@ -318,7 +318,7 @@ mod tests {
             let text = literal.trim();
             let string_steps = parse_script(text)
                 .unwrap_or_else(|e| panic!("string parse failed for case {idx}: {e}"));
-            let braced_steps = parse_braced_tokens(&tokens)
+            let braced_steps = parse_braced_tokens(tokens)
                 .unwrap_or_else(|e| panic!("token parse failed for case {idx}: {e}"));
             assert_eq!(
                 string_steps, braced_steps,
