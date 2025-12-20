@@ -21,7 +21,11 @@ fn arb_guard() -> impl Strategy<Value = Guard> {
             .prop_map(|(target, invert)| Guard::Platform { target, invert }),
         ("[a-zA-Z_][a-zA-Z0-9_]*", any::<bool>())
             .prop_map(|(key, invert)| Guard::EnvExists { key, invert }),
-        ("[a-zA-Z_][a-zA-Z0-9_]*", "[a-zA-Z0-9_]+", any::<bool>())
+        (
+            "[a-zA-Z_][a-zA-Z0-9_]*",
+            "[a-zA-Z_][a-zA-Z0-9_]*",
+            any::<bool>(),
+        )
             .prop_map(|(key, value, invert)| Guard::EnvEquals { key, value, invert }),
     ]
 }
