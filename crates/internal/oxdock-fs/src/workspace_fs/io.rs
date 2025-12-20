@@ -237,64 +237,23 @@ impl PathResolver {
                 symlink_file(guarded_src.as_path(), guarded_dst.as_path())
             };
 
-            if let Err(e) = try_link {
-                tracing::warn!(
-                    "failed to create symlink {} -> {}: {}; falling back to copy",
-                    guarded_dst.display(),
+            try_link.with_context(|| {
+                format!(
+                    "failed to symlink {} -> {}",
                     guarded_src.display(),
-                    e
-                );
-
-                if meta.is_dir() {
-                    self.copy_dir_recursive(&guarded_src, &guarded_dst)
-                        .with_context(|| {
-                            format!(
-                                "failed to copy dir {} -> {}",
-                                guarded_src.display(),
-                                guarded_dst.display()
-                            )
-                        })?;
-                } else {
-                    self.copy_file(&guarded_src, &guarded_dst)
-                        .with_context(|| {
-                            format!(
-                                "failed to copy file {} -> {}",
-                                guarded_src.display(),
-                                guarded_dst.display()
-                            )
-                        })?;
-                }
-            }
-
+                    guarded_dst.display()
+                )
+            })?;
             Ok(())
         }
 
         #[cfg(not(any(unix, windows)))]
         {
-            let meta = fs::metadata(&guarded_src).with_context(|| {
-                format!("failed to stat symlink source {}", guarded_src.display())
-            })?;
-            // No native symlinks; fall back to copying to preserve behavior.
-            if meta.is_dir() {
-                self.copy_dir_recursive(&guarded_src, &guarded_dst)
-                    .with_context(|| {
-                        format!(
-                            "failed to copy dir {} -> {}",
-                            guarded_src.display(),
-                            guarded_dst.display()
-                        )
-                    })?;
-            } else {
-                self.copy_file(&guarded_src, &guarded_dst)
-                    .with_context(|| {
-                        format!(
-                            "failed to copy file {} -> {}",
-                            guarded_src.display(),
-                            guarded_dst.display()
-                        )
-                    })?;
-            }
-            Ok(())
+            bail!(
+                "SYMLINK unsupported on this platform ({} -> {})",
+                guarded_src.display(),
+                guarded_dst.display()
+            );
         }
     }
 
@@ -314,28 +273,11 @@ impl PathResolver {
             );
         }
 
-        let kind = self.entry_kind(&guarded_src)?;
-
-        if kind == EntryKind::Dir {
-            self.copy_dir_recursive(&guarded_src, &guarded_dst)
-                .with_context(|| {
-                    format!(
-                        "failed to copy dir {} -> {}",
-                        guarded_src.display(),
-                        guarded_dst.display()
-                    )
-                })?;
-        } else {
-            self.copy_file(&guarded_src, &guarded_dst)
-                .with_context(|| {
-                    format!(
-                        "failed to copy file {} -> {}",
-                        guarded_src.display(),
-                        guarded_dst.display()
-                    )
-                })?;
-        }
-
-        Ok(())
+        let _ = self.entry_kind(&guarded_src)?;
+        bail!(
+            "SYMLINK unsupported under Miri ({} -> {})",
+            guarded_src.display(),
+            guarded_dst.display()
+        );
     }
 }
