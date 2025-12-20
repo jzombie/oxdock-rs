@@ -51,7 +51,7 @@ fn cargo_features_from_env() -> Vec<String> {
 
 fn split_feature_list(value: &str) -> Vec<String> {
     value
-        .split(|c| c == ',' || c == ' ')
+        .split([',', ' '])
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .collect()
