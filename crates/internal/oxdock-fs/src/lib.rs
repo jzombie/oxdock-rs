@@ -29,9 +29,7 @@ pub fn discover_workspace_root() -> Result<GuardedPath> {
 }
 
 pub mod workspace_fs;
-pub use workspace_fs::git::{
-    GitIdentity, WorkspaceSnapshot, copy_workspace_to, current_head_commit, ensure_git_identity,
-};
+pub use workspace_fs::git::{GitIdentity, current_head_commit, ensure_git_identity};
 pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, to_forward_slashes};

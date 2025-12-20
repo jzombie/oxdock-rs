@@ -1,15 +1,15 @@
 # OxDock (CLI)
 
-`oxdock-cli` is a small CLI / library that runs OxDock DSL scripts against a repository snapshot (separate directory tree) and can also be used to run against the main repository tree.
+`oxdock-cli` is a small CLI / library that runs OxDock DSL scripts against an isolated temporary workspace and can also be used to run against the main repository tree.
 
 Its primary use case is to provide the ability to script together an environment with the same syntax that is used in the [build-time macros](../oxdock-buildtime-macros/).
 
 ## Quick features
 
-- Create a reproducible, isolated snapshot of your repository (using `git archive`) and run a script inside that snapshot. The snapshot does not contain .git VCS directly and can be helpful for publishing staged artifacts to Cargo without using the `--allow-dirty` flag.
-- Drop into an interactive snapshot shell with `oxdock --shell` (requires a TTY).
+- Create an isolated, temporary workspace and run a script inside it.
+- Drop into an interactive shell inside the temporary workspace with `oxdock --shell` (requires a TTY).
 - Run a DSL script via `--script <path>` or by piping a script into stdin.
-- Expose the real workspace to scripts via `WORKSPACE LOCAL` / `WORKSPACE SNAPSHOT` so steps can target either the isolated snapshot or the live repo.
+- Expose the real workspace to scripts via `WORKSPACE LOCAL` / `WORKSPACE SNAPSHOT` so steps can target either the temporary workspace or the live repo.
 
 ## What it is not
 
@@ -27,7 +27,7 @@ Pipe a script into the CLI:
 cat my-script.oxfile | oxdock
 ```
 
-Drop into a shell inside the snapshot (interactive):
+Drop into a shell inside the temporary workspace (interactive):
 ```sh
 oxdock --shell
 ```

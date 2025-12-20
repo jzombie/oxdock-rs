@@ -125,7 +125,7 @@ OxDock supports copying files or directories out of a Git repository at a specif
   - All reads are performed via git plumbing — OxDock does not check out the revision into the working directory.
 
 - Safety and containment:
-  - `COPY_GIT` reads from the configured build context (the local repository path passed to the runner) and is only allowed to read within that build context. Attempts to reference absolute paths for `<src_path>` are rejected.
+  - `COPY_GIT` resolves `<src_path>` using the same unified resolver as `COPY`/`SYMLINK`. The source must resolve within the build context; absolute paths are treated as rooted at the build context and rejected if they escape.
   - The destination `<dst_path>` is validated against OxDock's workspace containment rules: writes outside the allowed workspace root are rejected.
 
 - Requirements and caveats:
@@ -138,9 +138,9 @@ OxDock supports copying files or directories out of a Git repository at a specif
 
 ## Workspaces & Filesystem (draft)
 
-- **How workspaces are created:** OxDock materializes a clean workspace by using Git's archival capabilities (the CLI runs `git archive`/`tar` under the hood). That produces a copy of the repository content at HEAD without the `.git` metadata; the result is very fast and lightweight compared to full checkouts. Treat this materialized tree as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
+- **How workspaces are created:** OxDock materializes a clean workspace as an isolated temporary directory. It does not implicitly populate that directory from Git; scripts can pull files in via `COPY` (from the build context) or `COPY_GIT` (from a specific revision). Treat this workspace as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
 
-- **Typical usage pattern:** the materialized workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is just a filesystem snapshot it is safe to run multiple concurrent experiments without changing the original repo.
+- **Typical usage pattern:** the temporary workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
 
 - **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate-internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
 
