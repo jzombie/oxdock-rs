@@ -408,7 +408,6 @@ dependencies = [
  "pest",
  "pest_derive",
  "proc-macro2",
- "proptest",
  "quote",
  "syn",
 ]
