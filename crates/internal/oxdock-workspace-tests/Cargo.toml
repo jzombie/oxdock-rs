@@ -1,0 +1,19 @@
+[package]
+name = "oxdock-workspace-tests"
+description = "Workspace-level test harness and fixtures for OxDock"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+anyhow.workspace = true
+libtest-mimic.workspace = true
+oxdock-fixture.workspace = true
+oxdock-fs.workspace = true
+
+[[test]]
+name = "fixture_harness"
+harness = false

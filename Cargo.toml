@@ -6,6 +6,7 @@ members = [
     "crates/internal/oxdock-fs",
     "crates/internal/oxdock-parser",
     "crates/internal/oxdock-process",
+    "crates/internal/oxdock-workspace-tests",
     "oxdock-buildtime-helpers",
     "oxdock-buildtime-macros",
     "oxdock-cli",
@@ -23,10 +24,9 @@ publish = true
 [workspace.dependencies]
 anyhow = "1.0.100"
 indoc = "2.0.7"
+libtest-mimic = "0.8.1"
 oxdock-buildtime-helpers = { path = "oxdock-buildtime-helpers", version = "0.5.0-alpha" }
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.5.0-alpha" }
-
-# Internal crates
 oxdock-core = { path = "crates/internal/oxdock-core", version = "0.5.0-alpha" }
 oxdock-embed = { path = "crates/internal/oxdock-embed", version = "0.5.0-alpha" }
 oxdock-fixture = { path = "crates/internal/oxdock-fixture", version = "0.5.0-alpha" }
