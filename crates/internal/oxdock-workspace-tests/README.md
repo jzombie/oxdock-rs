@@ -8,6 +8,31 @@ Workspace-level fixtures and a libtest-mimic harness.
 
 To add a fixture, create a new `fixtures/<name>/` folder with a `Cargo.toml` and source files.
 
+## Fixture expectations
+
+Fixtures can define an `expectations.txt` file to customize commands, environment,
+and expected output. When present, the harness runs one test per case in the file.
+Without it, the harness defaults to `cargo run --quiet` and expects success.
+
+`expectations.txt` format:
+
+- `case: <name>` (optional, defaults to `default`)
+- `args: <cargo args>` (optional, defaults to `run --quiet`)
+- `env: KEY=VALUE` (optional, repeatable)
+- `env_remove: KEY` (optional, repeatable)
+- `expect: success|failure` (optional, defaults to `success`)
+- `stdout_contains: <text>` (optional, repeatable)
+- `stdout_not_contains: <text>` (optional, repeatable)
+- `stderr_contains: <text>` (optional, repeatable)
+- `stderr_not_contains: <text>` (optional, repeatable)
+- `---` separates multiple cases
+
+## Build-time macro fixtures
+
+Fixtures used by the build-time macro integration tests live under
+`fixtures/buildtime_macros/<name>/`. These are exercised by the same fixture
+harness via `expectations.txt` cases.
+
 ## DSL parity cases
 
 Parity fixtures live under `fixtures/parity/<case>/` and compare string DSL to token DSL.

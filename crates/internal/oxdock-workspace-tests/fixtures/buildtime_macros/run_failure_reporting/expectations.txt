@@ -1,0 +1,8 @@
+case: run_failure_reports_cause
+args: run --quiet
+env: OXDOCK_EMBED_FORCE_REBUILD=1
+expect: failure
+stderr_contains: __oxdock_missing_command__
+stderr_contains: failed with status
+stderr_contains: filesystem snapshot
+stderr_contains: (command
