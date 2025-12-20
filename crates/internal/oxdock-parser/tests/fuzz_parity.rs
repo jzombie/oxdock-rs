@@ -147,6 +147,10 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
 
 proptest! {
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "requires real TokenStream/proc-macro parsing to validate API parity"
+    )]
     fn fuzz_parity(step in arb_step()) {
         let s = step.to_string();
 
