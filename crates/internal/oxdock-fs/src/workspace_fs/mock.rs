@@ -353,5 +353,6 @@ impl WorkspaceFs for MockFs {
     }
 }
 
+// TODO: Remove
 /// Backward compatible alias while downstream code migrates.
 pub type MockWorkspaceFs = MockFs;
