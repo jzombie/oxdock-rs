@@ -449,9 +449,24 @@ fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
 }
 
 fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+    let parts: Vec<_> = pair.into_inner().collect();
+    if parts.len() == 1 && parts[0].as_rule() == Rule::quoted_string {
+        let raw = parts[0].as_str();
+        let unquoted = parse_quoted_string(parts[0].clone())?;
+        let needs_quotes = unquoted.is_empty()
+            || unquoted
+                .chars()
+                .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+            || unquoted.contains("//")
+            || unquoted.contains("/*");
+        if needs_quotes {
+            return Ok(raw.to_string());
+        }
+        return Ok(unquoted);
+    }
     let mut body = String::new();
     let mut last_end = None;
-    for part in pair.into_inner() {
+    for part in parts {
         let span = part.as_span();
         if let Some(end) = last_end
             && span.start() > end

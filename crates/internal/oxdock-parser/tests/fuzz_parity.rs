@@ -199,3 +199,13 @@ proptest! {
         }
     }
 }
+
+#[test]
+#[cfg(feature = "proc-macro-api")]
+fn quoted_run_args_parity() {
+    let script = r#"RUN "ls -lsa""#;
+    let parsed = parse_script(script).expect("string parse");
+    let ts: proc_macro2::TokenStream = script.parse().expect("tokenize");
+    let token_steps = parse_braced_tokens(&ts).expect("token parse");
+    assert_eq!(parsed, token_steps, "quoted RUN args should match");
+}
