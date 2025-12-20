@@ -146,10 +146,7 @@ fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
                 .join("crates/internal/oxdock-process")?
                 .to_string(),
         )
-        .with_path_dependency(
-            "oxdock-cli",
-            workspace_root.join("oxdock-cli")?.to_string(),
-        )
+        .with_path_dependency("oxdock-cli", workspace_root.join("oxdock-cli")?.to_string())
         .instantiate()
         .context("failed to instantiate fixture")?;
 

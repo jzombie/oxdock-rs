@@ -4,12 +4,12 @@ use std::io::{self, Write};
 use std::process::ExitStatus;
 
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
-use sha2::{Digest, Sha256};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{
     BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
     expand_command_env,
 };
+use sha2::{Digest, Sha256};
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -266,9 +266,7 @@ fn execute_steps<P: ProcessManager>(
                         let target = state
                             .fs
                             .resolve_read(&state.cwd, path)
-                            .with_context(|| {
-                                format!("step {}: HASH_SHA256 {}", idx + 1, path)
-                            })?;
+                            .with_context(|| format!("step {}: HASH_SHA256 {}", idx + 1, path))?;
                         let mut hasher = Sha256::new();
                         hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
                         let digest = hasher.finalize();
