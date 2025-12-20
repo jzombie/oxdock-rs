@@ -92,6 +92,7 @@ impl PathResolver {
         #[cfg(miri)]
         {
             let _ = rev;
+            let _ = include_dirty;
             if let Some(parent) = to.as_path().parent() {
                 let parent_guard = GuardedPath::new(to.root(), parent)?;
                 self.create_dir_all(&parent_guard)
