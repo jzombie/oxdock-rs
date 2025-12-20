@@ -185,28 +185,24 @@ proptest! {
         assert_steps_eq(&parsed_step, &step, &format!("String parse mismatch: {}", s));
 
         // 2. Parse tokens (if feature enabled)
-        #[cfg(feature = "proc-macro-api")]
-        {
-            let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
-            let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");
+        let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
+        let token_steps = oxdock_parser::parse_braced_tokens(&ts).expect("failed to parse tokens");
 
-            assert_eq!(token_steps.len(), 1);
-            let mut token_step = token_steps[0].clone();
-            token_step.scope_enter = 0;
-            token_step.scope_exit = 0;
+        assert_eq!(token_steps.len(), 1);
+        let mut token_step = token_steps[0].clone();
+        token_step.scope_enter = 0;
+        token_step.scope_exit = 0;
 
-            assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
-        }
+        assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
     }
 }
 
 #[test]
-#[cfg(feature = "proc-macro-api")]
 fn quoted_run_args_parity() {
     let script = r#"RUN "ls -lsa""#;
     let parsed = parse_script(script).expect("string parse");
     let ts: proc_macro2::TokenStream = script.parse().expect("tokenize");
-    let token_steps = parse_braced_tokens(&ts).expect("token parse");
+    let token_steps = oxdock_parser::parse_braced_tokens(&ts).expect("token parse");
     assert_eq!(parsed, token_steps, "quoted RUN args should match");
 }
 
