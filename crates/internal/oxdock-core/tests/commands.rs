@@ -324,7 +324,7 @@ fn write_cmd_captures_output() {
     };
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Capture {
+        kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
             cmd: cmd.into(),
         },
@@ -351,7 +351,7 @@ fn capture_echo_interpolates_env() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "echo.txt".into(),
                 cmd: "ECHO value=${FOO}".into(),
             },
@@ -382,7 +382,7 @@ fn capture_ls_lists_entries_with_header() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "ls.txt".into(),
                 cmd: "LS".into(),
             },
@@ -415,7 +415,7 @@ fn capture_cat_emits_file_contents() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Capture {
+        kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
             cmd: "CAT note.txt".into(),
         },
@@ -440,7 +440,7 @@ fn capture_cwd_canonicalizes_and_writes() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "pwd.txt".into(),
                 cmd: "CWD".into(),
             },
@@ -664,7 +664,7 @@ fn env_exposes_git_commit_hash() {
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
     let steps =
-        oxdock_parser::parse_script("CAPTURE out.txt ECHO ${WORKSPACE_GIT_COMMIT}").unwrap();
+        oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO ${WORKSPACE_GIT_COMMIT}").unwrap();
     run_steps(&repo, &steps).unwrap();
 
     assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
@@ -836,7 +836,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "seen.txt".into(),
                 cmd: "CAT version.txt".into(),
             },

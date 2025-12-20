@@ -301,14 +301,14 @@ mod tests {
 
         cases.push((
             indoc! {r#"
-                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:TEST=1] CAPTURE_TO_FILE out.txt RUN echo hi
                 [env:FOO] WRITE foo.txt "bar"
                 SYMLINK link target
             "#}
             .trim()
             .to_string(),
             quote! {
-                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:TEST=1] CAPTURE_TO_FILE out.txt RUN echo hi
                 [env:FOO] WRITE foo.txt "bar"
                 SYMLINK link target
             },

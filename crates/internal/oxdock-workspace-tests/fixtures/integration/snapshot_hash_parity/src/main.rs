@@ -13,13 +13,13 @@ embed! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE dir_hash.txt HASH_SHA256 data
-        CAPTURE file_hash.txt HASH_SHA256 data/inner/a.txt
+        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
+        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
         // [platform=unix] {
-        //     CAPTURE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
+        //     CAPTURE_TO_FILE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
         // }
     },
     out_dir: "prebuilt",
@@ -31,13 +31,13 @@ prepare! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE dir_hash.txt HASH_SHA256 data
-        CAPTURE file_hash.txt HASH_SHA256 data/inner/a.txt
+        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
+        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
         // [platform=unix] {
-        //     CAPTURE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
+        //     CAPTURE_TO_FILE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
         // }
     },
     out_dir: "prebuilt_prepare",
@@ -47,13 +47,13 @@ const SCRIPT: &str = r#"
     MKDIR data/inner
     WRITE data/inner/a.txt alpha
     WRITE data/b.txt beta
-    CAPTURE dir_hash.txt HASH_SHA256 data
-    CAPTURE file_hash.txt HASH_SHA256 data/inner/a.txt
+    CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
+    CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
 
     // Double-check the hash matches on unix system
     // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
     // [platform=unix] {
-    //     CAPTURE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
+    //     CAPTURE_TO_FILE system_hash.txt RUN sh -c "if command -v sha256sum >/dev/null 2>&1; then sha256sum data/inner/a.txt | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 data/inner/a.txt | awk '{print $1}'; elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 data/inner/a.txt | awk '{print $2}'; else echo 'no sha256 tool available' >&2; exit 1; fi | tr 'A-F' 'a-f'"
     // }
 "#;
 

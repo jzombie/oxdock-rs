@@ -9,7 +9,7 @@ pub enum Command {
     Run,
     RunBg,
     Copy,
-    Capture,
+    CaptureToFile,
     CopyGit,
     HashSha256,
     Symlink,
@@ -29,7 +29,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Run,
     Command::RunBg,
     Command::Copy,
-    Command::Capture,
+    Command::CaptureToFile,
     Command::CopyGit,
     Command::HashSha256,
     Command::Symlink,
@@ -51,7 +51,7 @@ impl Command {
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
-            Command::Capture => "CAPTURE",
+            Command::CaptureToFile => "CAPTURE_TO_FILE",
             Command::CopyGit => "COPY_GIT",
             Command::HashSha256 => "HASH_SHA256",
             Command::Symlink => "SYMLINK",
@@ -65,7 +65,7 @@ impl Command {
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::Capture)
+        matches!(self, Command::CaptureToFile)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -77,7 +77,7 @@ impl Command {
             "RUN" => Some(Command::Run),
             "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
-            "CAPTURE" => Some(Command::Capture),
+            "CAPTURE_TO_FILE" => Some(Command::CaptureToFile),
             "COPY_GIT" => Some(Command::CopyGit),
             "HASH_SHA256" => Some(Command::HashSha256),
             "SYMLINK" => Some(Command::Symlink),
@@ -144,7 +144,7 @@ pub enum StepKind {
         path: String,
         contents: String,
     },
-    Capture {
+    CaptureToFile {
         path: String,
         cmd: String,
     },
@@ -270,7 +270,7 @@ impl fmt::Display for WorkspaceTarget {
 }
 
 fn quote_arg(s: &str) -> String {
-    // Strict quoting to avoid parser ambiguity, especially with CAPTURE command
+    // Strict quoting to avoid parser ambiguity, especially with CAPTURE_TO_FILE command
     // where unquoted args followed by run_args can be consumed greedily.
     // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -355,8 +355,8 @@ impl fmt::Display for StepKind {
             StepKind::Write { path, contents } => {
                 write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
             }
-            StepKind::Capture { path, cmd } => {
-                write!(f, "CAPTURE {} {}", quote_arg(path), quote_run(cmd))
+            StepKind::CaptureToFile { path, cmd } => {
+                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), quote_run(cmd))
             }
             StepKind::CopyGit {
                 rev,

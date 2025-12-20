@@ -64,7 +64,7 @@ command = _{
     run_command |
     copy_git_command | // Must come before copy_command
     copy_command |
-    capture_command |
+    capture_to_file_command |
     hash_sha256_command |
     symlink_command |
     mkdir_command |
@@ -83,7 +83,7 @@ echo_command = ${ "ECHO" ~ sep ~ message }
 run_command = ${ "RUN" ~ sep ~ run_args }
 run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
 copy_command = ${ "COPY" ~ sep ~ argument ~ sep ~ argument }
-capture_command = ${ "CAPTURE" ~ sep ~ argument ~ sep ~ run_args }
+capture_to_file_command = ${ "CAPTURE_TO_FILE" ~ sep ~ argument ~ sep ~ run_args }
 copy_git_command = ${ "COPY_GIT" ~ sep ~ (include_dirty_flag ~ sep)? ~ argument ~ sep ~ argument ~ sep ~ argument }
 hash_sha256_command = ${ "HASH_SHA256" ~ sep ~ argument }
 symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }

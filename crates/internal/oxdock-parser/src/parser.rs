@@ -258,10 +258,10 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 to: args.remove(0),
             }
         }
-        Rule::capture_command => {
+        Rule::capture_to_file_command => {
             let path = parse_single_arg_from_pair(pair.clone())?;
             let cmd = parse_run_args_from_pair(pair)?;
-            StepKind::Capture { path, cmd }
+            StepKind::CaptureToFile { path, cmd }
         }
         Rule::copy_git_command => {
             let mut args = Vec::new();
