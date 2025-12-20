@@ -260,7 +260,9 @@ impl fmt::Display for WorkspaceTarget {
 fn quote_arg(s: &str) -> String {
     // Strict quoting to avoid parser ambiguity, especially with CAPTURE command
     // where unquoted args followed by run_args can be consumed greedily.
-    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
+    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !s.starts_with(|c: char| c.is_ascii_digit());
     if is_safe && !s.is_empty() {
         s.to_string()
     } else {
@@ -273,7 +275,9 @@ fn quote_msg(s: &str) -> String {
     // The macro input reconstructor removes spaces around "sticky" characters (/-.:=)
     // and collapses multiple spaces, so we must quote strings containing them.
     // We also quote strings with spaces to be safe, as TokenStream does not preserve whitespace.
-    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    // Also quote if it starts with a digit to avoid invalid Rust tokens.
+    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !s.starts_with(|c: char| c.is_ascii_digit());
 
     if is_safe && !s.is_empty() {
         s.to_string()
@@ -283,23 +287,34 @@ fn quote_msg(s: &str) -> String {
 }
 
 fn quote_run(s: &str) -> String {
-    // For RUN commands, we want to preserve the raw string as much as possible
-    // because the parser now preserves quotes.
-    // We only quote if the string contains characters that would break the parser
-    // (semicolon, newline, comments) or if it's empty.
-    // We also quote if it starts with a "sticky" character (/-.:=) or contains whitespace
-    // to ensure proper spacing when round-tripping through TokenStream (macro input).
-    let needs_quote = s.is_empty()
-        || s.chars()
-            .any(|c| c == ';' || c == '\n' || c == '\r')
+    // For RUN commands, we want to preserve the raw string as much as possible.
+    // However, to ensure round-trip stability through TokenStream (macro input),
+    // we must ensure that the generated string is a valid sequence of Rust tokens.
+    // Invalid tokens (like 0o8) must be quoted.
+    // Also, sticky characters (like -) can merge with previous tokens in macro input,
+    // so we quote words starting with them to ensure separation.
+
+    let force_full_quote = s.is_empty()
+        || s.chars().any(|c| c == ';' || c == '\n' || c == '\r')
         || s.contains("//")
         || s.contains("/*");
 
-    if !needs_quote {
-        s.to_string()
-    } else {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    if force_full_quote {
+        return format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
     }
+
+    s.split(' ')
+        .map(|word| {
+            let needs_quote = word.starts_with(|c: char| c.is_ascii_digit())
+                || word.starts_with(|c| matches!(c, '/' | '.' | '-' | ':' | '='));
+            if needs_quote {
+                format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                word.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl fmt::Display for StepKind {
