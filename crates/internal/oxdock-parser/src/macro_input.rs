@@ -278,12 +278,10 @@ fn walk(
                     && p.spacing() == Spacing::Alone
                     && line_is_run_context(line)
                     && matches!(next, Some(TokenTree::Ident(_) | TokenTree::Literal(_)))
+                    && let Some(prev) = line.chars().rev().find(|c| !c.is_whitespace())
+                    && (prev.is_ascii_alphanumeric() || matches!(prev, ')' | ']' | '"' | '\''))
                 {
-                    if let Some(prev) = line.chars().rev().find(|c| !c.is_whitespace()) {
-                        if prev.is_ascii_alphanumeric() || matches!(prev, ')' | ']' | '"' | '\'') {
-                            force_space = true;
-                        }
-                    }
+                    force_space = true;
                 }
                 push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;

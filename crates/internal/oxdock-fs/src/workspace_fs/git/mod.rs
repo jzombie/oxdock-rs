@@ -20,6 +20,7 @@ pub mod snapshot;
 pub use config::{GitIdentity, ensure_git_identity};
 pub use snapshot::{WorkspaceSnapshot, copy_workspace_to};
 
+#[allow(clippy::disallowed_types)]
 pub fn git_root_from_path(start: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut cur: Option<&std::path::Path> = Some(start);
     while let Some(dir) = cur {

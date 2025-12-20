@@ -127,9 +127,9 @@ where
                 out.push_str(&lookup(&name).unwrap_or_default());
             }
         } else if c == '%' {
-            let mut lookahead = chars.clone();
+            let lookahead = chars.clone();
             let mut has_end = false;
-            while let Some(ch) = lookahead.next() {
+            for ch in lookahead {
                 if ch == '%' {
                     has_end = true;
                     break;

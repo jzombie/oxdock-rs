@@ -14,6 +14,7 @@ enum CopyEntryKind {
     File,
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn entry_kind_follow_symlink(file_type: &fs::FileType, src_path: &Path) -> Result<CopyEntryKind> {
     if file_type.is_dir() {
         return Ok(CopyEntryKind::Dir);

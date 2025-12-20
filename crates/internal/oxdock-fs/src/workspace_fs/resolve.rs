@@ -21,6 +21,7 @@ impl PathResolver {
         rel
     }
 
+    #[allow(clippy::disallowed_macros)]
     fn is_absolute_or_rooted(path: &Path) -> bool {
         path.is_absolute()
             || (cfg!(windows)
