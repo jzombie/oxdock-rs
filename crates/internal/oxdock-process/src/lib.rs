@@ -1,14 +1,14 @@
+pub mod builtin_env;
 #[cfg(feature = "mock-process")]
 mod mock;
-pub mod builtin_env;
 pub mod serial_cargo_env;
 mod shell;
 
 use anyhow::{Context, Result, bail};
+pub use builtin_env::BuiltinEnv;
 use oxdock_fs::{GuardedPath, PolicyPath};
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
-pub use builtin_env::BuiltinEnv;
 use std::collections::HashMap;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::fs::File;

@@ -45,10 +45,7 @@ pub fn emit_cfg_envs() -> Result<()> {
                 value
             );
         } else {
-            println!(
-                "cargo:rustc-env=CARGO_CFG_{}=1",
-                line.to_ascii_uppercase()
-            );
+            println!("cargo:rustc-env=CARGO_CFG_{}=1", line.to_ascii_uppercase());
         }
     }
     Ok(())

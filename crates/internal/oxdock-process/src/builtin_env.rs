@@ -92,10 +92,7 @@ mod tests {
             with_env_var("CARGO_CFG_OXDOCK_TEST", "enabled", || {
                 let env = BuiltinEnv::collect(&root).into_envs();
                 assert_eq!(env.get("CARGO_FEATURE_OXDOCK_TEST"), Some(&"1".into()));
-                assert_eq!(
-                    env.get("CARGO_CFG_OXDOCK_TEST"),
-                    Some(&"enabled".into())
-                );
+                assert_eq!(env.get("CARGO_CFG_OXDOCK_TEST"), Some(&"enabled".into()));
             });
         });
     }

@@ -53,8 +53,7 @@ mod tests {
             )),
         ]);
 
-        let script =
-            script_from_braced_tokens(&ts).expect("failed to render interpolation group");
+        let script = script_from_braced_tokens(&ts).expect("failed to render interpolation group");
         assert!(
             script.contains("${RUN}"),
             "expected interpolation to be preserved, got: {script}"
@@ -73,8 +72,7 @@ mod tests {
             TokenTree::Ident(Ident::new("dist", Span::call_site())),
         ]);
 
-        let script =
-            script_from_braced_tokens(&ts).expect("failed to render capture instruction");
+        let script = script_from_braced_tokens(&ts).expect("failed to render capture instruction");
         assert!(
             script.contains("CAPTURE out_txt ECHO hi\nWORKDIR dist"),
             "expected capture to terminate before next command, got: {script}"
