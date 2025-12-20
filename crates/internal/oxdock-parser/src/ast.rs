@@ -291,10 +291,9 @@ fn quote_run(s: &str) -> String {
     // to ensure proper spacing when round-tripping through TokenStream (macro input).
     let needs_quote = s.is_empty()
         || s.chars()
-            .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+            .any(|c| c == ';' || c == '\n' || c == '\r')
         || s.contains("//")
-        || s.contains("/*")
-        || s.starts_with(|c| matches!(c, '/' | '.' | '-' | ':' | '='));
+        || s.contains("/*");
 
     if !needs_quote {
         s.to_string()
