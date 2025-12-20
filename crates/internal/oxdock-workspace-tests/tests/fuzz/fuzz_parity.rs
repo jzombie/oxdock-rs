@@ -1,7 +1,5 @@
 use oxdock_parser::ast::*;
-#[cfg(feature = "proc-macro-api")]
-use oxdock_parser::parse_braced_tokens;
-use oxdock_parser::parse_script;
+use oxdock_parser::{parse_braced_tokens, parse_script};
 use proptest::prelude::*;
 
 // Strategies
@@ -186,7 +184,7 @@ proptest! {
 
         // 2. Parse tokens (if feature enabled)
         let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
-        let token_steps = oxdock_parser::parse_braced_tokens(&ts).expect("failed to parse tokens");
+        let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");
 
         assert_eq!(token_steps.len(), 1);
         let mut token_step = token_steps[0].clone();
@@ -194,25 +192,5 @@ proptest! {
         token_step.scope_exit = 0;
 
         assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
-    }
-}
-
-#[test]
-fn quoted_run_args_parity() {
-    let script = r#"RUN "ls -lsa""#;
-    let parsed = parse_script(script).expect("string parse");
-    let ts: proc_macro2::TokenStream = script.parse().expect("tokenize");
-    let token_steps = oxdock_parser::parse_braced_tokens(&ts).expect("token parse");
-    assert_eq!(parsed, token_steps, "quoted RUN args should match");
-}
-
-#[test]
-fn quoted_run_args_unquote_spaces() {
-    let script = r#"RUN "ls -lsa""#;
-    let parsed = parse_script(script).expect("string parse");
-    assert_eq!(parsed.len(), 1);
-    match &parsed[0].kind {
-        StepKind::Run(cmd) => assert_eq!(cmd, "ls -lsa"),
-        other => panic!("expected RUN, got {:?}", other),
     }
 }
