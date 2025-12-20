@@ -405,7 +405,6 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
- "oxdock-parser",
  "pest",
  "pest_derive",
  "proc-macro2",
