@@ -336,6 +336,7 @@ dependencies = [
  "oxdock-embed",
  "oxdock-fs",
  "oxdock-parser",
+ "oxdock-process",
  "proc-macro2",
  "quote",
  "syn",
