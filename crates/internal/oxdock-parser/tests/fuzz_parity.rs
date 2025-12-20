@@ -209,3 +209,14 @@ fn quoted_run_args_parity() {
     let token_steps = parse_braced_tokens(&ts).expect("token parse");
     assert_eq!(parsed, token_steps, "quoted RUN args should match");
 }
+
+#[test]
+fn quoted_run_args_unquote_spaces() {
+    let script = r#"RUN "ls -lsa""#;
+    let parsed = parse_script(script).expect("string parse");
+    assert_eq!(parsed.len(), 1);
+    match &parsed[0].kind {
+        StepKind::Run(cmd) => assert_eq!(cmd, "ls -lsa"),
+        other => panic!("expected RUN, got {:?}", other),
+    }
+}

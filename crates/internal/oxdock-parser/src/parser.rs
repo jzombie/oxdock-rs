@@ -454,9 +454,7 @@ fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
         let raw = parts[0].as_str();
         let unquoted = parse_quoted_string(parts[0].clone())?;
         let needs_quotes = unquoted.is_empty()
-            || unquoted
-                .chars()
-                .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+            || unquoted.chars().any(|c| c == ';' || c == '\n' || c == '\r')
             || unquoted.contains("//")
             || unquoted.contains("/*");
         if needs_quotes {
