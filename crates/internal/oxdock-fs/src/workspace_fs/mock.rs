@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Result, bail};
@@ -24,6 +24,19 @@ pub struct MockFs {
 struct MockState {
     files: HashMap<String, Vec<u8>>,
     dirs: HashSet<String>,
+}
+
+fn root_relative_path(path: &Path) -> PathBuf {
+    let mut rel = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => rel.push(".."),
+            std::path::Component::Normal(seg) => rel.push(seg),
+        }
+    }
+    rel
 }
 
 impl MockFs {
@@ -299,7 +312,8 @@ impl WorkspaceFs for MockFs {
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         let candidate = Path::new(new_dir);
         if candidate.is_absolute() {
-            return GuardedPath::new(self.root.root(), candidate);
+            let rel = root_relative_path(candidate);
+            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
         }
         if new_dir == "/" {
             return Ok(self.root.clone());
@@ -312,7 +326,8 @@ impl WorkspaceFs for MockFs {
     fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
-            return GuardedPath::new(self.root.root(), candidate);
+            let rel = root_relative_path(candidate);
+            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
         }
         let target = self.normalize_rel(cwd, rel)?;
         self.guard_from_rel(target)
@@ -322,7 +337,8 @@ impl WorkspaceFs for MockFs {
     fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
-            return GuardedPath::new(self.root.root(), candidate);
+            let rel = root_relative_path(candidate);
+            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
         }
         let target = self.normalize_rel(cwd, rel)?;
         self.guard_from_rel(target)
@@ -332,7 +348,8 @@ impl WorkspaceFs for MockFs {
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         let candidate = Path::new(from);
         if candidate.is_absolute() {
-            return GuardedPath::new(self.root.root(), candidate);
+            let rel = root_relative_path(candidate);
+            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
         }
         let rel = self.split_components(from).join("/");
         self.guard_from_rel(rel)
