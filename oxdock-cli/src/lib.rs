@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
@@ -13,8 +13,7 @@ pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
 pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
-    let workspace_root = GuardedPath::new_root_from_str(&discover_workspace_root()?)
-        .context("guard workspace root")?;
+    let workspace_root = discover_workspace_root().context("guard workspace root")?;
 
     let mut args = std::env::args().skip(1);
     let opts = Options::parse(&mut args, &workspace_root)?;
@@ -222,16 +221,6 @@ fn maybe_reexec_shell_to_temp(opts: &Options) -> Result<()> {
     std::process::exit(0);
 }
 
-fn discover_workspace_root() -> Result<String> {
-    if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
-        return Ok(root);
-    }
-
-    Ok(std::env::current_dir()
-        .context("failed to determine current directory for workspace root")?
-        .to_string_lossy()
-        .to_string())
-}
 pub fn run_script(workspace_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(workspace_root, workspace_root, steps)
 }
