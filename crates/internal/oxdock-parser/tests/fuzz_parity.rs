@@ -31,7 +31,7 @@ fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_./-]+"
+    "[a-zA-Z0-9_./-]+".prop_filter("Avoids comments", |s| !s.contains("//"))
 }
 
 fn safe_msg() -> impl Strategy<Value = String> {

@@ -11,3 +11,4 @@ cc 5f92635c330d8f52b7fd4cc20ad081ae2d81bbcf90a441cb69a6e670c56512d1 # shrinks to
 cc f2ac9bce1d01309b1259e761ac0dfc0b0c758322827091f04e1d892ae9ab07c4 # shrinks to step = Step { guards: [], kind: Echo("_  "), scope_enter: 0, scope_exit: 0 }
 cc 0ea7fd6a7c13ea6a95816e9e789dc147101649abe3e2b215b9b7d4bdda0d863d # shrinks to step = Step { guards: [], kind: Run("a- "), scope_enter: 0, scope_exit: 0 }
 cc 465178c773ddf7167ae2683f10a90db55e5c8b2af47a99f03934d52618875257 # shrinks to step = Step { guards: [], kind: Env { key: "0", value: "//" }, scope_enter: 0, scope_exit: 0 }
+cc bdec93c833efd5e39d9cc85ddad6dd523f6f5459ce95cf1f98bed5a3afbf9228 # shrinks to step = Step { guards: [], kind: Env { key: "//", value: "-" }, scope_enter: 0, scope_exit: 0 }

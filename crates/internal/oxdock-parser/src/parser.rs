@@ -1,6 +1,7 @@
-use crate::ast::{Guard, Step, StepKind};
-use crate::lexer::{self, GuardToken, LexedCommand, Token};
+use crate::ast::{Guard, PlatformGuard, Step, StepKind, WorkspaceTarget};
+use crate::lexer::{self, RawToken, Rule};
 use anyhow::{Result, anyhow, bail};
+use pest::iterators::Pair;
 use std::collections::VecDeque;
 
 #[derive(Clone)]
@@ -9,8 +10,8 @@ struct ScopeFrame {
     had_command: bool,
 }
 
-pub struct ScriptParser {
-    tokens: VecDeque<Token>,
+pub struct ScriptParser<'a> {
+    tokens: VecDeque<RawToken<'a>>,
     steps: Vec<Step>,
     guard_stack: Vec<Vec<Vec<Guard>>>,
     pending_guards: Option<Vec<Vec<Guard>>>,
@@ -20,9 +21,9 @@ pub struct ScriptParser {
     scope_stack: Vec<ScopeFrame>,
 }
 
-impl ScriptParser {
-    pub fn new(input: &str) -> Result<Self> {
-        let tokens = VecDeque::from(lexer::lex_script(input)?);
+impl<'a> ScriptParser<'a> {
+    pub fn new(input: &'a str) -> Result<Self> {
+        let tokens = VecDeque::from(lexer::tokenize(input)?);
         Ok(Self {
             tokens,
             steps: Vec::new(),
@@ -38,10 +39,16 @@ impl ScriptParser {
     pub fn parse(mut self) -> Result<Vec<Step>> {
         while let Some(token) = self.tokens.pop_front() {
             match token {
-                Token::Guard(guard) => self.handle_guard_token(guard)?,
-                Token::BlockStart { line_no } => self.start_block_from_pending(line_no)?,
-                Token::BlockEnd { line_no } => self.end_block(line_no)?,
-                Token::Command(cmd) => self.handle_command_token(cmd)?,
+                RawToken::Guard { pair, line_end } => {
+                    let groups = parse_guard_line(pair)?;
+                    self.handle_guard_token(line_end, groups)?
+                }
+                RawToken::BlockStart { line_no } => self.start_block_from_pending(line_no)?,
+                RawToken::BlockEnd { line_no } => self.end_block(line_no)?,
+                RawToken::Command { pair, line_no } => {
+                    let kind = parse_command(pair)?;
+                    self.handle_command_token(line_no, kind)?
+                }
             }
         }
 
@@ -57,22 +64,22 @@ impl ScriptParser {
         Ok(self.steps)
     }
 
-    fn handle_guard_token(&mut self, guard: GuardToken) -> Result<()> {
-        if let Some(Token::Command(cmd)) = self.tokens.front() {
-            if cmd.line_no == guard.line_end {
-                self.pending_inline_guards = Some(guard.groups);
+    fn handle_guard_token(&mut self, line_end: usize, groups: Vec<Vec<Guard>>) -> Result<()> {
+        if let Some(RawToken::Command { line_no, .. }) = self.tokens.front() {
+            if *line_no == line_end {
+                self.pending_inline_guards = Some(groups);
                 self.pending_can_open_block = false;
                 return Ok(());
             }
         }
-        self.stash_pending_guard(guard.groups);
+        self.stash_pending_guard(groups);
         self.pending_can_open_block = true;
         Ok(())
     }
 
-    fn handle_command_token(&mut self, token: LexedCommand) -> Result<()> {
+    fn handle_command_token(&mut self, line_no: usize, kind: StepKind) -> Result<()> {
         let inline = self.pending_inline_guards.take();
-        self.handle_command(token.line_no, token.kind, inline)
+        self.handle_command(line_no, kind, inline)
     }
 
     fn stash_pending_guard(&mut self, groups: Vec<Vec<Guard>>) {
@@ -216,4 +223,400 @@ fn combine_guard_groups(a: &[Vec<Guard>], b: &[Vec<Guard>]) -> Vec<Vec<Guard>> {
         }
     }
     combined
+}
+
+fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
+    let kind = match pair.as_rule() {
+        Rule::workdir_command => {
+            let arg = parse_single_arg(pair)?;
+            StepKind::Workdir(arg)
+        }
+        Rule::workspace_command => {
+            let target = parse_workspace_target(pair)?;
+            StepKind::Workspace(target)
+        }
+        Rule::env_command => {
+            let (key, value) = parse_env_pair(pair)?;
+            StepKind::Env { key, value }
+        }
+        Rule::echo_command => {
+            let msg = parse_message(pair)?;
+            StepKind::Echo(msg)
+        }
+        Rule::run_command => {
+            let cmd = parse_run_args(pair)?;
+            StepKind::Run(cmd)
+        }
+        Rule::run_bg_command => {
+            let cmd = parse_run_args(pair)?;
+            StepKind::RunBg(cmd)
+        }
+        Rule::copy_command => {
+            let mut args = parse_args(pair)?;
+            StepKind::Copy {
+                from: args.remove(0),
+                to: args.remove(0),
+            }
+        }
+        Rule::capture_command => {
+            let path = parse_single_arg_from_pair(pair.clone())?;
+            let cmd = parse_run_args_from_pair(pair)?;
+            StepKind::Capture { path, cmd }
+        }
+        Rule::copy_git_command => {
+            let mut args = parse_args(pair)?;
+            StepKind::CopyGit {
+                rev: args.remove(0),
+                from: args.remove(0),
+                to: args.remove(0),
+            }
+        }
+        Rule::symlink_command => {
+            let mut args = parse_args(pair)?;
+            StepKind::Symlink {
+                from: args.remove(0),
+                to: args.remove(0),
+            }
+        }
+        Rule::mkdir_command => {
+            let arg = parse_single_arg(pair)?;
+            StepKind::Mkdir(arg)
+        }
+        Rule::ls_command => {
+            let args = parse_args(pair)?;
+            StepKind::Ls(args.into_iter().next())
+        }
+        Rule::cwd_command => StepKind::Cwd,
+        Rule::cat_command => {
+            let arg = parse_single_arg(pair)?;
+            StepKind::Cat(arg)
+        }
+        Rule::write_command => {
+            let path = parse_single_arg_from_pair(pair.clone())?;
+            let contents = parse_message(pair)?;
+            StepKind::Write { path, contents }
+        }
+        Rule::exit_command => {
+            let code = parse_exit_code(pair)?;
+            StepKind::Exit(code)
+        }
+        _ => bail!("unknown command rule: {:?}", pair.as_rule()),
+    };
+    Ok(kind)
+}
+
+fn parse_single_arg(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::argument {
+            return parse_argument(inner);
+        }
+    }
+    bail!("missing argument")
+}
+
+fn parse_single_arg_from_pair(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::argument {
+            return parse_argument(inner);
+        }
+    }
+    bail!("missing argument")
+}
+
+fn parse_args(pair: Pair<Rule>) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::argument {
+            args.push(parse_argument(inner)?);
+        }
+    }
+    Ok(args)
+}
+
+fn parse_argument(pair: Pair<Rule>) -> Result<String> {
+    let inner = pair.into_inner().next().unwrap();
+    match inner.as_rule() {
+        Rule::quoted_string => parse_quoted_string(inner),
+        Rule::unquoted_arg => Ok(inner.as_str().to_string()),
+        _ => unreachable!(),
+    }
+}
+
+fn parse_quoted_string(pair: Pair<Rule>) -> Result<String> {
+    let s = pair.as_str();
+    let _quote = s.chars().next().unwrap();
+    let content = &s[1..s.len() - 1];
+
+    let mut out = String::with_capacity(content.len());
+    let mut escape = false;
+    for ch in content.chars() {
+        if escape {
+            out.push(ch);
+            escape = false;
+        } else if ch == '\\' {
+            escape = true;
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_workspace_target(pair: Pair<Rule>) -> Result<WorkspaceTarget> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::workspace_target {
+            return match inner.as_str().to_ascii_lowercase().as_str() {
+                "snapshot" => Ok(WorkspaceTarget::Snapshot),
+                "local" => Ok(WorkspaceTarget::Local),
+                _ => bail!("unknown workspace target"),
+            };
+        }
+    }
+    bail!("missing workspace target")
+}
+
+fn parse_env_pair(pair: Pair<Rule>) -> Result<(String, String)> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::env_pair {
+            let mut parts = inner.into_inner();
+            let key = parts.next().unwrap().as_str().to_string();
+            let value_pair = parts.next().unwrap();
+            let value = match value_pair.as_rule() {
+                Rule::env_value_part => {
+                    let inner_val = value_pair.into_inner().next().unwrap();
+                    match inner_val.as_rule() {
+                        Rule::quoted_string => parse_quoted_string(inner_val)?,
+                        Rule::unquoted_env_value => inner_val.as_str().to_string(),
+                        _ => unreachable!(
+                            "unexpected rule in env_value_part: {:?}",
+                            inner_val.as_rule()
+                        ),
+                    }
+                }
+                _ => unreachable!("expected env_value_part"),
+            };
+            return Ok((key, value));
+        }
+    }
+    bail!("missing env pair")
+}
+
+fn parse_message(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::message {
+            return parse_concatenated_string(inner);
+        }
+    }
+    bail!("missing message")
+}
+
+fn parse_run_args(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::run_args {
+            return parse_raw_concatenated_string(inner);
+        }
+    }
+    bail!("missing run args")
+}
+
+fn parse_run_args_from_pair(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::run_args {
+            return parse_raw_concatenated_string(inner);
+        }
+    }
+    bail!("missing run args")
+}
+
+fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+    let mut body = String::new();
+    let mut last_end = None;
+    for part in pair.into_inner() {
+        let span = part.as_span();
+        if let Some(end) = last_end {
+            if span.start() > end {
+                body.push(' ');
+            }
+        }
+        match part.as_rule() {
+            Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
+            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
+            _ => {}
+        }
+        last_end = Some(span.end());
+    }
+    Ok(body)
+}
+
+fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+    let mut body = String::new();
+    let mut last_end = None;
+    for part in pair.into_inner() {
+        let span = part.as_span();
+        if let Some(end) = last_end {
+            if span.start() > end {
+                body.push(' ');
+            }
+        }
+        match part.as_rule() {
+            Rule::quoted_string => {
+                let raw = part.as_str();
+                let unquoted = parse_quoted_string(part.clone())?;
+                // Preserve quotes if the content needs them to be parsed correctly
+                // or to preserve argument grouping (spaces).
+                let needs_quotes = unquoted.is_empty()
+                    || unquoted
+                        .chars()
+                        .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+                    || unquoted.contains("//")
+                    || unquoted.contains("/*");
+
+                if needs_quotes {
+                    body.push_str(raw);
+                } else {
+                    body.push_str(&unquoted);
+                }
+            }
+            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
+            _ => {}
+        }
+        last_end = Some(span.end());
+    }
+    Ok(body)
+}
+
+fn parse_exit_code(pair: Pair<Rule>) -> Result<i32> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::exit_code {
+            return inner
+                .as_str()
+                .parse()
+                .map_err(|_| anyhow!("invalid exit code"));
+        }
+    }
+    bail!("missing exit code")
+}
+
+fn parse_guard_line(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {
+    let mut groups = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_groups {
+            groups = parse_guard_groups(inner)?;
+        }
+    }
+    Ok(groups)
+}
+
+fn parse_guard_groups(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {
+    let mut groups = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_conjunction {
+            groups.push(parse_guard_conjunction(inner)?);
+        }
+    }
+    Ok(groups)
+}
+
+fn parse_guard_conjunction(pair: Pair<Rule>) -> Result<Vec<Guard>> {
+    let mut group = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_term {
+            group.push(parse_guard_term(inner)?);
+        }
+    }
+    Ok(group)
+}
+
+fn parse_guard_term(pair: Pair<Rule>) -> Result<Guard> {
+    let mut invert = false;
+    let mut guard = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::invert => invert = true,
+            Rule::env_guard => guard = Some(parse_env_guard(inner, invert)?),
+            Rule::platform_guard => guard = Some(parse_platform_guard(inner, invert)?),
+            Rule::bare_platform => guard = Some(parse_bare_platform(inner, invert)?),
+            _ => {}
+        }
+    }
+    guard.ok_or_else(|| anyhow!("missing guard predicate"))
+}
+
+fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
+    let mut key = String::new();
+    let mut value = None;
+    let mut is_not_equals = false;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::env_key => key = inner.as_str().trim().to_string(),
+            Rule::env_comparison => {
+                let inner_comp = inner.into_inner().next().unwrap();
+                match inner_comp.as_rule() {
+                    Rule::equals => {
+                        value = Some(
+                            inner_comp
+                                .into_inner()
+                                .next()
+                                .unwrap()
+                                .as_str()
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                    Rule::not_equals => {
+                        is_not_equals = true;
+                        value = Some(
+                            inner_comp
+                                .into_inner()
+                                .next()
+                                .unwrap()
+                                .as_str()
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(val) = value {
+        Ok(Guard::EnvEquals {
+            key,
+            value: val,
+            invert: invert ^ is_not_equals,
+        })
+    } else {
+        Ok(Guard::EnvExists { key, invert })
+    }
+}
+
+fn parse_platform_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
+    let mut tag = "";
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::platform_tag {
+            tag = inner.as_str();
+        }
+    }
+    parse_platform_tag(tag, invert)
+}
+
+fn parse_bare_platform(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
+    let tag = pair.into_inner().next().unwrap().as_str();
+    parse_platform_tag(tag, invert)
+}
+
+fn parse_platform_tag(tag: &str, invert: bool) -> Result<Guard> {
+    let target = match tag.to_ascii_lowercase().as_str() {
+        "unix" => PlatformGuard::Unix,
+        "windows" => PlatformGuard::Windows,
+        "mac" | "macos" => PlatformGuard::Macos,
+        "linux" => PlatformGuard::Linux,
+        _ => bail!("unknown platform '{}'", tag),
+    };
+    Ok(Guard::Platform { target, invert })
 }
