@@ -7,16 +7,18 @@ pub mod parser;
 pub use ast::*;
 pub use lexer::LANGUAGE_SPEC;
 #[cfg(feature = "token-input")]
-pub use macro_input::{DslMacroInput, ScriptSource, parse_braced_tokens, script_from_braced_tokens};
+pub use macro_input::{
+    DslMacroInput, ScriptSource, parse_braced_tokens, script_from_braced_tokens,
+};
 pub use parser::parse_script;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
-    use std::collections::HashMap;
     #[cfg(feature = "token-input")]
     use quote::quote;
+    use std::collections::HashMap;
 
     #[test]
     fn commands_are_case_sensitive() {

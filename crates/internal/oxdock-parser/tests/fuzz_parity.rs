@@ -1,7 +1,7 @@
 use oxdock_parser::ast::*;
-use oxdock_parser::parse_script;
 #[cfg(feature = "token-input")]
 use oxdock_parser::parse_braced_tokens;
+use oxdock_parser::parse_script;
 use proptest::prelude::*;
 
 // Strategies
@@ -17,17 +17,17 @@ fn arb_platform_guard() -> impl Strategy<Value = PlatformGuard> {
 
 fn arb_guard() -> impl Strategy<Value = Guard> {
     prop_oneof![
-        (arb_platform_guard(), any::<bool>()).prop_map(|(target, invert)| Guard::Platform { target, invert }),
-        ("[a-zA-Z_][a-zA-Z0-9_]*", any::<bool>()).prop_map(|(key, invert)| Guard::EnvExists { key, invert }),
-        ("[a-zA-Z_][a-zA-Z0-9_]*", "[a-zA-Z0-9_]+", any::<bool>()).prop_map(|(key, value, invert)| Guard::EnvEquals { key, value, invert }),
+        (arb_platform_guard(), any::<bool>())
+            .prop_map(|(target, invert)| Guard::Platform { target, invert }),
+        ("[a-zA-Z_][a-zA-Z0-9_]*", any::<bool>())
+            .prop_map(|(key, invert)| Guard::EnvExists { key, invert }),
+        ("[a-zA-Z_][a-zA-Z0-9_]*", "[a-zA-Z0-9_]+", any::<bool>())
+            .prop_map(|(key, value, invert)| Guard::EnvEquals { key, value, invert }),
     ]
 }
 
 fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
-    prop::collection::vec(
-        prop::collection::vec(arb_guard(), 1..3),
-        0..2
-    )
+    prop::collection::vec(prop::collection::vec(arb_guard(), 1..3), 0..2)
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
@@ -42,7 +42,11 @@ fn safe_msg() -> impl Strategy<Value = String> {
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
         safe_string().prop_map(StepKind::Workdir),
-        prop_oneof![Just(WorkspaceTarget::Snapshot), Just(WorkspaceTarget::Local)].prop_map(StepKind::Workspace),
+        prop_oneof![
+            Just(WorkspaceTarget::Snapshot),
+            Just(WorkspaceTarget::Local)
+        ]
+        .prop_map(StepKind::Workspace),
         (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env { key, value }),
         safe_msg().prop_map(StepKind::Run),
         safe_msg().prop_map(StepKind::Echo),
@@ -55,7 +59,8 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(StepKind::Cat),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::Capture { path, cmd }),
-        (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| StepKind::CopyGit { rev, from, to }),
+        (safe_string(), safe_string(), safe_string())
+            .prop_map(|(rev, from, to)| StepKind::CopyGit { rev, from, to }),
         (0i32..255).prop_map(|code| StepKind::Exit(code)),
     ]
 }
@@ -71,7 +76,7 @@ fn arb_step() -> impl Strategy<Value = Step> {
 
 fn unquote(s: &str) -> String {
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        let inner = &s[1..s.len()-1];
+        let inner = &s[1..s.len() - 1];
         inner.replace("\\\"", "\"").replace("\\\\", "\\")
     } else {
         s.to_string()
@@ -80,12 +85,24 @@ fn unquote(s: &str) -> String {
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
     assert_eq!(left.guards, right.guards, "Guards mismatch: {}", msg);
-    assert_eq!(left.scope_enter, right.scope_enter, "Scope enter mismatch: {}", msg);
-    assert_eq!(left.scope_exit, right.scope_exit, "Scope exit mismatch: {}", msg);
+    assert_eq!(
+        left.scope_enter, right.scope_enter,
+        "Scope enter mismatch: {}",
+        msg
+    );
+    assert_eq!(
+        left.scope_exit, right.scope_exit,
+        "Scope exit mismatch: {}",
+        msg
+    );
 
     match (&left.kind, &right.kind) {
-        (StepKind::Run(l), StepKind::Run(r)) => assert_eq!(unquote(l), unquote(r), "Run cmd mismatch: {}", msg),
-        (StepKind::RunBg(l), StepKind::RunBg(r)) => assert_eq!(unquote(l), unquote(r), "RunBg cmd mismatch: {}", msg),
+        (StepKind::Run(l), StepKind::Run(r)) => {
+            assert_eq!(unquote(l), unquote(r), "Run cmd mismatch: {}", msg)
+        }
+        (StepKind::RunBg(l), StepKind::RunBg(r)) => {
+            assert_eq!(unquote(l), unquote(r), "RunBg cmd mismatch: {}", msg)
+        }
         (StepKind::Capture { path: lp, cmd: lc }, StepKind::Capture { path: rp, cmd: rc }) => {
             assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
             assert_eq!(unquote(lc), unquote(rc), "Capture cmd mismatch: {}", msg);
@@ -98,14 +115,14 @@ proptest! {
     #[test]
     fn fuzz_parity(step in arb_step()) {
         let s = step.to_string();
-        
+
         // 1. Parse string
         let parsed_steps = parse_script(&s).expect("failed to parse generated string");
         assert_eq!(parsed_steps.len(), 1);
         let mut parsed_step = parsed_steps[0].clone();
         parsed_step.scope_enter = 0;
         parsed_step.scope_exit = 0;
-        
+
         assert_steps_eq(&parsed_step, &step, &format!("String parse mismatch: {}", s));
 
         // 2. Parse tokens (if feature enabled)
@@ -113,12 +130,12 @@ proptest! {
         {
             let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
             let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");
-            
+
             assert_eq!(token_steps.len(), 1);
             let mut token_step = token_steps[0].clone();
             token_step.scope_enter = 0;
             token_step.scope_exit = 0;
-            
+
             assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
         }
     }

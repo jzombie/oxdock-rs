@@ -31,8 +31,8 @@ pub(crate) enum Token {
 
 pub(crate) fn lex_script(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
-    let mut pairs = LanguageParser::parse(Rule::script, input)
-        .map_err(|err| anyhow!(err.to_string()))?;
+    let mut pairs =
+        LanguageParser::parse(Rule::script, input).map_err(|err| anyhow!(err.to_string()))?;
     let Some(root) = pairs.next() else {
         return Ok(tokens);
     };
@@ -194,7 +194,7 @@ fn parse_quoted_string(pair: pest::iterators::Pair<Rule>) -> Result<String> {
     let s = pair.as_str();
     let _quote = s.chars().next().unwrap();
     let content = &s[1..s.len() - 1];
-    
+
     let mut out = String::with_capacity(content.len());
     let mut escape = false;
     for ch in content.chars() {
@@ -235,7 +235,10 @@ fn parse_env_pair(pair: pest::iterators::Pair<Rule>) -> Result<(String, String)>
                     match inner_val.as_rule() {
                         Rule::quoted_string => parse_quoted_string(inner_val)?,
                         Rule::unquoted_env_value => inner_val.as_str().to_string(),
-                        _ => unreachable!("unexpected rule in env_value_part: {:?}", inner_val.as_rule()),
+                        _ => unreachable!(
+                            "unexpected rule in env_value_part: {:?}",
+                            inner_val.as_rule()
+                        ),
                     }
                 }
                 _ => unreachable!("expected env_value_part"),
@@ -310,10 +313,12 @@ fn parse_raw_concatenated_string(pair: pest::iterators::Pair<Rule>) -> Result<St
                 // Preserve quotes if the content needs them to be parsed correctly
                 // or to preserve argument grouping (spaces).
                 let needs_quotes = unquoted.is_empty()
-                    || unquoted.chars().any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+                    || unquoted
+                        .chars()
+                        .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
                     || unquoted.contains("//")
                     || unquoted.contains("/*");
-                
+
                 if needs_quotes {
                     body.push_str(raw);
                 } else {
@@ -331,7 +336,10 @@ fn parse_raw_concatenated_string(pair: pest::iterators::Pair<Rule>) -> Result<St
 fn parse_exit_code(pair: pest::iterators::Pair<Rule>) -> Result<i32> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::exit_code {
-            return inner.as_str().parse().map_err(|_| anyhow!("invalid exit code"));
+            return inner
+                .as_str()
+                .parse()
+                .map_err(|_| anyhow!("invalid exit code"));
         }
     }
     bail!("missing exit code")
@@ -399,11 +407,27 @@ fn parse_env_guard(pair: pest::iterators::Pair<Rule>, invert: bool) -> Result<Gu
                 let inner_comp = inner.into_inner().next().unwrap();
                 match inner_comp.as_rule() {
                     Rule::equals => {
-                        value = Some(inner_comp.into_inner().next().unwrap().as_str().trim().to_string());
+                        value = Some(
+                            inner_comp
+                                .into_inner()
+                                .next()
+                                .unwrap()
+                                .as_str()
+                                .trim()
+                                .to_string(),
+                        );
                     }
                     Rule::not_equals => {
                         is_not_equals = true;
-                        value = Some(inner_comp.into_inner().next().unwrap().as_str().trim().to_string());
+                        value = Some(
+                            inner_comp
+                                .into_inner()
+                                .next()
+                                .unwrap()
+                                .as_str()
+                                .trim()
+                                .to_string(),
+                        );
                     }
                     _ => {}
                 }
