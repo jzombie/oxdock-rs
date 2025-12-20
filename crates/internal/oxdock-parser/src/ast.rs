@@ -61,6 +61,10 @@ impl Command {
         }
     }
 
+    pub const fn expects_inner_command(self) -> bool {
+        matches!(self, Command::Capture)
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "WORKDIR" => Some(Command::Workdir),
