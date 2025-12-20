@@ -80,11 +80,10 @@ fn discover_cases(resolver: &PathResolver) -> Result<Vec<ParityCase>> {
                 resolver.entry_kind(&case_root.join("expect_error.txt")?),
                 Ok(EntryKind::File)
             ) {
-                Some(
-                    resolver
-                        .read_to_string(&case_root.join("expect_error.txt")?)
-                        .context("failed to read expect_error.txt")?,
-                )
+                let contents = resolver
+                    .read_to_string(&case_root.join("expect_error.txt")?)
+                    .context("failed to read expect_error.txt")?;
+                Some(contents)
             } else {
                 None
             };
@@ -109,41 +108,21 @@ fn run_case_inner(case: &ParityCase) -> Result<()> {
     let dsl_steps = parse_script(case.dsl.trim());
     let token_steps = TokenStream::from_str(case.tokens.as_str())
         .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))
-        .and_then(|token_stream| {
-            parse_braced_tokens(&token_stream)
-                .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))
-        });
+        .and_then(|token_stream| parse_braced_tokens(&token_stream));
 
-    if let Some(expected) = case.expect_error.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
-    {
-        if dsl_steps.is_ok() && token_steps.is_ok() {
+    if let Some(expected) = case.expect_error.as_ref() {
+        let dsl_error = dsl_steps.as_ref().err();
+        let token_error = token_steps.as_ref().err();
+        if dsl_error.is_none() || token_error.is_none() {
             anyhow::bail!(
-                "expected a parse error for case {}, but both parsers succeeded",
-                case.name
+                "expected both parsers to error for case {}, but DSL error: {}, token error: {}",
+                case.name,
+                dsl_error.is_some(),
+                token_error.is_some()
             );
         }
-        if let Err(err) = dsl_steps.as_ref() {
-            let msg = err.to_string();
-            if !msg.contains(expected) {
-                anyhow::bail!(
-                    "DSL parser error for case {} did not match expectation.\nexpected: {}\nactual: {}",
-                    case.name,
-                    expected,
-                    msg
-                );
-            }
-        }
-        if let Err(err) = token_steps.as_ref() {
-            let msg = err.to_string();
-            if !msg.contains(expected) {
-                anyhow::bail!(
-                    "token parser error for case {} did not match expectation.\nexpected: {}\nactual: {}",
-                    case.name,
-                    expected,
-                    msg
-                );
-            }
-        }
+        verify_error("DSL", &case.name, dsl_error.unwrap(), expected)?;
+        verify_error("token", &case.name, token_error.unwrap(), expected)?;
         return Ok(());
     }
 
@@ -168,4 +147,16 @@ fn render_steps(steps: &[Step]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn verify_error(kind: &str, case: &str, err: &anyhow::Error, expected: &str) -> Result<()> {
+    let msg = err.to_string().replace("\r\n", "\n");
+    let expected = expected.replace("\r\n", "\n");
+    let expected = expected.trim_end();
+    if msg != expected {
+        anyhow::bail!(
+            "{kind} parser error for case {case} did not match expected message.\nexpected:\n{expected}\n\nactual:\n{msg}"
+        );
+    }
+    Ok(())
 }
