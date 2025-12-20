@@ -154,15 +154,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Miri-only code paths pull in nightly-only features (e.g. zerocopy's
+      # layout_for_ptr under cfg(miri)), so we must run this job on nightly.
+      - uses: dtolnay/rust-toolchain@nightly
 
-      - name: Install rustfmt/clippy
-        run: rustup component add rustfmt clippy
+      - name: Install rustfmt/clippy (nightly)
+        run: rustup component add rustfmt clippy --toolchain nightly
 
       - name: Run Clippy with `--cfg miri`
         env:
           RUSTFLAGS: "--cfg miri"
-        run: RUSTFLAGS="--cfg miri" cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: RUSTFLAGS="--cfg miri" cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
 
   clippy-windows:
     name: lint (windows runner)

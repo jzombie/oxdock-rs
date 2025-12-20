@@ -121,7 +121,7 @@ fn parse_options_accepts_shell_flag() {
 
 #[test]
 fn parse_semicolon_keeps_shell_payload_together() {
-    let script = "RUN echo one; echo two";
+    let script = "RUN \"echo one; echo two\"";
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 1);
     if let Step {
@@ -129,7 +129,7 @@ fn parse_semicolon_keeps_shell_payload_together() {
         ..
     } = steps[0]
     {
-        assert_eq!(cmd, "echo one; echo two");
+        assert_eq!(cmd, "\"echo one; echo two\"");
     } else {
         panic!("expected RUN step");
     }

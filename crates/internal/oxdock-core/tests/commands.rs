@@ -1,7 +1,6 @@
-use oxdock_core::{
-    Step, StepKind, WorkspaceTarget, run_steps, run_steps_with_context, run_steps_with_fs,
-};
+use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_fs};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
+use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::CommandBuilder;
 
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
@@ -303,7 +302,7 @@ fn accepts_semicolon_separated_commands() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
     let script = "WRITE one.txt 1; WRITE two.txt 2";
-    let steps = oxdock_core::parse_script(script).unwrap();
+    let steps = oxdock_parser::parse_script(script).unwrap();
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("one.txt").unwrap()), "1");
     assert_eq!(read_trimmed(&root.join("two.txt").unwrap()), "2");
@@ -504,7 +503,7 @@ fn copy_git_via_script_simple() {
 
     let script = format!("COPY_GIT {} hello.txt out_hello.txt", rev);
 
-    let steps = oxdock_core::parse_script(&script).unwrap();
+    let steps = oxdock_parser::parse_script(&script).unwrap();
     // build_context is `repo` which is under `snapshot` root
     run_steps_with_context(&snapshot, &repo, &steps).unwrap();
 
@@ -558,7 +557,7 @@ fn copy_git_directory_via_script() {
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
     let script = format!("COPY_GIT {} assets_dir out_assets_dir", rev);
-    let steps = oxdock_core::parse_script(&script).unwrap();
+    let steps = oxdock_parser::parse_script(&script).unwrap();
     run_steps_with_context(&snapshot, &repo, &steps).unwrap();
 
     assert_eq!(

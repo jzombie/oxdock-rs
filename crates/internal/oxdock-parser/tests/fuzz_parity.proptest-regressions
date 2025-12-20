@@ -1,0 +1,19 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8c2ad733639a846ed40977f81985c13db987858c7c7a675f9076a8ddc01eeec4 # shrinks to step = Step { guards: [], kind: Echo(" "), scope_enter: 0, scope_exit: 0 }
+cc 625b47e3fcd546af8b359d9c28b3884880f96a55baf6acec9467e5dc57f1be0e # shrinks to step = Step { guards: [], kind: RunBg(" "), scope_enter: 0, scope_exit: 0 }
+cc 1b6b4e3f6a410bb642313220c24ea98569ab8dbdf46da0e3cd95e45a79ae4c2f # shrinks to step = Step { guards: [], kind: Capture { path: "--", cmd: "a" }, scope_enter: 0, scope_exit: 0 }
+cc 5f92635c330d8f52b7fd4cc20ad081ae2d81bbcf90a441cb69a6e670c56512d1 # shrinks to step = Step { guards: [], kind: Capture { path: "a", cmd: "-" }, scope_enter: 0, scope_exit: 0 }
+cc f2ac9bce1d01309b1259e761ac0dfc0b0c758322827091f04e1d892ae9ab07c4 # shrinks to step = Step { guards: [], kind: Echo("_  "), scope_enter: 0, scope_exit: 0 }
+cc 0ea7fd6a7c13ea6a95816e9e789dc147101649abe3e2b215b9b7d4bdda0d863d # shrinks to step = Step { guards: [], kind: Run("a- "), scope_enter: 0, scope_exit: 0 }
+cc 465178c773ddf7167ae2683f10a90db55e5c8b2af47a99f03934d52618875257 # shrinks to step = Step { guards: [], kind: Env { key: "0", value: "//" }, scope_enter: 0, scope_exit: 0 }
+cc bdec93c833efd5e39d9cc85ddad6dd523f6f5459ce95cf1f98bed5a3afbf9228 # shrinks to step = Step { guards: [], kind: Env { key: "//", value: "-" }, scope_enter: 0, scope_exit: 0 }
+cc cd7e281044efac8ea4cdfbd74ca15585a5c3eed852c8500ae5806fc24a209978 # shrinks to step = Step { guards: [], kind: RunBg("_//"), scope_enter: 0, scope_exit: 0 }
+cc 1d64716caae924e7a42af865ad5dcab9186578524f2c2982cbc8b6c2eb290972 # shrinks to step = Step { guards: [], kind: Run("-a a"), scope_enter: 0, scope_exit: 0 }
+cc 06ccc9db8177bc5e5f964a299af1043361c4e772c954427b5c29189ed725c81e # shrinks to step = Step { guards: [], kind: Capture { path: "0", cmd: "-A A" }, scope_enter: 0, scope_exit: 0 }
+cc 0fb39ec7ea013cedb7b9f23258483ff8223db7ef9db86410c77d87d56daeb48e # shrinks to step = Step { guards: [], kind: Cat("0o8"), scope_enter: 0, scope_exit: 0 }
+cc 3d26e2a85361cc6db9b17d51d0395a7826a01a5a2fa33c6484ee0b7d42d84055 # shrinks to step = Step { guards: [[EnvEquals { key: "A", value: "0oA", invert: false }]], kind: Workdir("a"), scope_enter: 0, scope_exit: 0 }

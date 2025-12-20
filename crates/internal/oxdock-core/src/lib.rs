@@ -1,6 +1,4 @@
-pub mod ast;
 pub mod exec;
-pub use ast::*;
 pub use exec::*;
 
 #[cfg(test)]
@@ -8,6 +6,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
+    use oxdock_parser::{Step, StepKind, parse_script};
     #[cfg(unix)]
     use std::time::Instant;
 

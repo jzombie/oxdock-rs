@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::ExitStatus;
 
-use crate::ast::{self, Step, StepKind, WorkspaceTarget};
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
+use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{BackgroundHandle, CommandContext, ProcessManager, default_process_manager};
 
 struct ExecState<P: ProcessManager> {
@@ -171,7 +171,7 @@ fn execute_steps<P: ProcessManager>(
             }
         }
 
-        let should_run = crate::ast::guards_allow_any(&step.guards, &state.envs);
+        let should_run = oxdock_parser::guards_allow_any(&step.guards, &state.envs);
         let step_result = if !should_run {
             Ok(())
         } else {
@@ -332,7 +332,7 @@ fn execute_steps<P: ProcessManager>(
                         state.fs.ensure_parent_dir(&target).with_context(|| {
                             format!("failed to create parent for {}", target.display())
                         })?;
-                        let steps = ast::parse_script(cmd)
+                        let steps = oxdock_parser::parse_script(cmd)
                             .with_context(|| format!("step {}: CAPTURE parse failed", idx + 1))?;
                         if steps.len() != 1 {
                             bail!("CAPTURE expects exactly one instruction");
@@ -585,8 +585,8 @@ fn interpolate(template: &str, script_envs: &HashMap<String, String>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Guard;
     use oxdock_fs::{GuardedPath, MockFs};
+    use oxdock_parser::Guard;
     use oxdock_process::{MockProcessManager, MockRunCall};
     use std::collections::HashMap;
 

@@ -24,5 +24,6 @@ anyhow.workspace = true
 indoc.workspace = true
 oxdock-core.workspace = true
 oxdock-fs.workspace = true
+oxdock-parser.workspace = true
 oxdock-process.workspace = true
 tempfile.workspace = true

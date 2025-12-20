@@ -180,10 +180,7 @@ fn walk(
                 }
             }
             TokenTree::Literal(lit) => {
-                let text = syn::parse_str::<LitStr>(&lit.to_string())
-                    .map(|s| s.value())
-                    .unwrap_or_else(|_| lit.to_string());
-                push_fragment(line, &text, *last_was_command);
+                push_fragment(line, &lit.to_string(), *last_was_command);
                 *last_was_command = false;
             }
             TokenTree::Punct(p) => {
@@ -227,4 +224,109 @@ pub fn script_from_braced_tokens(ts: &TokenStream2) -> Result<String> {
 pub fn parse_braced_tokens(ts: &TokenStream2) -> Result<Vec<Step>> {
     let script = script_from_braced_tokens(ts)?;
     parse_script(&script)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_str;
+
+    #[test]
+    fn parse_dsl_macro_input_literal_script() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: \"RUN echo hi\", out_dir: \"target/out\"")
+                .expect("parse literal script");
+        assert!(matches!(input.script, ScriptSource::Literal(_)));
+        assert_eq!(input.name.to_string(), "foo");
+        assert_eq!(input.out_dir.value(), "target/out");
+    }
+
+    #[test]
+    fn parse_dsl_macro_input_braced_script() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { RUN echo hi }, out_dir: \"out\"")
+                .expect("parse braced script");
+        assert!(matches!(input.script, ScriptSource::Braced(_)));
+    }
+
+    #[test]
+    fn parse_dsl_macro_input_rejects_unknown_label() {
+        let err =
+            parse_str::<DslMacroInput>("names: foo, script: \"RUN echo hi\", out_dir: \"out\"")
+                .err()
+                .expect("unknown label should fail");
+        assert!(
+            err.to_string().contains("expected `name` label"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_dsl_macro_input_rejects_invalid_script_label() {
+        let err =
+            parse_str::<DslMacroInput>("name: foo, scripts: \"RUN echo hi\", out_dir: \"out\"")
+                .err()
+                .expect("invalid script label should fail");
+        assert!(
+            err.to_string().contains("expected `script` label"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_dsl_macro_input_rejects_invalid_out_dir_label() {
+        let err =
+            parse_str::<DslMacroInput>("name: foo, script: \"RUN echo hi\", outdirs: \"out\"")
+                .err()
+                .expect("invalid out_dir label should fail");
+        assert!(
+            err.to_string().contains("expected `out_dir` label"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_dsl_macro_input_rejects_invalid_script() {
+        let err = parse_str::<DslMacroInput>("name: foo, script: bar, out_dir: \"out\"")
+            .err()
+            .expect("invalid script should fail");
+        assert!(
+            err.to_string()
+                .contains("expected string literal or braced script block"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn finalize_line_skips_empty_lines() {
+        let mut lines = Vec::new();
+        let mut buf = String::new();
+        finalize_line(&mut lines, &mut buf);
+        assert!(lines.is_empty());
+        buf.push_str("  RUN echo hi  ");
+        finalize_line(&mut lines, &mut buf);
+        assert_eq!(lines, vec!["RUN echo hi"]);
+    }
+
+    #[test]
+    fn needs_space_filters_tokens() {
+        assert!(!needs_space('a', ';'));
+        assert!(!needs_space('a', ' '));
+        assert!(!needs_space(' ', 'a'));
+        assert!(!needs_space('/', 'a'));
+        assert!(!needs_space('a', '/'));
+        assert!(!needs_space('&', '&'));
+        assert!(!needs_space('|', '|'));
+        assert!(needs_space('a', 'b'));
+    }
+
+    #[test]
+    fn push_fragment_respects_empty_and_spacing() {
+        let mut buf = String::new();
+        push_fragment(&mut buf, "", false);
+        assert!(buf.is_empty());
+        push_fragment(&mut buf, "RUN", false);
+        push_fragment(&mut buf, "echo", true);
+        assert_eq!(buf, "RUN echo");
+    }
 }
