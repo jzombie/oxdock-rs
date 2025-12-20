@@ -21,12 +21,18 @@ impl PathResolver {
         rel
     }
 
+    fn is_absolute_or_rooted(path: &Path) -> bool {
+        path.is_absolute()
+            || (cfg!(windows)
+                && path.components().next() == Some(std::path::Component::RootDir))
+    }
+
     pub fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         if new_dir == "/" {
             // Reset to the resolver root when WORKDIR is set to '/'.
             return Ok(self.root().clone());
         }
-        let candidate = if Path::new(new_dir).is_absolute() {
+        let candidate = if Self::is_absolute_or_rooted(Path::new(new_dir)) {
             let rel = Self::root_relative_path(Path::new(new_dir));
             self.root().as_path().join(rel)
         } else {
@@ -48,7 +54,7 @@ impl PathResolver {
     }
 
     pub fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
-        if Path::new(from).is_absolute() {
+        if Self::is_absolute_or_rooted(Path::new(from)) {
             let rel = Self::root_relative_path(Path::new(from));
             let root = self.workspace_root.as_ref().unwrap_or(&self.build_context);
             let candidate = root.as_path().join(rel);
@@ -81,7 +87,7 @@ impl PathResolver {
     }
 
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {
-        let candidate = if Path::new(rel).is_absolute() {
+        let candidate = if Self::is_absolute_or_rooted(Path::new(rel)) {
             let rel = Self::root_relative_path(Path::new(rel));
             self.root().as_path().join(rel)
         } else {

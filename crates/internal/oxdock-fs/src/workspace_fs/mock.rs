@@ -312,8 +312,11 @@ impl WorkspaceFs for MockFs {
     fn resolve_workdir(&self, current: &GuardedPath, new_dir: &str) -> Result<GuardedPath> {
         let candidate = Path::new(new_dir);
         if candidate.is_absolute() {
-            let rel = root_relative_path(candidate);
-            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
+            // Let `GuardedPath::new` (and its `guard_path`) decide whether the
+            // absolute candidate escapes the allowed root. Previously we silently
+            // remapped absolute paths into the mock root which allowed Windows
+            // drive-prefixed paths (e.g. `C:\...`) to bypass the guard.
+            return GuardedPath::new(self.root.root(), candidate);
         }
         if new_dir == "/" {
             return Ok(self.root.clone());
@@ -326,8 +329,7 @@ impl WorkspaceFs for MockFs {
     fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
-            let rel = root_relative_path(candidate);
-            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
+            return GuardedPath::new(self.root.root(), candidate);
         }
         let target = self.normalize_rel(cwd, rel)?;
         self.guard_from_rel(target)
@@ -337,8 +339,7 @@ impl WorkspaceFs for MockFs {
     fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath> {
         let candidate = Path::new(rel);
         if candidate.is_absolute() {
-            let rel = root_relative_path(candidate);
-            return GuardedPath::new(self.root.root(), &self.root.as_path().join(rel));
+            return GuardedPath::new(self.root.root(), candidate);
         }
         let target = self.normalize_rel(cwd, rel)?;
         self.guard_from_rel(target)
@@ -348,11 +349,7 @@ impl WorkspaceFs for MockFs {
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         let candidate = Path::new(from);
         if candidate.is_absolute() {
-            let rel = root_relative_path(candidate);
-            return GuardedPath::new(
-                self.build_context.root(),
-                &self.build_context.as_path().join(rel),
-            );
+            return GuardedPath::new(self.build_context.root(), candidate);
         }
         let rel = self.split_components(from).join("/");
         self.guard_from_rel(rel)
