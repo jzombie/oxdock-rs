@@ -129,7 +129,7 @@ fn parse_semicolon_keeps_shell_payload_together() {
         ..
     } = steps[0]
     {
-        assert_eq!(cmd, "echo one; echo two");
+        assert_eq!(cmd, "\"echo one; echo two\"");
     } else {
         panic!("expected RUN step");
     }

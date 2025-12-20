@@ -276,15 +276,35 @@ fn quote_msg(s: &str) -> String {
     }
 }
 
+fn quote_run(s: &str) -> String {
+    // For RUN commands, we want to preserve the raw string as much as possible
+    // because the parser now preserves quotes.
+    // We only quote if the string contains characters that would break the parser
+    // (semicolon, newline, comments) or if it's empty.
+    // We also quote if it starts with a "sticky" character (/-.:=) or contains whitespace
+    // to ensure proper spacing when round-tripping through TokenStream (macro input).
+    let needs_quote = s.is_empty()
+        || s.chars().any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+        || s.contains("//")
+        || s.contains("/*")
+        || s.starts_with(|c| matches!(c, '/' | '.' | '-' | ':' | '='));
+    
+    if !needs_quote {
+        s.to_string()
+    } else {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StepKind::Workdir(arg) => write!(f, "WORKDIR {}", quote_arg(arg)),
             StepKind::Workspace(target) => write!(f, "WORKSPACE {}", target),
-            StepKind::Env { key, value } => write!(f, "ENV {}={}", key, value),
-            StepKind::Run(cmd) => write!(f, "RUN {}", quote_msg(cmd)),
+            StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value)),
+            StepKind::Run(cmd) => write!(f, "RUN {}", quote_run(cmd)),
             StepKind::Echo(msg) => write!(f, "ECHO {}", quote_msg(msg)),
-            StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_msg(cmd)),
+            StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_run(cmd)),
             StepKind::Copy { from, to } => write!(f, "COPY {} {}", quote_arg(from), quote_arg(to)),
             StepKind::Symlink { from, to } => write!(f, "SYMLINK {} {}", quote_arg(from), quote_arg(to)),
             StepKind::Mkdir(arg) => write!(f, "MKDIR {}", quote_arg(arg)),
@@ -298,7 +318,7 @@ impl fmt::Display for StepKind {
             StepKind::Cwd => write!(f, "CWD"),
             StepKind::Cat(arg) => write!(f, "CAT {}", quote_arg(arg)),
             StepKind::Write { path, contents } => write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents)),
-            StepKind::Capture { path, cmd } => write!(f, "CAPTURE {} {}", quote_arg(path), quote_msg(cmd)),
+            StepKind::Capture { path, cmd } => write!(f, "CAPTURE {} {}", quote_arg(path), quote_run(cmd)),
             StepKind::CopyGit { rev, from, to } => write!(f, "COPY_GIT {} {} {}", quote_arg(rev), quote_arg(from), quote_arg(to)),
             StepKind::Exit(code) => write!(f, "EXIT {}", code),
         }

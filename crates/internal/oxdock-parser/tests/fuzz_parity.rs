@@ -69,6 +69,31 @@ fn arb_step() -> impl Strategy<Value = Step> {
     })
 }
 
+fn unquote(s: &str) -> String {
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        let inner = &s[1..s.len()-1];
+        inner.replace("\\\"", "\"").replace("\\\\", "\\")
+    } else {
+        s.to_string()
+    }
+}
+
+fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
+    assert_eq!(left.guards, right.guards, "Guards mismatch: {}", msg);
+    assert_eq!(left.scope_enter, right.scope_enter, "Scope enter mismatch: {}", msg);
+    assert_eq!(left.scope_exit, right.scope_exit, "Scope exit mismatch: {}", msg);
+
+    match (&left.kind, &right.kind) {
+        (StepKind::Run(l), StepKind::Run(r)) => assert_eq!(unquote(l), unquote(r), "Run cmd mismatch: {}", msg),
+        (StepKind::RunBg(l), StepKind::RunBg(r)) => assert_eq!(unquote(l), unquote(r), "RunBg cmd mismatch: {}", msg),
+        (StepKind::Capture { path: lp, cmd: lc }, StepKind::Capture { path: rp, cmd: rc }) => {
+            assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
+            assert_eq!(unquote(lc), unquote(rc), "Capture cmd mismatch: {}", msg);
+        }
+        _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
+    }
+}
+
 proptest! {
     #[test]
     fn fuzz_parity(step in arb_step()) {
@@ -81,7 +106,7 @@ proptest! {
         parsed_step.scope_enter = 0;
         parsed_step.scope_exit = 0;
         
-        assert_eq!(parsed_step, step, "String parse mismatch: {}", s);
+        assert_steps_eq(&parsed_step, &step, &format!("String parse mismatch: {}", s));
 
         // 2. Parse tokens (if feature enabled)
         #[cfg(feature = "token-input")]
@@ -94,7 +119,7 @@ proptest! {
             token_step.scope_enter = 0;
             token_step.scope_exit = 0;
             
-            assert_eq!(token_step, step, "Token parse mismatch: {}", s);
+            assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
         }
     }
 }

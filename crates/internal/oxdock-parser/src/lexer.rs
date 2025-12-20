@@ -228,7 +228,18 @@ fn parse_env_pair(pair: pest::iterators::Pair<Rule>) -> Result<(String, String)>
         if inner.as_rule() == Rule::env_pair {
             let mut parts = inner.into_inner();
             let key = parts.next().unwrap().as_str().to_string();
-            let value = parts.next().unwrap().as_str().to_string();
+            let value_pair = parts.next().unwrap();
+            let value = match value_pair.as_rule() {
+                Rule::env_value_part => {
+                    let inner_val = value_pair.into_inner().next().unwrap();
+                    match inner_val.as_rule() {
+                        Rule::quoted_string => parse_quoted_string(inner_val)?,
+                        Rule::unquoted_env_value => inner_val.as_str().to_string(),
+                        _ => unreachable!("unexpected rule in env_value_part: {:?}", inner_val.as_rule()),
+                    }
+                }
+                _ => unreachable!("expected env_value_part"),
+            };
             return Ok((key, value));
         }
     }
@@ -293,7 +304,22 @@ fn parse_raw_concatenated_string(pair: pest::iterators::Pair<Rule>) -> Result<St
             }
         }
         match part.as_rule() {
-            Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
+            Rule::quoted_string => {
+                let raw = part.as_str();
+                let unquoted = parse_quoted_string(part.clone())?;
+                // Preserve quotes if the content needs them to be parsed correctly
+                // or to preserve argument grouping (spaces).
+                let needs_quotes = unquoted.is_empty()
+                    || unquoted.chars().any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+                    || unquoted.contains("//")
+                    || unquoted.contains("/*");
+                
+                if needs_quotes {
+                    body.push_str(raw);
+                } else {
+                    body.push_str(&unquoted);
+                }
+            }
             Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
             _ => {}
         }

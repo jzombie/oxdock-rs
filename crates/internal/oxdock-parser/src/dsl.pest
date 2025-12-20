@@ -98,9 +98,10 @@ argument = { quoted_string | unquoted_arg }
 unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 
 workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
-env_pair = { env_key_part ~ "=" ~ env_value_part }
+env_pair = { env_key_part ~ ws? ~ "=" ~ ws? ~ env_value_part }
 env_key_part = @{ (!"=" ~ !WHITESPACE ~ !linebreak ~ ANY)+ }
-env_value_part = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
+env_value_part = { quoted_string | unquoted_env_value }
+unquoted_env_value = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 
 message = { (quoted_string | unquoted_msg_content)+ }
 unquoted_msg_content = { !(linebreak | ";") ~ ANY }
