@@ -4,6 +4,8 @@
 
 Do not override linter rules in any crate except `oxdock-fs` or `oxdock-process`, and never add global/blanket overrides.
 
+- **Naming**: Do not prefix parameter names with `_` to silence unused warnings. Prefer using the value (e.g., `let _ = param;`) or a localized `#[allow(unused_variables)]` if absolutely necessary.
+
 - **Strategy**: When addressing clippy warnings, prefer localized `#[allow(...)]` on specific items (functions/impls/structs) instead of crate-level `#![allow(...)]`.
     - Avoid blanket overrides on traits or impl blocks if the lint only applies to a subset of methods; apply the suppression to the individual methods instead.
     - For imports, split the `use` statement so that `#[allow(...)]` only applies to the specific disallowed item.
