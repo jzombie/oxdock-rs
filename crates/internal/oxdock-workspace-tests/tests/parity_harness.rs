@@ -9,6 +9,7 @@ struct ParityCase {
     name: String,
     dsl: String,
     tokens: String,
+    expect_error: Option<String>,
 }
 
 fn main() {
@@ -75,10 +76,23 @@ fn discover_cases(resolver: &PathResolver) -> Result<Vec<ParityCase>> {
             let token_contents = resolver
                 .read_to_string(&tokens)
                 .with_context(|| format!("failed to read tokens fixture {name}"))?;
+            let expect_error = if matches!(
+                resolver.entry_kind(&case_root.join("expect_error.txt")?),
+                Ok(EntryKind::File)
+            ) {
+                Some(
+                    resolver
+                        .read_to_string(&case_root.join("expect_error.txt")?)
+                        .context("failed to read expect_error.txt")?,
+                )
+            } else {
+                None
+            };
             cases.push(ParityCase {
                 name,
                 dsl: dsl_contents,
                 tokens: token_contents,
+                expect_error,
             });
         }
     }
@@ -92,11 +106,49 @@ fn run_case(case: &ParityCase) -> std::result::Result<(), Failed> {
 }
 
 fn run_case_inner(case: &ParityCase) -> Result<()> {
-    let dsl_steps = parse_script(case.dsl.trim()).context("failed to parse DSL fixture")?;
-    let token_stream = TokenStream::from_str(case.tokens.as_str())
-        .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))?;
-    let token_steps =
-        parse_braced_tokens(&token_stream).context("failed to parse tokens fixture")?;
+    let dsl_steps = parse_script(case.dsl.trim());
+    let token_steps = TokenStream::from_str(case.tokens.as_str())
+        .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))
+        .and_then(|token_stream| {
+            parse_braced_tokens(&token_stream)
+                .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))
+        });
+
+    if let Some(expected) = case.expect_error.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    {
+        if dsl_steps.is_ok() && token_steps.is_ok() {
+            anyhow::bail!(
+                "expected a parse error for case {}, but both parsers succeeded",
+                case.name
+            );
+        }
+        if let Err(err) = dsl_steps.as_ref() {
+            let msg = err.to_string();
+            if !msg.contains(expected) {
+                anyhow::bail!(
+                    "DSL parser error for case {} did not match expectation.\nexpected: {}\nactual: {}",
+                    case.name,
+                    expected,
+                    msg
+                );
+            }
+        }
+        if let Err(err) = token_steps.as_ref() {
+            let msg = err.to_string();
+            if !msg.contains(expected) {
+                anyhow::bail!(
+                    "token parser error for case {} did not match expectation.\nexpected: {}\nactual: {}",
+                    case.name,
+                    expected,
+                    msg
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    let dsl_steps = dsl_steps.context("failed to parse DSL fixture")?;
+    let token_steps = token_steps?;
 
     if dsl_steps != token_steps {
         anyhow::bail!(

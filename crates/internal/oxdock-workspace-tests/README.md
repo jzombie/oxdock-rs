@@ -14,5 +14,6 @@ Parity fixtures live under `fixtures/parity/<case>/` and compare string DSL to t
 
 - `dsl.txt` holds the string-based DSL.
 - `tokens.rs` holds the braced-token version (the contents of a `script: { ... }` block).
+- If `expect_error.txt` exists, its contents must appear in the parser error message.
 
 The parity harness parses both and asserts their ASTs match.
