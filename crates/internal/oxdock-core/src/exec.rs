@@ -571,11 +571,15 @@ fn hash_path(
             }
         }
         EntryKind::File => {
-            hasher.update(b"F\0");
-            hasher.update(rel.as_bytes());
-            hasher.update(b"\0");
             let data = fs.read_file(path)?;
-            hasher.update(&data);
+            if rel.is_empty() {
+                hasher.update(&data);
+            } else {
+                hasher.update(b"F\0");
+                hasher.update(rel.as_bytes());
+                hasher.update(b"\0");
+                hasher.update(&data);
+            }
         }
     }
     Ok(())
