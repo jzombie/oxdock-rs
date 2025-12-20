@@ -39,6 +39,26 @@ fn safe_msg() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9_./-][a-zA-Z0-9_./ -]*"
         .prop_map(|s| s.trim().to_string())
         .prop_filter("Avoids comments", |s| !s.contains("//") && !s.contains("/*"))
+        // Avoid sticky characters next to whitespace, as TokenStream loses this distinction
+        // and macro_input.rs cannot perfectly reconstruct it without quotes.
+        // Sticky chars: / . - : =
+        .prop_filter("Avoids ambiguous spacing", |s| {
+            // TokenStream collapses multiple spaces into one, so we can't round-trip them
+            // without quoting, but quoting changes the AST (preserves quotes).
+            if s.contains("  ") {
+                return false;
+            }
+            let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
+            let chars: Vec<char> = s.chars().collect();
+            for i in 0..chars.len() - 1 {
+                let a = chars[i];
+                let b = chars[i + 1];
+                if (sticky(a) && b.is_whitespace()) || (a.is_whitespace() && sticky(b)) {
+                    return false;
+                }
+            }
+            true
+        })
 }
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
@@ -68,12 +88,31 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
 }
 
 fn arb_step() -> impl Strategy<Value = Step> {
-    (arb_guards(), arb_step_kind()).prop_map(|(guards, kind)| Step {
-        guards,
-        kind,
-        scope_enter: 0,
-        scope_exit: 0,
-    })
+    (arb_guards(), arb_step_kind())
+        .prop_map(|(guards, kind)| Step {
+            guards,
+            kind,
+            scope_enter: 0,
+            scope_exit: 0,
+        })
+        .prop_filter("Avoids ambiguous CAPTURE boundary", |step| {
+            if let StepKind::Capture { path, cmd } = &step.kind {
+                // Check if path ends with something that sticks to cmd start
+                if let (Some(last), Some(first)) = (path.chars().last(), cmd.chars().next()) {
+                    let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
+                    // If macro_input.rs would merge them (needs_space returns false)
+                    // needs_space is false if sticky(prev) || sticky(next)
+                    // AND not command/semicolon etc.
+                    if sticky(last) || sticky(first) {
+                        // They will merge.
+                        // But we want them separated (CAPTURE path cmd).
+                        // So this input is ambiguous for TokenStream.
+                        return false;
+                    }
+                }
+            }
+            true
+        })
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
@@ -119,10 +158,6 @@ proptest! {
         assert_steps_eq(&parsed_step, &step, &format!("String parse mismatch: {}", s));
 
         // 2. Parse tokens (if feature enabled)
-        // Note: This is disabled because TokenStream loses whitespace information that
-        // macro_input.rs cannot perfectly reconstruct (e.g. "a- a" vs "a-a").
-        // Since embed! is a convenience macro, users should quote ambiguous strings.
-        /*
         #[cfg(feature = "token-input")]
         {
             let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
@@ -135,6 +170,5 @@ proptest! {
 
             assert_steps_eq(&token_step, &step, &format!("Token parse mismatch: {}", s));
         }
-        */
     }
 }
