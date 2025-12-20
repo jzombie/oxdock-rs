@@ -38,7 +38,9 @@ fn safe_msg() -> impl Strategy<Value = String> {
     // Allow spaces and some punctuation, but avoid things that break the simple parser
     "[a-zA-Z0-9_./-][a-zA-Z0-9_./ -]*"
         .prop_map(|s| s.trim().to_string())
-        .prop_filter("Avoids comments", |s| !s.contains("//") && !s.contains("/*"))
+        .prop_filter("Avoids comments", |s| {
+            !s.contains("//") && !s.contains("/*")
+        })
         // Avoid sticky characters next to whitespace, as TokenStream loses this distinction
         // and macro_input.rs cannot perfectly reconstruct it without quotes.
         // Sticky chars: / . - : =
