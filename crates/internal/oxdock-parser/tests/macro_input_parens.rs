@@ -1,7 +1,7 @@
 #[cfg(feature = "proc-macro-api")]
 mod tests {
     use oxdock_parser::script_from_braced_tokens;
-    use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
+    use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 
     #[test]
     fn script_from_braced_tokens_handles_paren_group() {
@@ -38,6 +38,26 @@ mod tests {
         assert!(
             script.contains("BAR"),
             "expected none-delimiter content in script: {script}"
+        );
+    }
+
+    #[test]
+    fn script_from_braced_tokens_preserves_dollar_brace_interpolation() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("ECHO", Span::call_site())),
+            TokenTree::Punct(Punct::new('$', Spacing::Alone)),
+            TokenTree::Group(Group::new(
+                Delimiter::Brace,
+                TokenStream::from(TokenTree::Ident(Ident::new("RUN", Span::call_site()))),
+            )),
+        ]);
+
+        let script =
+            script_from_braced_tokens(&ts).expect("failed to render interpolation group");
+        assert!(
+            script.contains("${RUN}"),
+            "expected interpolation to be preserved, got: {script}"
         );
     }
 }

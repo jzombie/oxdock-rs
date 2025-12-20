@@ -90,7 +90,7 @@ fn finalize_line(lines: &mut Vec<String>, line: &mut String) {
 }
 
 fn sticky(c: char) -> bool {
-    matches!(c, '/' | '.' | '-' | ':' | '=')
+    matches!(c, '/' | '.' | '-' | ':' | '=' | '$' | '{' | '}')
 }
 
 fn needs_space(prev: char, next: char) -> bool {
@@ -142,6 +142,7 @@ fn walk(
     line: &mut String,
     lines: &mut Vec<String>,
     last_was_command: &mut bool,
+    in_interpolation: bool,
 ) -> Result<()> {
     for tt in ts {
         match tt {
@@ -149,21 +150,28 @@ fn walk(
                 if let Some((open, close)) = delim_pair(g.delimiter()) {
                     match g.delimiter() {
                         Delimiter::Brace => {
-                            finalize_line(lines, line);
-                            line.push(open);
-                            finalize_line(lines, line);
-                            *last_was_command = false;
-                            walk(g.stream(), line, lines, last_was_command)?;
-                            finalize_line(lines, line);
-                            line.push(close);
-                            finalize_line(lines, line);
-                            *last_was_command = false;
+                            if line.trim_end().ends_with('$') {
+                                push_fragment(line, &open.to_string(), false);
+                                *last_was_command = false;
+                                walk(g.stream(), line, lines, last_was_command, true)?;
+                                push_fragment(line, &close.to_string(), false);
+                            } else {
+                                finalize_line(lines, line);
+                                line.push(open);
+                                finalize_line(lines, line);
+                                *last_was_command = false;
+                                walk(g.stream(), line, lines, last_was_command, false)?;
+                                finalize_line(lines, line);
+                                line.push(close);
+                                finalize_line(lines, line);
+                                *last_was_command = false;
+                            }
                         }
                         Delimiter::Bracket => {
                             finalize_line(lines, line);
                             push_fragment(line, &open.to_string(), false);
                             finalize_line(lines, line);
-                            walk(g.stream(), line, lines, last_was_command)?;
+                            walk(g.stream(), line, lines, last_was_command, false)?;
                             finalize_line(lines, line);
                             push_fragment(line, &close.to_string(), false);
                             finalize_line(lines, line);
@@ -171,12 +179,12 @@ fn walk(
                         _ => {
                             push_fragment(line, &open.to_string(), *last_was_command);
                             *last_was_command = false;
-                            walk(g.stream(), line, lines, last_was_command)?;
+                            walk(g.stream(), line, lines, last_was_command, in_interpolation)?;
                             push_fragment(line, &close.to_string(), *last_was_command);
                         }
                     }
                 } else {
-                    walk(g.stream(), line, lines, last_was_command)?;
+                    walk(g.stream(), line, lines, last_was_command, in_interpolation)?;
                 }
             }
             TokenTree::Literal(lit) => {
@@ -191,6 +199,11 @@ fn walk(
             }
             TokenTree::Ident(ident) => {
                 let ident_text = ident.to_string();
+                if in_interpolation {
+                    push_fragment(line, &ident_text, false);
+                    *last_was_command = false;
+                    continue;
+                }
                 let is_command = super::Command::parse(&ident_text).is_some();
                 let trimmed = line.trim();
                 let guard_prefix = trimmed.starts_with('[');
@@ -215,7 +228,13 @@ pub fn script_from_braced_tokens(ts: &TokenStream2) -> Result<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut last_was_command = false;
-    walk(ts.clone(), &mut current, &mut lines, &mut last_was_command)?;
+    walk(
+        ts.clone(),
+        &mut current,
+        &mut lines,
+        &mut last_was_command,
+        false,
+    )?;
     finalize_line(&mut lines, &mut current);
     Ok(lines.join("\n"))
 }
