@@ -45,6 +45,23 @@ fn safe_msg() -> impl Strategy<Value = String> {
         .prop_filter("Avoids comments", |s| {
             !s.contains("//") && !s.contains("/*")
         })
+        // Avoid hyphenated words without whitespace (ambiguous in TokenStream).
+        .prop_filter("Avoids ambiguous hyphens", |s| {
+            let chars: Vec<char> = s.chars().collect();
+            for i in 0..chars.len() {
+                if chars[i] != '-' {
+                    continue;
+                }
+                let prev = i.checked_sub(1).and_then(|idx| chars.get(idx)).copied();
+                let next = chars.get(i + 1).copied();
+                if prev.is_some_and(|c| !c.is_whitespace())
+                    && next.is_some_and(|c| !c.is_whitespace())
+                {
+                    return false;
+                }
+            }
+            true
+        })
         // Avoid sticky characters next to whitespace, as TokenStream loses this distinction
         // and macro_input.rs cannot perfectly reconstruct it without quotes.
         // Sticky chars: / . - : =

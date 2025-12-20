@@ -11,7 +11,7 @@
 
 use super::{Command, Step, parse_script};
 use anyhow::Result;
-use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Delimiter, Spacing, TokenStream as TokenStream2, TokenTree};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token};
 
@@ -145,6 +145,13 @@ fn line_expects_inner_command(line: &str) -> bool {
     )
 }
 
+fn line_is_run_context(line: &str) -> bool {
+    matches!(
+        current_line_command(line),
+        Some(Command::Run | Command::RunBg | Command::Capture)
+    )
+}
+
 fn walk(
     ts: TokenStream2,
     line: &mut String,
@@ -153,7 +160,11 @@ fn walk(
     in_interpolation: bool,
     capture_has_inner: &mut bool,
 ) -> Result<()> {
-    for tt in ts {
+    let tokens: Vec<TokenTree> = ts.into_iter().collect();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let tt = tokens[idx].clone();
+        let next = tokens.get(idx + 1);
         match tt {
             TokenTree::Group(g) => {
                 if let Some((open, close)) = delim_pair(g.delimiter()) {
@@ -237,7 +248,18 @@ fn walk(
             }
             TokenTree::Punct(p) => {
                 let ch = p.as_char();
-                let force_space = *last_was_command && ch != ';';
+                let mut force_space = *last_was_command && ch != ';';
+                if ch == '-'
+                    && p.spacing() == Spacing::Alone
+                    && line_is_run_context(line)
+                    && matches!(next, Some(TokenTree::Ident(_) | TokenTree::Literal(_)))
+                {
+                    if let Some(prev) = line.chars().rev().find(|c| !c.is_whitespace()) {
+                        if prev.is_ascii_alphanumeric() || matches!(prev, ')' | ']' | '"' | '\'') {
+                            force_space = true;
+                        }
+                    }
+                }
                 push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;
             }
@@ -246,6 +268,7 @@ fn walk(
                 if in_interpolation {
                     push_fragment(line, &ident_text, false);
                     *last_was_command = false;
+                    idx += 1;
                     continue;
                 }
                 let is_command = super::Command::parse(&ident_text).is_some();
@@ -282,6 +305,7 @@ fn walk(
                 *last_was_command = is_command;
             }
         }
+        idx += 1;
     }
     Ok(())
 }

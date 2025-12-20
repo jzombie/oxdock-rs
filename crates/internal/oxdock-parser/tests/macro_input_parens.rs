@@ -78,4 +78,53 @@ mod tests {
             "expected capture to terminate before next command, got: {script}"
         );
     }
+
+    #[test]
+    fn script_from_braced_tokens_preserves_flag_spacing() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("RUN", Span::call_site())),
+            TokenTree::Ident(Ident::new("ls", Span::call_site())),
+            TokenTree::Punct(Punct::new('-', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("lsa", Span::call_site())),
+        ]);
+
+        let script = script_from_braced_tokens(&ts).expect("failed to render run args");
+        assert!(
+            script.contains("RUN ls -lsa"),
+            "expected flag spacing, got: {script}"
+        );
+    }
+
+    #[test]
+    fn script_from_braced_tokens_keeps_joint_hyphenated_words() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("RUN", Span::call_site())),
+            TokenTree::Ident(Ident::new("foo", Span::call_site())),
+            TokenTree::Punct(Punct::new('-', Spacing::Joint)),
+            TokenTree::Ident(Ident::new("bar", Span::call_site())),
+        ]);
+
+        let script = script_from_braced_tokens(&ts).expect("failed to render hyphenated args");
+        assert!(
+            script.contains("RUN foo-bar"),
+            "expected hyphenated word, got: {script}"
+        );
+    }
+
+    #[test]
+    fn script_from_braced_tokens_preserves_quoted_run_args() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("RUN", Span::call_site())),
+            TokenTree::Literal(proc_macro2::Literal::string("ls -lsa")),
+        ]);
+
+        let script = script_from_braced_tokens(&ts).expect("failed to render quoted run args");
+        assert!(
+            script.contains("RUN \"ls -lsa\""),
+            "expected quoted args preserved, got: {script}"
+        );
+    }
 }
