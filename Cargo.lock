@@ -189,7 +189,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "oxdock-buildtime-helpers"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-buildtime-macros"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fixture"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fs"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-parser"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-process"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
