@@ -36,7 +36,7 @@ pub fn current_head_commit(root: &GuardedPath) -> Result<Option<String>> {
     #[cfg(miri)]
     {
         let _ = root;
-        return Ok(None);
+        Ok(None)
     }
 
     #[cfg(not(miri))]
