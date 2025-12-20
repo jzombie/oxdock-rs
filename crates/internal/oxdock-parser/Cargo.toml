@@ -10,7 +10,7 @@ publish.workspace = true
 
 [features]
 default = []
-token-input = ["proc-macro2", "syn", "quote"]
+proc-macro-api = ["proc-macro2", "syn", "quote"]
 
 [dependencies]
 anyhow.workspace = true
@@ -23,4 +23,4 @@ pest_derive = "2.7"
 [dev-dependencies]
 indoc.workspace = true
 proptest = "1.9.0"
-oxdock-parser = { path = ".", features = ["token-input"] }
+oxdock-parser = { path = ".", features = ["proc-macro-api"] }

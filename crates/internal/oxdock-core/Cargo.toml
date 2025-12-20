@@ -16,7 +16,7 @@ build = []
 
 [features]
 default = []
-token-input = ["oxdock-parser/token-input"]
+proc-macro-api = ["oxdock-parser/proc-macro-api"]
 
 [dependencies]
 anyhow.workspace = true

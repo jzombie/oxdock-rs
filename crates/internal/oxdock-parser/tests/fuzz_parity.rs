@@ -1,5 +1,5 @@
 use oxdock_parser::ast::*;
-#[cfg(feature = "token-input")]
+#[cfg(feature = "proc-macro-api")]
 use oxdock_parser::parse_braced_tokens;
 use oxdock_parser::parse_script;
 use proptest::prelude::*;
@@ -158,7 +158,7 @@ proptest! {
         assert_steps_eq(&parsed_step, &step, &format!("String parse mismatch: {}", s));
 
         // 2. Parse tokens (if feature enabled)
-        #[cfg(feature = "token-input")]
+        #[cfg(feature = "proc-macro-api")]
         {
             let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
             let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");

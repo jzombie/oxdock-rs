@@ -1,12 +1,12 @@
 pub mod ast;
 mod lexer;
-#[cfg(feature = "token-input")]
+#[cfg(feature = "proc-macro-api")]
 mod macro_input;
 pub mod parser;
 
 pub use ast::*;
 pub use lexer::LANGUAGE_SPEC;
-#[cfg(feature = "token-input")]
+#[cfg(feature = "proc-macro-api")]
 pub use macro_input::{
     DslMacroInput, ScriptSource, parse_braced_tokens, script_from_braced_tokens,
 };
@@ -16,7 +16,7 @@ pub use parser::parse_script;
 mod tests {
     use super::*;
     use indoc::indoc;
-    #[cfg(feature = "token-input")]
+    #[cfg(feature = "proc-macro-api")]
     use quote::quote;
     use std::collections::HashMap;
 
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "token-input")]
+    #[cfg(feature = "proc-macro-api")]
     fn string_and_braced_scripts_produce_identical_ast() {
         let mut cases = Vec::new();
 
