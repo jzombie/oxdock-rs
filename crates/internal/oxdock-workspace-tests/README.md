@@ -7,3 +7,12 @@ Workspace-level fixtures and a libtest-mimic harness.
 - Workspace dependencies are patched to local paths at runtime.
 
 To add a fixture, create a new `fixtures/<name>/` folder with a `Cargo.toml` and source files.
+
+## DSL parity cases
+
+Parity fixtures live under `fixtures/parity/<case>/` and compare string DSL to token DSL.
+
+- `dsl.txt` holds the string-based DSL.
+- `tokens.rs` holds the braced-token version (the contents of a `script: { ... }` block).
+
+The parity harness parses both and asserts their ASTs match.

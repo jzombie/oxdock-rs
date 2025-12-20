@@ -431,6 +431,8 @@ dependencies = [
  "libtest-mimic",
  "oxdock-fixture",
  "oxdock-fs",
+ "oxdock-parser",
+ "proc-macro2",
 ]
 
 [[package]]
