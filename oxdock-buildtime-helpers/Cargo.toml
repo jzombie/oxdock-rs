@@ -1,0 +1,13 @@
+[package]
+name = "oxdock-buildtime-helpers"
+description = "Build script helpers for OxDock."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+oxdock-process.workspace = true
