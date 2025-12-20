@@ -16,9 +16,7 @@ fn main() {
     let args = Arguments::from_args();
 
     if is_isolated() {
-        eprintln!(
-            "Skipping DSL parity harness under isolated runner: requires filesystem access."
-        );
+        eprintln!("Skipping DSL parity harness under isolated runner: requires filesystem access.");
         libtest_mimic::run(&args, Vec::new()).exit();
     }
 

@@ -124,7 +124,9 @@ fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
         )
         .with_path_dependency(
             "oxdock-fs",
-            workspace_root.join("crates/internal/oxdock-fs")?.to_string(),
+            workspace_root
+                .join("crates/internal/oxdock-fs")?
+                .to_string(),
         )
         .with_path_dependency(
             "oxdock-process",

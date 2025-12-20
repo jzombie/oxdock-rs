@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow, bail};
 use crate::ast::COMMANDS;
+use anyhow::{Result, anyhow, bail};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 
@@ -29,8 +29,8 @@ pub enum RawToken<'a> {
 
 pub fn tokenize(input: &str) -> Result<Vec<RawToken<'_>>> {
     let mut tokens = Vec::new();
-    let mut pairs =
-        LanguageParser::parse(Rule::script, input).map_err(|err| anyhow!(format_pest_error(err)))?;
+    let mut pairs = LanguageParser::parse(Rule::script, input)
+        .map_err(|err| anyhow!(format_pest_error(err)))?;
     let Some(root) = pairs.next() else {
         return Ok(tokens);
     };
@@ -84,7 +84,10 @@ fn format_pest_error(err: pest::error::Error<Rule>) -> String {
 
     let mut msg = String::new();
     match &err.variant {
-        ErrorVariant::ParsingError { positives, negatives } => {
+        ErrorVariant::ParsingError {
+            positives,
+            negatives,
+        } => {
             msg.push_str("parse error");
             if !positives.is_empty() {
                 let expected = positives
