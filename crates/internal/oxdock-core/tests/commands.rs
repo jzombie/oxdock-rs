@@ -522,6 +522,51 @@ fn copy_git_via_script_simple() {
     miri,
     ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
 )]
+fn copy_git_includes_dirty_file() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    let repo = snapshot.join("repo_dirty").unwrap();
+    create_dirs(&repo);
+    let hello = repo.join("hello.txt").unwrap();
+    write_text(&hello, "git hello");
+
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    // Modify the tracked file without committing.
+    write_text(&hello, "dirty hello");
+
+    let script = "COPY_GIT --include-dirty HEAD hello.txt out_hello.txt";
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
+
+    assert_eq!(
+        read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
+        "dirty hello"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
 fn copy_git_directory_via_script() {
     let snapshot_temp = GuardedPath::tempdir().unwrap();
     let snapshot = guard_root(&snapshot_temp);

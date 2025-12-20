@@ -114,7 +114,7 @@ cargo +nightly miri test --workspace --all-features --lib --tests
 
 OxDock supports copying files or directories out of a Git repository at a specific revision via the `COPY_GIT` instruction.
 
-- Syntax: `COPY_GIT <rev> <src_path> <dst_path>`
+- Syntax: `COPY_GIT [--include-dirty] <rev> <src_path> <dst_path>`
   - `<rev>` is any git revision spec (branch, tag, or commit-ish) that `git` understands.
   - `<src_path>` is a path inside the repository (relative to the build context / local workspace).
   - `<dst_path>` is a path inside the current OxDock workspace where the content will be placed.
@@ -123,6 +123,7 @@ OxDock supports copying files or directories out of a Git repository at a specif
   - If `<src_path>` is a file in the given revision, OxDock uses `git show <rev>:<src_path>` and writes the blob to `<dst_path>`.
   - If `<src_path>` is a tree (directory), OxDock uses `git archive --format=tar <rev> <src_path>` and extracts the tree, then copies the extracted files into `<dst_path>`.
   - All reads are performed via git plumbing — OxDock does not check out the revision into the working directory.
+  - When `--include-dirty` is set, OxDock overlays the current working tree contents for `<src_path>` after the git copy, so uncommitted changes and untracked files are included.
 
 - Safety and containment:
   - `COPY_GIT` resolves `<src_path>` using the same unified resolver as `COPY`/`SYMLINK`. The source must resolve within the build context; absolute paths are treated as rooted at the build context and rejected if they escape.
@@ -155,6 +156,9 @@ COPY_GIT release path/to/config.toml app/config/config.toml
 
 # copy a directory from a specific commit
 COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
+
+# include uncommitted changes from the working tree
+COPY_GIT --include-dirty HEAD client/dist public/assets
 ```
 
 ## Guard blocks and multi-line conditions

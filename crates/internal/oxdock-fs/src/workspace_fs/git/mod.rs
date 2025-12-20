@@ -78,7 +78,13 @@ impl PathResolver {
         Ok(false)
     }
 
-    pub fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
+    pub fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()> {
         let source = self
             .resolve_copy_source(from)
             .with_context(|| format!("COPY_GIT failed to resolve source {}", from))?;
@@ -161,6 +167,20 @@ impl PathResolver {
                         }
                         self.write_file(to, &show.stdout)
                             .with_context(|| format!("writing git blob to {}", to.display()))?;
+                        if include_dirty {
+                            if let Some(parent) = to.as_path().parent() {
+                                let parent_guard = GuardedPath::new(to.root(), parent)?;
+                                self.create_dir_all(&parent_guard).with_context(|| {
+                                    format!("creating parent {}", parent.display())
+                                })?;
+                            }
+                            match self.entry_kind(&source)? {
+                                super::EntryKind::Dir => self.copy_dir_recursive(&source, to)?,
+                                super::EntryKind::File => {
+                                    self.copy_file(&source, to)?;
+                                }
+                            }
+                        }
                         return Ok(());
                     }
                 }
@@ -281,6 +301,20 @@ impl PathResolver {
                             bail!("submodule entries are not supported: {}", path_str);
                         }
                         _ => {}
+                    }
+                }
+            }
+
+            if include_dirty {
+                if let Some(parent) = to.as_path().parent() {
+                    let parent_guard = GuardedPath::new(to.root(), parent)?;
+                    self.create_dir_all(&parent_guard)
+                        .with_context(|| format!("creating parent {}", parent.display()))?;
+                }
+                match self.entry_kind(&source)? {
+                    super::EntryKind::Dir => self.copy_dir_recursive(&source, to)?,
+                    super::EntryKind::File => {
+                        self.copy_file(&source, to)?;
                     }
                 }
             }

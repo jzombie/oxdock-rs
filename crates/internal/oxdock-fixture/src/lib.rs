@@ -79,7 +79,6 @@ impl FixtureBuilder {
         self
     }
 
-
     /// Copy the template into a guarded temporary directory, returning a handle
     /// that cleans up automatically on drop.
     pub fn instantiate(self) -> Result<FixtureInstance> {

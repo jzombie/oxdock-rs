@@ -245,13 +245,18 @@ fn execute_steps<P: ProcessManager>(
                         copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
                             .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                     }
-                    StepKind::CopyGit { rev, from, to } => {
+                    StepKind::CopyGit {
+                        rev,
+                        from,
+                        to,
+                        include_dirty,
+                    } => {
                         let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
                             format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                         })?;
                         state
                             .fs
-                            .copy_from_git(rev, from, &to_abs)
+                            .copy_from_git(rev, from, &to_abs, *include_dirty)
                             .with_context(|| {
                                 format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                             })?;

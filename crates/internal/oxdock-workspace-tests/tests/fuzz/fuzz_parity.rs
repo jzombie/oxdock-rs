@@ -102,8 +102,14 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(StepKind::Cat),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::Capture { path, cmd }),
-        (safe_string(), safe_string(), safe_string())
-            .prop_map(|(rev, from, to)| StepKind::CopyGit { rev, from, to }),
+        (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
+            StepKind::CopyGit {
+                rev,
+                from,
+                to,
+                include_dirty: false,
+            }
+        }),
         (0i32..255).prop_map(StepKind::Exit),
     ]
 }

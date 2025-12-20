@@ -138,7 +138,13 @@ pub trait WorkspaceFs {
     #[allow(clippy::disallowed_types)]
     fn entry_kind_unguarded(&self, path: &UnguardedPath) -> Result<EntryKind>;
 
-    fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()>;
+    fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()>;
 }
 
 impl WorkspaceFs for PathResolver {
@@ -350,7 +356,13 @@ impl WorkspaceFs for PathResolver {
         }
     }
 
-    fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
-        PathResolver::copy_from_git(self, rev, from, to)
+    fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()> {
+        PathResolver::copy_from_git(self, rev, from, to, include_dirty)
     }
 }

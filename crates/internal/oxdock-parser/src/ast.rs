@@ -148,6 +148,7 @@ pub enum StepKind {
         rev: String,
         from: String,
         to: String,
+        include_dirty: bool,
     },
     Exit(i32),
 }
@@ -350,13 +351,30 @@ impl fmt::Display for StepKind {
             StepKind::Capture { path, cmd } => {
                 write!(f, "CAPTURE {} {}", quote_arg(path), quote_run(cmd))
             }
-            StepKind::CopyGit { rev, from, to } => write!(
-                f,
-                "COPY_GIT {} {} {}",
-                quote_arg(rev),
-                quote_arg(from),
-                quote_arg(to)
-            ),
+            StepKind::CopyGit {
+                rev,
+                from,
+                to,
+                include_dirty,
+            } => {
+                if *include_dirty {
+                    write!(
+                        f,
+                        "COPY_GIT --include-dirty {} {} {}",
+                        quote_arg(rev),
+                        quote_arg(from),
+                        quote_arg(to)
+                    )
+                } else {
+                    write!(
+                        f,
+                        "COPY_GIT {} {} {}",
+                        quote_arg(rev),
+                        quote_arg(from),
+                        quote_arg(to)
+                    )
+                }
+            }
             StepKind::Exit(code) => write!(f, "EXIT {}", code),
         }
     }
