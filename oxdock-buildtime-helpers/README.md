@@ -1,7 +1,11 @@
 # oxdock-buildtime-helpers
 
+
 Build-script helpers for forwarding Cargo feature/cfg information to OxDock's proc-macro
 execution environment.
+
+> **This crate is intended to be called from a `build.rs` build script. It is not
+meant to run at application runtime.**
 
 ## Why this exists
 
@@ -23,3 +27,7 @@ fn main() {
 - `emit_feature_envs()`: forward `CARGO_FEATURE_*` and `CARGO_CFG_FEATURE`
 - `emit_cfg_envs()`: forward `CARGO_CFG_*` derived from `rustc --print cfg`
 - `emit_feature_and_cfg_envs()`: calls both
+
+## License
+
+Licensed under the [Apache-2.0 License](../LICENSE).
