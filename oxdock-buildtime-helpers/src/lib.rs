@@ -219,9 +219,7 @@ mod tests {
 
         let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
         let mut cmd = oxdock_process::CommandBuilder::new(rustc);
-        cmd.arg(source.as_path())
-            .arg("-o")
-            .arg(exe.as_path());
+        cmd.arg(source.as_path()).arg("-o").arg(exe.as_path());
         let status = cmd.status().expect("compile fake rustc");
         assert!(status.success(), "expected fake rustc to compile");
 
@@ -234,9 +232,7 @@ mod tests {
         let _target = EnvGuard::set("TARGET", "x86_64-unknown-linux-gnu");
         // Assert the fake rustc binary ran by verifying the marker file was created.
         emit_cfg_envs().expect("emit cfg envs");
-        let marker_contents = resolver
-            .read_to_string(&marker)
-            .expect("read marker");
+        let marker_contents = resolver.read_to_string(&marker).expect("read marker");
         assert_eq!(marker_contents.trim(), "invoked");
     }
 }
