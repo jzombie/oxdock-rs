@@ -8,7 +8,7 @@ use oxdock_parser::{Step, StepKind};
 use oxdock_process::CommandBuilder;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use toml_edit::Document;
+use toml_edit::DocumentMut;
 
 type SetupFn = fn(&GuardedPath, &GuardedPath) -> Result<()>;
 type VerifyFn = fn(&GuardedPath, &GuardedPath) -> Result<()>;
@@ -17,10 +17,10 @@ type VerifyFn = fn(&GuardedPath, &GuardedPath) -> Result<()>;
 enum BuildContext {
     Local,
     LocalSubdir(&'static str),
+    Snapshot,
 }
 
 struct ScriptCase {
-    name: &'static str,
     build_context: BuildContext,
     setup: SetupFn,
     verify: VerifyFn,
@@ -69,7 +69,9 @@ fn load_coverage(resolver: &PathResolver) -> Result<CoverageSpec> {
     let contents = resolver
         .read_to_string(&path)
         .context("read coverage.toml")?;
-    let doc: Document = contents.parse().context("parse coverage.toml")?;
+    let doc = contents
+        .parse::<DocumentMut>()
+        .context("parse coverage.toml")?;
 
     let mut coverage = HashMap::new();
     if let Some(table) = doc.get("coverage").and_then(|item| item.as_table()) {
@@ -90,6 +92,8 @@ fn load_coverage(resolver: &PathResolver) -> Result<CoverageSpec> {
 
     let extras = doc
         .get("extras")
+        .and_then(|item| item.as_table())
+        .and_then(|table| table.get("scripts"))
         .and_then(|item| item.as_array())
         .map(|array| {
             array
@@ -278,6 +282,7 @@ fn run_case(
         BuildContext::LocalSubdir(rel) => local
             .join(rel)
             .with_context(|| format!("resolve build context {}", rel))?,
+        BuildContext::Snapshot => snapshot.clone(),
     };
 
     let result = run_steps_with_context(&snapshot, &build_context, steps);
@@ -332,8 +337,8 @@ fn setup_copy_inputs(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()>
     Ok(())
 }
 
-fn setup_symlink_inputs(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
-    let target_dir = local.join("target_dir")?;
+fn setup_symlink_inputs(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    let target_dir = snapshot.join("target_dir")?;
     create_dirs(&target_dir)?;
     write_text(&target_dir.join("inner.txt")?, "symlink target")?;
     Ok(())
@@ -533,7 +538,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/workdir.oxdock",
         ScriptCase {
-            name: "workdir",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_workdir,
@@ -543,7 +547,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/workspace.oxdock",
         ScriptCase {
-            name: "workspace",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_workspace,
@@ -553,7 +556,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/env.oxdock",
         ScriptCase {
-            name: "env",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_env,
@@ -563,7 +565,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/run.oxdock",
         ScriptCase {
-            name: "run",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_run,
@@ -573,7 +574,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/run_bg.oxdock",
         ScriptCase {
-            name: "run_bg",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_run_bg,
@@ -583,7 +583,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/echo.oxdock",
         ScriptCase {
-            name: "echo",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_echo,
@@ -593,7 +592,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/copy.oxdock",
         ScriptCase {
-            name: "copy",
             build_context: BuildContext::Local,
             setup: setup_copy_inputs,
             verify: verify_copy,
@@ -603,8 +601,7 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/symlink.oxdock",
         ScriptCase {
-            name: "symlink",
-            build_context: BuildContext::Local,
+            build_context: BuildContext::Snapshot,
             setup: setup_symlink_inputs,
             verify: verify_symlink,
             expect_error: None,
@@ -613,7 +610,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/mkdir.oxdock",
         ScriptCase {
-            name: "mkdir",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_mkdir,
@@ -623,7 +619,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/ls.oxdock",
         ScriptCase {
-            name: "ls",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_ls,
@@ -633,7 +628,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/cwd.oxdock",
         ScriptCase {
-            name: "cwd",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_cwd,
@@ -643,7 +637,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/cat.oxdock",
         ScriptCase {
-            name: "cat",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_cat,
@@ -653,7 +646,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/write.oxdock",
         ScriptCase {
-            name: "write",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_write,
@@ -663,7 +655,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/capture_to_file.oxdock",
         ScriptCase {
-            name: "capture_to_file",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_capture_to_file,
@@ -673,7 +664,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/copy_git.oxdock",
         ScriptCase {
-            name: "copy_git",
             build_context: BuildContext::LocalSubdir("repo"),
             setup: setup_copy_git,
             verify: verify_copy_git,
@@ -683,7 +673,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/hash_sha256.oxdock",
         ScriptCase {
-            name: "hash_sha256",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_hash_sha256,
@@ -693,7 +682,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/exit.oxdock",
         ScriptCase {
-            name: "exit",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: setup_noop,
@@ -703,7 +691,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/guards.oxdock",
         ScriptCase {
-            name: "guards",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_guards,
@@ -713,7 +700,6 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
     cases.insert(
         "scripts/scopes.oxdock",
         ScriptCase {
-            name: "scopes",
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_scopes,
@@ -740,7 +726,7 @@ fn extract_step_kind_variants(source: &str) -> Vec<String> {
             continue;
         }
 
-        if trimmed.starts_with('}') {
+        if trimmed == "}" {
             break;
         }
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('/') {
@@ -751,7 +737,8 @@ fn extract_step_kind_variants(source: &str) -> Vec<String> {
             .chars()
             .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
             .collect();
-        if !name.is_empty() {
+        if !name.is_empty() && name.chars().next().map(|ch| ch.is_ascii_uppercase()) == Some(true)
+        {
             variants.push(name);
         }
     }

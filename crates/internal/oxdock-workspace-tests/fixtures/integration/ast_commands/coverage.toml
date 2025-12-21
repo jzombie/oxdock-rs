@@ -17,4 +17,5 @@ CopyGit = ["scripts/copy_git.oxdock"]
 HashSha256 = ["scripts/hash_sha256.oxdock"]
 Exit = ["scripts/exit.oxdock"]
 
-extras = ["scripts/guards.oxdock", "scripts/scopes.oxdock"]
+[extras]
+scripts = ["scripts/guards.oxdock", "scripts/scopes.oxdock"]

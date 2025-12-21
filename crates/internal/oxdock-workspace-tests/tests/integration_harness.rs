@@ -108,6 +108,7 @@ fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
 
     let fixture = FixtureBuilder::new(spec.template.as_str())
         .context("failed to load fixture template")?
+        .with_workspace_root(workspace_root.as_path())
         .with_path_dependency(
             "oxdock-buildtime-macros",
             workspace_root.join("oxdock-buildtime-macros")?.to_string(),

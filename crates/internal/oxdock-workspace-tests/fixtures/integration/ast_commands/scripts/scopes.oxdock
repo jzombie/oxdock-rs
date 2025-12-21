@@ -1,4 +1,5 @@
-WORKDIR /
+ENV FOO=bar
+[env:FOO]
 {
   WORKDIR scoped
   WRITE inner.txt inner

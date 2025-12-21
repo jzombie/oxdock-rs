@@ -1,4 +1,5 @@
 MKDIR items
 WRITE items/a.txt a
 WRITE items/b.txt b
+LS items
 CAPTURE_TO_FILE ls.txt LS items

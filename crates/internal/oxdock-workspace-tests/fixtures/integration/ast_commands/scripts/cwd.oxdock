@@ -1,2 +1,3 @@
 WORKDIR a/b
+CWD
 CAPTURE_TO_FILE pwd.txt CWD
