@@ -43,3 +43,4 @@ Prefer encapsulation over scattered platform/test-runner checks.
 ## Workflow
 
 - **Autonomy**: When test failures are reported or observed, proceed to investigate and fix them without asking for confirmation unless there are multiple viable options or the change is risky/behavior-altering.
+- **Formatting**: Use `indoc` for multi-line Rust string literals in tests or fixtures when formatting clarity matters.

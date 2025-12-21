@@ -184,26 +184,59 @@ mod tests {
         assert!(lines.contains(&"cargo:rustc-env=CARGO_CFG_TARGET_OS=linux".to_string()));
     }
 
-    #[cfg(unix)]
+    #[test]
     #[cfg_attr(
         miri,
-        ignore = "spawns a fake rustc script; Miri does not support process execution"
+        ignore = "spawns a fake rustc binary; Miri does not support process execution"
     )]
-    #[test]
     fn emit_cfg_envs_runs_rustc_override() {
         let tempdir = GuardedPath::tempdir().expect("tempdir");
         let root = tempdir.as_guarded_path().clone();
         let resolver = PathResolver::new(root.as_path(), root.as_path()).expect("resolver");
-        let script = root.join("fake-rustc.sh").expect("script path");
-        let contents = b"#!/bin/sh\necho 'target_arch=\"x86_64\"'\necho unix\n";
+
+        let source = root.join("fake_rustc.rs").expect("source path");
+        let exe_name = if cfg!(windows) {
+            "fake-rustc.exe"
+        } else {
+            "fake-rustc"
+        };
+        let exe = root.join(exe_name).expect("exe path");
+        let contents = indoc::indoc! {r#"
+            use std::env;
+            use std::fs;
+
+            fn main() {
+                if let Ok(marker) = env::var("OXDOCK_FAKE_RUSTC_MARKER") {
+                    let _ = fs::write(marker, "invoked");
+                }
+                println!("target_arch=\"x86_64\"");
+                println!("custom_flag");
+            }
+        "#};
         resolver
-            .write_file(&script, contents)
-            .expect("write script");
-        resolver
-            .set_permissions_mode_unix(&script, 0o755)
-            .expect("chmod");
-        let _rustc = EnvGuard::set("RUSTC", script.display().as_str());
+            .write_file(&source, contents.as_bytes())
+            .expect("write source");
+
+        let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+        let mut cmd = oxdock_process::CommandBuilder::new(rustc);
+        cmd.arg(source.as_path())
+            .arg("-o")
+            .arg(exe.as_path());
+        let status = cmd.status().expect("compile fake rustc");
+        assert!(status.success(), "expected fake rustc to compile");
+
+        let marker = root.join("fake-rustc.marker").expect("marker path");
+        let _marker = EnvGuard::set("OXDOCK_FAKE_RUSTC_MARKER", marker.display().as_str());
+        let _rustc = EnvGuard::set("RUSTC", exe.display().as_str());
+        #[cfg(windows)]
+        let _target = EnvGuard::set("TARGET", "x86_64-pc-windows-msvc");
+        #[cfg(not(windows))]
         let _target = EnvGuard::set("TARGET", "x86_64-unknown-linux-gnu");
+        // Assert the fake rustc binary ran by verifying the marker file was created.
         emit_cfg_envs().expect("emit cfg envs");
+        let marker_contents = resolver
+            .read_to_string(&marker)
+            .expect("read marker");
+        assert_eq!(marker_contents.trim(), "invoked");
     }
 }
