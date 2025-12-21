@@ -1,0 +1,8 @@
+name = "skip_exec_rust_analyzer"
+args = ["check", "--quiet"]
+
+[env]
+RUST_ANALYZER_INTERNALS_DO_NOT_USE = "this is unstable"
+
+[expect]
+status = "success"

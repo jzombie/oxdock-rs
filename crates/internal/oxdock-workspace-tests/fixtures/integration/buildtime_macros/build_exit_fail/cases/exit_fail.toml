@@ -1,0 +1,12 @@
+name = "exit_fail"
+args = ["run", "--quiet"]
+
+[env]
+OXDOCK_EMBED_FORCE_REBUILD = "1"
+
+[expect]
+status = "failure"
+
+[expect.stderr]
+contains = ["execution error"]
+not_contains = ["no `DemoAssets` in `demo_assets`"]

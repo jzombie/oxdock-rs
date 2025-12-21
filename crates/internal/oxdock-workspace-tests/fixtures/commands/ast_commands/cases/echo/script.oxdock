@@ -1,0 +1,2 @@
+ECHO hello
+CAPTURE_TO_FILE echo.txt ECHO hello

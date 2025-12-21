@@ -1,0 +1,5 @@
+name = "hash_sha256"
+
+[expect.hash]
+file = "hash.txt"
+source = "hello"

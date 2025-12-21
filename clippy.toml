@@ -55,8 +55,8 @@ disallowed-types = [
   "tempfile::TempDir",
 ]
 
-# Disallow direct usage of `cfg!` macro to encourage using `oxdock_fs::is_isolated()`
-# or other abstractions.
+# Disallow direct usage of `cfg!` macro to avoid scattered platform checks; prefer
+# centralized abstractions or test-only `cfg_attr(miri, ignore = "...")` skips.
 disallowed-macros = [
   "std::cfg",
 ]

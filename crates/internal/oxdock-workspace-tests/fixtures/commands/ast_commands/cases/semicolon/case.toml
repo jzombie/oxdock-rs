@@ -1,0 +1,4 @@
+name = "semicolon"
+
+[expect]
+files = { "one.txt" = "1", "two.txt" = "2" }

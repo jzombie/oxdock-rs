@@ -1,6 +1,6 @@
 # oxdock-workspace-tests
 
-Workspace-level fixtures and a libtest-mimic harness.
+Workspace-level fixtures and a [libtest-mimic](https://crates.io/crates/libtest-mimic) harness.
 
 - Fixtures live under `fixtures/` as standalone Cargo projects (including nested subdirectories).
 - The harness auto-discovers directories with `Cargo.toml` and runs `cargo run --quiet` by default.
@@ -10,22 +10,29 @@ To add a fixture, create a new `fixtures/<name>/` (or nested) folder with a `Car
 
 ## Fixture expectations
 
-Fixtures can define an `expectations.txt` file to customize commands, environment,
-and expected output. When present, the harness runs one test per case in the file.
-Without it, the harness defaults to `cargo run --quiet` and expects success.
+Fixtures define expectations in `case.toml`. This keeps error handling and output
+assertions consistent across all harnesses. When present, the harness runs one
+test per case file. Without it, the harness defaults to `cargo run --quiet` and
+expects success.
 
-`expectations.txt` format:
+`case.toml` format:
 
-- `case: <name>` (optional, defaults to `default`)
-- `args: <cargo args>` (optional, defaults to `run --quiet`)
-- `env: KEY=VALUE` (optional, repeatable)
-- `env_remove: KEY` (optional, repeatable)
-- `expect: success|failure` (optional, defaults to `success`)
-- `stdout_contains: <text>` (optional, repeatable)
-- `stdout_not_contains: <text>` (optional, repeatable)
-- `stderr_contains: <text>` (optional, repeatable)
-- `stderr_not_contains: <text>` (optional, repeatable)
-- `---` separates multiple cases
+```
+name = "failure"
+args = ["run"]
+
+[expect]
+status = "failure"
+
+[expect.stderr]
+contains = ["failed to parse manifest"]
+
+[expect.error]
+contains = "failed to parse manifest"
+```
+
+Multiple cases can be defined under `cases/` as either `cases/<case>.toml` or
+`cases/<case>/case.toml`. Each case produces its own test invocation.
 
 ## Integration fixtures
 
@@ -38,7 +45,7 @@ Non-parity fixtures live under `fixtures/integration/`, for example:
 
 Fixtures used by the build-time macro integration tests live under
 `fixtures/integration/buildtime_macros/<name>/`. These are exercised by the same fixture
-harness via `expectations.txt` cases.
+harness via `case.toml` expectations.
 
 ## DSL parity cases
 
@@ -46,6 +53,6 @@ Parity fixtures live under `fixtures/parity/<case>/` and compare string DSL to t
 
 - `dsl.txt` holds the string-based DSL.
 - `tokens.rs` holds the braced-token version (the contents of a `script: { ... }` block).
-- If `expect_error.txt` exists, it must contain the full parser error message verbatim.
+- Errors are defined in `case.toml` under `[expect.error]` (supports `contains` or `equals`).
 
 The parity harness parses both and asserts their ASTs match.

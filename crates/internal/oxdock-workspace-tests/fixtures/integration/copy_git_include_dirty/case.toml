@@ -1,0 +1,5 @@
+name = "copy_git_include_dirty"
+args = ["run", "--quiet"]
+
+[expect]
+status = "success"

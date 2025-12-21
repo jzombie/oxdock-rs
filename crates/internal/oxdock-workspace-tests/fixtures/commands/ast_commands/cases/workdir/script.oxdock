@@ -1,0 +1,4 @@
+WORKDIR /
+MKDIR workspace
+WORKDIR workspace
+WRITE note.txt hi

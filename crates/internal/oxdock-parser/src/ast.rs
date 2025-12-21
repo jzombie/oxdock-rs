@@ -254,7 +254,7 @@ impl fmt::Display for Guard {
                 if *invert {
                     write!(f, "!")?
                 }
-                write!(f, "env:{}={}", key, value)
+                write!(f, "env:{}=={}", key, value)
             }
         }
     }

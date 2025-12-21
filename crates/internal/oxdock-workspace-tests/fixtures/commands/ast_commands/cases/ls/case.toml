@@ -1,0 +1,5 @@
+name = "ls"
+
+[expect.ls]
+file = "ls.txt"
+entries = ["a.txt", "b.txt"]

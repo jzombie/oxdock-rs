@@ -1,0 +1,5 @@
+name = "escape_read"
+setup = "read_escape"
+
+[expect.error]
+contains = "CAT"

@@ -1,0 +1,4 @@
+name = "workdir"
+
+[expect]
+files = { "workspace/note.txt" = "hi" }

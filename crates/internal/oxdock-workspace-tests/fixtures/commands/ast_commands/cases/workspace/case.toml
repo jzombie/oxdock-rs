@@ -1,0 +1,7 @@
+name = "workspace"
+
+[expect]
+files = { "snap.txt" = "snap", "snap2.txt" = "snap2" }
+
+[expect.local]
+files = { "local.txt" = "local" }

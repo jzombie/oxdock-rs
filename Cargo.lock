@@ -432,6 +432,7 @@ dependencies = [
  "oxdock-parser",
  "proc-macro2",
  "proptest",
+ "toml_edit",
 ]
 
 [[package]]

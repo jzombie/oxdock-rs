@@ -1,3 +1,0 @@
-case: copy_git_include_dirty
-args: run --quiet
-expect: success

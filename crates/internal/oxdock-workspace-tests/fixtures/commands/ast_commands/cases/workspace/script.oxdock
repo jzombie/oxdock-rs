@@ -1,0 +1,8 @@
+WORKDIR /
+WRITE snap.txt snap
+WORKSPACE LOCAL
+WORKDIR /
+WRITE local.txt local
+WORKSPACE SNAPSHOT
+WORKDIR /
+WRITE snap2.txt snap2

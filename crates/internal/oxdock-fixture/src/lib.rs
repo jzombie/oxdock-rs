@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 #[allow(clippy::disallowed_types)]
 use oxdock_fs::UnguardedPath;
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, WorkspaceFs, command_path};
 use oxdock_process::CommandBuilder;
 use std::collections::BTreeMap;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -15,6 +15,7 @@ pub struct FixtureBuilder {
     template: UnguardedPath,
     replacements: BTreeMap<String, DependencyReplacement>,
     workspace_root_env: Option<PathBuf>,
+    workspace_manifest_root: Option<PathBuf>,
 }
 
 #[allow(clippy::disallowed_types)]
@@ -46,6 +47,7 @@ impl FixtureBuilder {
             template: UnguardedPath::new(path),
             replacements: BTreeMap::new(),
             workspace_root_env: None,
+            workspace_manifest_root: None,
         })
     }
 
@@ -79,6 +81,14 @@ impl FixtureBuilder {
         self
     }
 
+    /// Provide a workspace root used only to resolve workspace dependency versions
+    /// when patching fixture manifests.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    pub fn with_workspace_manifest_root(mut self, root: impl AsRef<Path>) -> Self {
+        self.workspace_manifest_root = Some(root.as_ref().to_path_buf());
+        self
+    }
+
     /// Copy the template into a guarded temporary directory, returning a handle
     /// that cleans up automatically on drop.
     pub fn instantiate(self) -> Result<FixtureInstance> {
@@ -86,10 +96,15 @@ impl FixtureBuilder {
         let root = tempdir.as_guarded_path().clone();
         let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
 
-        resolver.copy_dir_from_unguarded(&self.template, &root)?;
+        copy_fixture_template(&resolver, &self.template, &root)?;
 
-        if !self.replacements.is_empty() {
-            patch_manifest(&resolver, &root, &self.replacements)?;
+        if !self.replacements.is_empty() || self.workspace_manifest_root.is_some() {
+            patch_manifest(
+                &resolver,
+                &root,
+                &self.replacements,
+                self.workspace_manifest_root.as_deref(),
+            )?;
         }
 
         let workspace_root_env = self.workspace_root_env;
@@ -125,10 +140,12 @@ impl FixtureInstance {
     }
 }
 
+#[allow(clippy::disallowed_types)]
 fn patch_manifest(
     resolver: &PathResolver,
     root: &GuardedPath,
     replacements: &BTreeMap<String, DependencyReplacement>,
+    workspace_manifest_root: Option<&Path>,
 ) -> Result<()> {
     let manifest_path = root.join("Cargo.toml")?;
     let contents = resolver
@@ -137,13 +154,14 @@ fn patch_manifest(
     let mut doc = contents
         .parse::<DocumentMut>()
         .context("failed to parse fixture manifest")?;
+    let workspace_versions = load_workspace_dependencies(resolver, workspace_manifest_root)?;
 
     for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
         let Some(item) = doc.get_mut(section) else {
             continue;
         };
         if let Item::Table(table) = item {
-            patch_dependency_table(table, replacements);
+            patch_dependency_table(table, replacements, &workspace_versions);
         }
     }
 
@@ -151,9 +169,39 @@ fn patch_manifest(
     Ok(())
 }
 
+#[allow(clippy::disallowed_types)]
+fn copy_fixture_template(
+    resolver: &PathResolver,
+    src: &UnguardedPath,
+    dst: &GuardedPath,
+) -> Result<()> {
+    resolver.create_dir_all(dst)?;
+    let entries = resolver
+        .read_dir_entries_unguarded(src)
+        .with_context(|| format!("reading {}", src))?;
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "target" {
+            continue;
+        }
+        let src_path = UnguardedPath::new(entry.path());
+        let dst_path = dst.join(&name)?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read entry type for {}", src_path))?;
+        if file_type.is_dir() {
+            copy_fixture_template(resolver, &src_path, &dst_path)?;
+        } else {
+            resolver.copy_file_from_unguarded(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn patch_dependency_table(
     table: &mut Table,
     replacements: &BTreeMap<String, DependencyReplacement>,
+    workspace_versions: &BTreeMap<String, String>,
 ) {
     for (name, replacement) in replacements {
         let Some(item) = table.get_mut(name) else {
@@ -162,6 +210,15 @@ fn patch_dependency_table(
         match replacement {
             DependencyReplacement::Path(path) => apply_path_replacement(item, path),
             DependencyReplacement::Version(version) => apply_version_replacement(item, version),
+        }
+    }
+
+    for (name, version) in workspace_versions {
+        let Some(item) = table.get_mut(name) else {
+            continue;
+        };
+        if has_workspace_flag(item) {
+            apply_version_replacement(item, version);
         }
     }
 }
@@ -217,6 +274,53 @@ fn insert_or_replace(table: &mut Table, key: &str, val: Value) {
     }
 }
 
+#[allow(clippy::disallowed_types)]
+fn load_workspace_dependencies(
+    resolver: &PathResolver,
+    workspace_root: Option<&Path>,
+) -> Result<BTreeMap<String, String>> {
+    let Some(root) = workspace_root else {
+        return Ok(BTreeMap::new());
+    };
+    let manifest = resolver
+        .read_to_string_unguarded(&UnguardedPath::new(root.join("Cargo.toml")))
+        .context("read workspace Cargo.toml")?;
+    let doc = manifest
+        .parse::<DocumentMut>()
+        .context("parse workspace Cargo.toml")?;
+    let mut out = BTreeMap::new();
+    let Some(deps) = doc
+        .get("workspace")
+        .and_then(|item| item.as_table())
+        .and_then(|table| table.get("dependencies"))
+        .and_then(|item| item.as_table())
+    else {
+        return Ok(out);
+    };
+    for (name, item) in deps.iter() {
+        if let Some(version) = item.as_str() {
+            out.insert(name.to_string(), version.to_string());
+            continue;
+        }
+        if let Some(table) = item.as_table()
+            && let Some(version) = table.get("version").and_then(|v| v.as_str())
+        {
+            out.insert(name.to_string(), version.to_string());
+        }
+    }
+    Ok(out)
+}
+
+fn has_workspace_flag(item: &Item) -> bool {
+    match item {
+        Item::Value(Value::InlineTable(table)) => {
+            table.get("workspace").and_then(|v| v.as_bool()) == Some(true)
+        }
+        Item::Table(table) => table.get("workspace").and_then(|v| v.as_bool()) == Some(true),
+        _ => false,
+    }
+}
+
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
@@ -268,7 +372,7 @@ mod tests {
             DependencyReplacement::Version("4.5.6".to_string()),
         );
 
-        patch_manifest(&resolver, &root, &replacements)?;
+        patch_manifest(&resolver, &root, &replacements, None)?;
 
         let rewritten = resolver.read_to_string(&manifest_path)?;
         let doc = rewritten.parse::<DocumentMut>()?;

@@ -1,0 +1,4 @@
+WORKDIR /
+SYMLINK client client
+WORKDIR client
+CAPTURE_TO_FILE seen.txt CAT version.txt

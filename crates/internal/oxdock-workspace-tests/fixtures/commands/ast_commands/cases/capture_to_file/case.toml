@@ -1,0 +1,4 @@
+name = "capture_to_file"
+
+[expect]
+files = { "out.txt" = "hello" }

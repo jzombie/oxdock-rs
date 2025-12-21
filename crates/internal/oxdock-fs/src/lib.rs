@@ -1,12 +1,5 @@
 use anyhow::{Context, Result};
 
-/// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
-/// where access to the host filesystem is restricted.
-#[allow(clippy::disallowed_macros)]
-pub fn is_isolated() -> bool {
-    cfg!(miri)
-}
-
 pub fn discover_workspace_root() -> Result<GuardedPath> {
     if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
         return GuardedPath::new_root_from_str(&root)

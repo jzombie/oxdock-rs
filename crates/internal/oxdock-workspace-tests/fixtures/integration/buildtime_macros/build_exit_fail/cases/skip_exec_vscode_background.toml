@@ -1,0 +1,9 @@
+name = "skip_exec_vscode_background"
+args = ["check", "--quiet"]
+env_remove = ["TERM"]
+
+[env]
+VSCODE_PID = "1234"
+
+[expect]
+status = "success"
