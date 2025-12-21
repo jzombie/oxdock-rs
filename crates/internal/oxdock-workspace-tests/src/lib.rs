@@ -59,10 +59,7 @@ pub mod harness {
         pub coverage_case_name: String,
     }
 
-    pub fn build_trials(
-        resolver: &PathResolver,
-        config: &HarnessConfig,
-    ) -> Result<Vec<Trial>> {
+    pub fn build_trials(resolver: &PathResolver, config: &HarnessConfig) -> Result<Vec<Trial>> {
         let fixtures = discover_fixtures(resolver, config)?;
         let tests: Vec<Trial> = fixtures
             .into_iter()
@@ -164,8 +161,7 @@ pub mod harness {
 
             let mut case = FixtureCase::default_case();
             case.name = name.clone();
-            case.env
-                .push((case_config.case_env.clone(), name.clone()));
+            case.env.push((case_config.case_env.clone(), name.clone()));
             cases.push(case);
         }
 
@@ -203,7 +199,8 @@ pub mod harness {
         spec: &FixtureSpec,
         case: &FixtureCase,
     ) -> Result<()> {
-        let workspace_root = discover_workspace_root().context("failed to locate workspace root")?;
+        let workspace_root =
+            discover_workspace_root().context("failed to locate workspace root")?;
 
         let mut builder = FixtureBuilder::new(spec.template.as_str())
             .context("failed to load fixture template")?

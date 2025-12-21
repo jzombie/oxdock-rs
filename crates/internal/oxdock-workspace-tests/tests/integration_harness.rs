@@ -18,13 +18,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    let fixtures_root = resolver
-        .root()
-        .join("fixtures")
-        .unwrap_or_else(|err| {
-            eprintln!("fixture harness failed to resolve fixtures root: {err:#}");
-            std::process::exit(1);
-        });
+    let fixtures_root = resolver.root().join("fixtures").unwrap_or_else(|err| {
+        eprintln!("fixture harness failed to resolve fixtures root: {err:#}");
+        std::process::exit(1);
+    });
 
     let mut config = HarnessConfig::new("integration", fixtures_root);
     config.exclude_root_dirs.push("commands".to_string());

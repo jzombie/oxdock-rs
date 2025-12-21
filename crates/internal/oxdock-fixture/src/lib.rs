@@ -184,9 +184,9 @@ fn copy_fixture_template(
         }
         let src_path = UnguardedPath::new(entry.path());
         let dst_path = dst.join(&name)?;
-        let file_type = entry.file_type().with_context(|| {
-            format!("failed to read entry type for {}", src_path)
-        })?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read entry type for {}", src_path))?;
         if file_type.is_dir() {
             copy_fixture_template(resolver, &src_path, &dst_path)?;
         } else {
