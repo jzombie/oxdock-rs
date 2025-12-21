@@ -65,8 +65,6 @@ fn commands_behave_cross_platform() {
     #[allow(clippy::disallowed_macros)]
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
-    } else if oxdock_fs::is_isolated() {
-        "sleep 1; printf %s \"$FOO\" > bg.txt"
     } else {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
     };
@@ -324,7 +322,7 @@ fn write_cmd_captures_output() {
     };
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Capture {
+        kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
             cmd: cmd.into(),
         },
@@ -351,7 +349,7 @@ fn capture_echo_interpolates_env() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "echo.txt".into(),
                 cmd: "ECHO value=${FOO}".into(),
             },
@@ -382,7 +380,7 @@ fn capture_ls_lists_entries_with_header() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "ls.txt".into(),
                 cmd: "LS".into(),
             },
@@ -415,7 +413,7 @@ fn capture_cat_emits_file_contents() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Capture {
+        kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
             cmd: "CAT note.txt".into(),
         },
@@ -440,7 +438,7 @@ fn capture_cwd_canonicalizes_and_writes() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "pwd.txt".into(),
                 cmd: "CWD".into(),
             },
@@ -514,6 +512,51 @@ fn copy_git_via_script_simple() {
     assert_eq!(
         read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
         "git hello"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
+fn copy_git_includes_dirty_file() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    let repo = snapshot.join("repo_dirty").unwrap();
+    create_dirs(&repo);
+    let hello = repo.join("hello.txt").unwrap();
+    write_text(&hello, "git hello");
+
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    // Modify the tracked file without committing.
+    write_text(&hello, "dirty hello");
+
+    let script = "COPY_GIT --include-dirty HEAD hello.txt out_hello.txt";
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
+
+    assert_eq!(
+        read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
+        "dirty hello"
     );
 }
 
@@ -618,8 +661,8 @@ fn env_exposes_git_commit_hash() {
         .expect("git rev-parse failed");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
-    let steps =
-        oxdock_parser::parse_script("CAPTURE out.txt ECHO ${WORKSPACE_GIT_COMMIT}").unwrap();
+    let steps = oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO ${WORKSPACE_GIT_COMMIT}")
+        .unwrap();
     run_steps(&repo, &steps).unwrap();
 
     assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
@@ -791,7 +834,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
         },
         Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "seen.txt".into(),
                 cmd: "CAT version.txt".into(),
             },

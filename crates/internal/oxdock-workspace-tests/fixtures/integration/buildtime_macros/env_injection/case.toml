@@ -1,0 +1,5 @@
+name = "env_injection"
+args = ["run", "--quiet", "--features", "oxdock_test"]
+
+[expect]
+status = "success"

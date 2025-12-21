@@ -1,0 +1,39 @@
+# coverage.toml maps StepKind variants to the case(s) that must exercise them.
+# The runner will:
+# - Fail if a new StepKind is added but no case is listed here.
+# - Fail if a listed case does not actually contain that StepKind.
+# - Allow extra cases (guards, escape checks, etc.) via [extras] without claiming
+#   StepKind coverage.
+[coverage]
+Workdir = ["workdir"]
+Workspace = ["workspace"]
+Env = ["env"]
+Run = ["run"]
+Echo = ["echo"]
+RunBg = ["run_bg"]
+Copy = ["copy"]
+Symlink = ["symlink"]
+Mkdir = ["mkdir"]
+Ls = ["ls"]
+Cwd = ["cwd"]
+Cat = ["cat"]
+Write = ["write"]
+CaptureToFile = ["capture_to_file"]
+CopyGit = ["copy_git"]
+HashSha256 = ["hash_sha256"]
+Exit = ["exit"]
+
+[extras]
+cases = [
+  "guards",
+  "scopes",
+  "escape_workdir",
+  "escape_write",
+  "escape_write_missing",
+  "escape_read",
+  "escape_symlink",
+  "workspace_symlink",
+  "semicolon",
+  "cat_stdout",
+  "cwd_stdout",
+]

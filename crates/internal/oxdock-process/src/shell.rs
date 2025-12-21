@@ -69,3 +69,78 @@ impl ShellLauncher {
         Command::new(program)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ShellLauncher, shell_cmd, shell_program};
+    use std::env;
+    use std::ffi::OsStr;
+    use std::sync::Mutex;
+
+    // For Windows, fixing COMSPEC override test race condition
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        value: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = env::var(key).ok();
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self { key, value: prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.value {
+                Some(value) => unsafe {
+                    env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    env::remove_var(self.key);
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn shell_program_prefers_env_override() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        #[cfg(windows)]
+        let _guard = EnvGuard::set("COMSPEC", "custom-cmd");
+        #[cfg(not(windows))]
+        let _guard = EnvGuard::set("SHELL", "custom-sh");
+        let program = shell_program();
+        #[cfg(windows)]
+        assert_eq!(program, "custom-cmd");
+        #[cfg(not(windows))]
+        assert_eq!(program, "custom-sh");
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "spawns shell command; Miri does not support process execution"
+    )]
+    #[test]
+    fn shell_launcher_run_with_output_captures_stdout() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let launcher = ShellLauncher;
+        let mut cmd = shell_cmd("echo hello");
+        let (status, stdout, _stderr) = launcher.run_with_output(&mut cmd).expect("run output");
+        assert!(status.success());
+        let out = String::from_utf8_lossy(&stdout);
+        assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn shell_launcher_program_arg_tracks_program() {
+        let launcher = ShellLauncher;
+        let cmd = launcher.program_arg("echo");
+        assert_eq!(cmd.get_program(), OsStr::new("echo"));
+    }
+}

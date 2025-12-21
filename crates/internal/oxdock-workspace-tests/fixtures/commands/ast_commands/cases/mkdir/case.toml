@@ -1,0 +1,4 @@
+name = "mkdir"
+
+[expect]
+dirs = ["a/b/c"]

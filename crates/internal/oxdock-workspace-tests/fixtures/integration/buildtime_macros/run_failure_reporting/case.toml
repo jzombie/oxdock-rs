@@ -1,0 +1,16 @@
+name = "run_failure_reports_cause"
+args = ["run", "--quiet"]
+
+[env]
+OXDOCK_EMBED_FORCE_REBUILD = "1"
+
+[expect]
+status = "failure"
+
+[expect.stderr]
+contains = [
+  "__oxdock_missing_command__",
+  "failed with status",
+  "filesystem snapshot",
+  "(command",
+]

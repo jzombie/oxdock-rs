@@ -428,6 +428,15 @@ fn embed_execution_is_skipped() -> bool {
         return true;
     }
 
+    // Skip when running under a Miri-configured build (e.g., clippy with --cfg miri),
+    // since proc-macro execution can touch filesystem APIs that Miri does not support.
+    if std::env::var("RUSTFLAGS")
+        .map(|flags| flags.contains("--cfg miri"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
     // Fallback: Check executable name
     if std::env::current_exe()
         .ok()
@@ -477,7 +486,7 @@ fn prepare_macro_plan(input: &DslMacroInput) -> syn::Result<MacroPlan> {
     let manifest_resolver = PathResolver::from_manifest_env()
         .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
 
-    if oxdock_fs::is_isolated() || embed_execution_is_skipped() {
+    if embed_execution_is_skipped() {
         return Ok(MacroPlan::Skip);
     }
 

@@ -34,7 +34,4 @@ syn.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]
-oxdock-embed.workspace = true
-oxdock-fixture.workspace = true
-oxdock-fs.workspace = true
-oxdock-process.workspace = true
+oxdock-process = { workspace = true }

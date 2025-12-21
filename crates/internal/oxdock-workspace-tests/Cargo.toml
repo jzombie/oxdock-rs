@@ -1,0 +1,35 @@
+[package]
+name = "oxdock-workspace-tests"
+description = "Workspace-level test harness and fixtures for OxDock"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# This crate should not be published
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+libtest-mimic.workspace = true
+oxdock-fixture.workspace = true
+oxdock-fs.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
+proc-macro2.workspace = true
+proptest.workspace = true
+
+[[test]]
+name = "integration_harness"
+harness = false
+
+[[test]]
+name = "parity_harness"
+harness = false
+
+[[test]]
+name = "commands_harness"
+harness = false

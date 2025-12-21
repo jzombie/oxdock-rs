@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::ExitStatus;
 
-use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs};
+use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{
     BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
     expand_command_env,
 };
+use sha2::{Digest, Sha256};
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -224,7 +225,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::RunBg(cmd) => {
                         if capture_output {
-                            bail!("RUN_BG is not supported inside CAPTURE");
+                            bail!("RUN_BG is not supported inside CAPTURE_TO_FILE");
                         }
                         let ctx = state.command_ctx();
                         let rendered = expand_command_env(cmd, &ctx);
@@ -245,16 +246,31 @@ fn execute_steps<P: ProcessManager>(
                         copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
                             .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
                     }
-                    StepKind::CopyGit { rev, from, to } => {
+                    StepKind::CopyGit {
+                        rev,
+                        from,
+                        to,
+                        include_dirty,
+                    } => {
                         let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
                             format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                         })?;
                         state
                             .fs
-                            .copy_from_git(rev, from, &to_abs)
+                            .copy_from_git(rev, from, &to_abs, *include_dirty)
                             .with_context(|| {
                                 format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                             })?;
+                    }
+                    StepKind::HashSha256 { path } => {
+                        let target = state
+                            .fs
+                            .resolve_read(&state.cwd, path)
+                            .with_context(|| format!("step {}: HASH_SHA256 {}", idx + 1, path))?;
+                        let mut hasher = Sha256::new();
+                        hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
+                        let digest = hasher.finalize();
+                        writeln!(out, "{:x}", digest)?;
                     }
 
                     StepKind::Symlink { from, to } => {
@@ -336,18 +352,19 @@ fn execute_steps<P: ProcessManager>(
                             .write_file(&target, rendered.as_bytes())
                             .with_context(|| format!("failed to write {}", target.display()))?;
                     }
-                    StepKind::Capture { path, cmd } => {
-                        let target = state
-                            .fs
-                            .resolve_write(&state.cwd, path)
-                            .with_context(|| format!("step {}: CAPTURE {}", idx + 1, path))?;
+                    StepKind::CaptureToFile { path, cmd } => {
+                        let target =
+                            state.fs.resolve_write(&state.cwd, path).with_context(|| {
+                                format!("step {}: CAPTURE_TO_FILE {}", idx + 1, path)
+                            })?;
                         state.fs.ensure_parent_dir(&target).with_context(|| {
                             format!("failed to create parent for {}", target.display())
                         })?;
-                        let steps = oxdock_parser::parse_script(cmd)
-                            .with_context(|| format!("step {}: CAPTURE parse failed", idx + 1))?;
+                        let steps = oxdock_parser::parse_script(cmd).with_context(|| {
+                            format!("step {}: CAPTURE_TO_FILE parse failed", idx + 1)
+                        })?;
                         if steps.len() != 1 {
-                            bail!("CAPTURE expects exactly one instruction");
+                            bail!("CAPTURE_TO_FILE expects exactly one instruction");
                         }
                         let mut sub_state = ExecState {
                             fs: {
@@ -525,6 +542,46 @@ fn describe_dir(
     let mut left = max_entries;
     helper(fs, root, root, 0, max_depth, &mut left, &mut out);
     out
+}
+
+fn hash_path(
+    fs: &dyn WorkspaceFs,
+    path: &GuardedPath,
+    rel: &str,
+    hasher: &mut Sha256,
+) -> Result<()> {
+    match fs.entry_kind(path)? {
+        EntryKind::Dir => {
+            hasher.update(b"D\0");
+            hasher.update(rel.as_bytes());
+            hasher.update(b"\0");
+            let mut entries = fs.read_dir_entries(path)?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let child = path.join(&name)?;
+                let child_rel = if rel.is_empty() {
+                    name
+                } else {
+                    format!("{}/{}", rel, name)
+                };
+                let child_rel = to_forward_slashes(&child_rel);
+                hash_path(fs, &child, &child_rel, hasher)?;
+            }
+        }
+        EntryKind::File => {
+            let data = fs.read_file(path)?;
+            if rel.is_empty() {
+                hasher.update(&data);
+            } else {
+                hasher.update(b"F\0");
+                hasher.update(rel.as_bytes());
+                hasher.update(b"\0");
+                hasher.update(&data);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -772,11 +829,11 @@ mod tests {
     }
 
     #[test]
-    fn capture_rejects_multiple_instructions() {
+    fn capture_to_file_rejects_multiple_instructions() {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let capture = Step {
             guards: Vec::new(),
-            kind: StepKind::Capture {
+            kind: StepKind::CaptureToFile {
                 path: "out.txt".into(),
                 cmd: "WRITE one 1; WRITE two 2".into(),
             },
@@ -788,7 +845,7 @@ mod tests {
         let err = run_steps_with_manager(fs, &[capture], mock).unwrap_err();
         assert!(
             err.to_string()
-                .contains("CAPTURE expects exactly one instruction"),
+                .contains("CAPTURE_TO_FILE expects exactly one instruction"),
             "unexpected error: {err}"
         );
     }

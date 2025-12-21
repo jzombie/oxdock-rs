@@ -1,0 +1,9 @@
+name = "exec_vscode_integrated_terminal"
+args = ["check", "--quiet"]
+
+[env]
+VSCODE_PID = "1234"
+TERM = "xterm-256color"
+
+[expect]
+status = "failure"

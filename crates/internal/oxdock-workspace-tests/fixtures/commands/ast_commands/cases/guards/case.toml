@@ -1,0 +1,13 @@
+name = "guards"
+
+[expect]
+files = { "guarded.txt" = "yes", "guarded_not.txt" = "yes", "guarded_or.txt" = "yes" }
+missing = ["guarded_skip.txt"]
+
+[expect.platform.unix]
+files = { "guarded_unix.txt" = "yes" }
+missing = ["guarded_windows.txt"]
+
+[expect.platform.windows]
+files = { "guarded_windows.txt" = "yes" }
+missing = ["guarded_unix.txt"]

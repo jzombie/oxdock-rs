@@ -342,10 +342,17 @@ impl WorkspaceFs for MockFs {
         self.guard_from_rel(rel)
     }
 
-    fn copy_from_git(&self, _rev: &str, _from: &str, _to: &GuardedPath) -> Result<()> {
+    fn copy_from_git(
+        &self,
+        _rev: &str,
+        _from: &str,
+        _to: &GuardedPath,
+        _include_dirty: bool,
+    ) -> Result<()> {
         bail!("git copy unsupported")
     }
 }
 
+// TODO: Remove
 /// Backward compatible alias while downstream code migrates.
 pub type MockWorkspaceFs = MockFs;

@@ -6,9 +6,9 @@
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/Made%20with-Rust-black?&logo=Rust" alt="Made with Rust" />
   </a>
-  <a href="https://docs.rs/oxdock">
+  <!-- <a href="https://docs.rs/oxdock">
     <img src="https://img.shields.io/docsrs/oxdock" alt="docs.rs" />
-  </a>
+  </a> -->
   <a href="https://github.com/jzombie/oxdock-rs/actions/workflows/rust-tests.yml?query=branch%3Amain+event%3Apush">
     <img src="https://img.shields.io/github/actions/workflow/status/jzombie/oxdock-rs/rust-tests.yml?branch=main&label=Miri&logo=github" alt="Miri status" />
   </a>
@@ -24,7 +24,6 @@
 </div>
 
 # OxDock
-
 
 OxDock is a Docker-inspired language that is [run during compile-time](./oxdock-buildtime-macros/) of Rust programs, embedding resources directly into the binary's data section without allocating heap space when the program starts. The generated asset structs are pure Rust and work in `no_std` targets, providing simple file-like access to embedded resources without depending on `std`.
 
@@ -114,7 +113,7 @@ cargo +nightly miri test --workspace --all-features --lib --tests
 
 OxDock supports copying files or directories out of a Git repository at a specific revision via the `COPY_GIT` instruction.
 
-- Syntax: `COPY_GIT <rev> <src_path> <dst_path>`
+- Syntax: `COPY_GIT [--include-dirty] <rev> <src_path> <dst_path>`
   - `<rev>` is any git revision spec (branch, tag, or commit-ish) that `git` understands.
   - `<src_path>` is a path inside the repository (relative to the build context / local workspace).
   - `<dst_path>` is a path inside the current OxDock workspace where the content will be placed.
@@ -123,9 +122,10 @@ OxDock supports copying files or directories out of a Git repository at a specif
   - If `<src_path>` is a file in the given revision, OxDock uses `git show <rev>:<src_path>` and writes the blob to `<dst_path>`.
   - If `<src_path>` is a tree (directory), OxDock uses `git archive --format=tar <rev> <src_path>` and extracts the tree, then copies the extracted files into `<dst_path>`.
   - All reads are performed via git plumbing — OxDock does not check out the revision into the working directory.
+  - When `--include-dirty` is set, OxDock overlays the current working tree contents for `<src_path>` after the git copy, so uncommitted changes and untracked files are included.
 
 - Safety and containment:
-  - `COPY_GIT` reads from the configured build context (the local repository path passed to the runner) and is only allowed to read within that build context. Attempts to reference absolute paths for `<src_path>` are rejected.
+  - `COPY_GIT` resolves `<src_path>` using the same unified resolver as `COPY`/`SYMLINK`. The source must resolve within the build context; absolute paths are treated as rooted at the build context and rejected if they escape.
   - The destination `<dst_path>` is validated against OxDock's workspace containment rules: writes outside the allowed workspace root are rejected.
 
 - Requirements and caveats:
@@ -138,9 +138,9 @@ OxDock supports copying files or directories out of a Git repository at a specif
 
 ## Workspaces & Filesystem (draft)
 
-- **How workspaces are created:** OxDock materializes a clean workspace by using Git's archival capabilities (the CLI runs `git archive`/`tar` under the hood). That produces a copy of the repository content at HEAD without the `.git` metadata; the result is very fast and lightweight compared to full checkouts. Treat this materialized tree as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
+- **How workspaces are created:** OxDock materializes a clean workspace as an isolated temporary directory. It does not implicitly populate that directory from Git; scripts can pull files in via `COPY` (from the build context) or `COPY_GIT` (from a specific revision). Treat this workspace as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
 
-- **Typical usage pattern:** the materialized workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is just a filesystem snapshot it is safe to run multiple concurrent experiments without changing the original repo.
+- **Typical usage pattern:** the temporary workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
 
 - **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate-internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
 
@@ -155,6 +155,9 @@ COPY_GIT release path/to/config.toml app/config/config.toml
 
 # copy a directory from a specific commit
 COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
+
+# include uncommitted changes from the working tree
+COPY_GIT --include-dirty HEAD client/dist public/assets
 ```
 
 ## Guard blocks and multi-line conditions
@@ -162,7 +165,7 @@ COPY_GIT 7a2b1c4 src/lib/my_assets public/assets
 Guards can now span multiple lines and wrap entire blocks of commands. This makes it easy to express platform or environment specific logic without repeating the same `[]` prefix on every line.
 
 ```text
-[ env:PROFILE=release,
+[ env:PROFILE==release,
   linux
 ]
 WRITE linux-release.txt generated

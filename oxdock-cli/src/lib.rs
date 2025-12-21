@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
 use oxdock_process::CommandBuilder;
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
@@ -73,6 +73,45 @@ impl Options {
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
     execute_with_shell_runner(opts, workspace_root, run_shell, true)
+}
+
+pub struct ExecutionResult {
+    pub tempdir: GuardedTempDir,
+    pub final_cwd: GuardedPath,
+}
+
+pub fn execute_with_result(opts: Options, workspace_root: GuardedPath) -> Result<ExecutionResult> {
+    if opts.shell {
+        bail!("execute_with_result does not support --shell");
+    }
+
+    let tempdir = GuardedPath::tempdir().context("failed to create temp dir")?;
+    let temp_root = tempdir.as_guarded_path().clone();
+
+    let script = match &opts.script {
+        ScriptSource::Path(path) => {
+            let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+            resolver
+                .read_to_string(path)
+                .with_context(|| format!("failed to read script at {}", path.display()))?
+        }
+        ScriptSource::Stdin => {
+            let mut buf = String::new();
+            io::stdin()
+                .lock()
+                .read_to_string(&mut buf)
+                .context("failed to read script from stdin")?;
+            buf
+        }
+    };
+
+    let mut final_cwd = temp_root.clone();
+    if !script.trim().is_empty() {
+        let steps = parse_script(&script)?;
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
+    }
+
+    Ok(ExecutionResult { tempdir, final_cwd })
 }
 
 fn execute_with_shell_runner<F>(
@@ -395,7 +434,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::PathResolver;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     #[cfg_attr(
         miri,
@@ -529,6 +568,103 @@ mod tests {
             assert_eq!(args, expected, "expected exact windows shell argv");
         }
 
+        Ok(())
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_requires_script_path_value() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let mut args = vec!["--script".to_string()].into_iter();
+        let err = Options::parse(&mut args, workspace.as_guarded_path())
+            .expect_err("expected missing path error");
+        assert!(err.to_string().contains("--script requires a path"));
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_script_path_and_shell() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let workspace_root = workspace.as_guarded_path().clone();
+        let script_path = workspace_root.join("script.txt").expect("script path");
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
+            .expect("resolver");
+        resolver
+            .write_file(&script_path, b"WRITE out.txt hi")
+            .expect("write script");
+        let mut args = vec![
+            "--script".to_string(),
+            "script.txt".to_string(),
+            "--shell".to_string(),
+        ]
+        .into_iter();
+        let opts = Options::parse(&mut args, &workspace_root).expect("parse");
+        assert!(opts.shell);
+        match opts.script {
+            ScriptSource::Path(path) => assert_eq!(path, script_path),
+            ScriptSource::Stdin => panic!("expected path script"),
+        }
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn execute_with_result_runs_script() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let workspace_root = workspace.as_guarded_path().clone();
+        let script_path = workspace_root.join("script.txt").expect("script path");
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())
+            .expect("resolver");
+        resolver
+            .write_file(&script_path, b"WRITE out.txt hi")
+            .expect("write script");
+        let opts = Options {
+            script: ScriptSource::Path(script_path),
+            shell: false,
+        };
+        let ExecutionResult { tempdir, final_cwd } =
+            execute_with_result(opts, workspace_root).expect("execute");
+        assert_eq!(tempdir.as_guarded_path(), &final_cwd);
+        let temp_resolver = PathResolver::new(
+            tempdir.as_guarded_path().root(),
+            tempdir.as_guarded_path().root(),
+        )
+        .expect("resolver");
+        let out = tempdir.as_guarded_path().join("out.txt").expect("out path");
+        let contents = temp_resolver.read_to_string(&out).expect("read out");
+        assert_eq!(contents.trim(), "hi");
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn execute_for_test_invokes_shell_runner() -> Result<()> {
+        let workspace = GuardedPath::tempdir()?;
+        let workspace_root = workspace.as_guarded_path().clone();
+        let script_path = workspace_root.join("empty.txt")?;
+        let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
+        resolver.write_file(&script_path, b"")?;
+        let opts = Options {
+            script: ScriptSource::Path(script_path),
+            shell: true,
+        };
+        let called = RefCell::new(None::<(String, String)>);
+        execute_for_test(opts, workspace_root.clone(), |cwd, workspace| {
+            called.replace(Some((cwd.display(), workspace.display())));
+            Ok(())
+        })?;
+        let seen = called.borrow().clone().expect("shell runner called");
+        assert_eq!(seen.1, workspace_root.display());
         Ok(())
     }
 }

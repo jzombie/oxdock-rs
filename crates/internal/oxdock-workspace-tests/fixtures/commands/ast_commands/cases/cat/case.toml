@@ -1,0 +1,4 @@
+name = "cat"
+
+[expect]
+files = { "out.txt" = "hello" }

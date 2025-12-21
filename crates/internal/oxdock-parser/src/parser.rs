@@ -258,18 +258,34 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 to: args.remove(0),
             }
         }
-        Rule::capture_command => {
+        Rule::capture_to_file_command => {
             let path = parse_single_arg_from_pair(pair.clone())?;
             let cmd = parse_run_args_from_pair(pair)?;
-            StepKind::Capture { path, cmd }
+            StepKind::CaptureToFile { path, cmd }
         }
         Rule::copy_git_command => {
-            let mut args = parse_args(pair)?;
+            let mut args = Vec::new();
+            let mut include_dirty = false;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::include_dirty_flag => include_dirty = true,
+                    Rule::argument => args.push(parse_argument(inner)?),
+                    _ => {}
+                }
+            }
+            if args.len() != 3 {
+                bail!("COPY_GIT expects 3 arguments (rev, from, to)");
+            }
             StepKind::CopyGit {
                 rev: args.remove(0),
                 from: args.remove(0),
                 to: args.remove(0),
+                include_dirty,
             }
+        }
+        Rule::hash_sha256_command => {
+            let arg = parse_single_arg(pair)?;
+            StepKind::HashSha256 { path: arg }
         }
         Rule::symlink_command => {
             let mut args = parse_args(pair)?;

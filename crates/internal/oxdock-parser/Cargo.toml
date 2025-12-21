@@ -22,5 +22,3 @@ syn = { workspace = true, optional = true }
 
 [dev-dependencies]
 indoc.workspace = true
-oxdock-parser = { path = ".", features = ["proc-macro-api"] }
-proptest.workspace = true

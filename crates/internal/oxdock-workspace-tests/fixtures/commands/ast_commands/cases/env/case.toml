@@ -1,0 +1,4 @@
+name = "env"
+
+[expect]
+files = { "env.txt" = "value=bar" }

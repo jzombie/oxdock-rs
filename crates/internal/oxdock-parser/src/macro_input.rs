@@ -152,7 +152,7 @@ fn line_expects_inner_command(line: &str) -> bool {
 fn line_is_run_context(line: &str) -> bool {
     matches!(
         current_line_command(line),
-        Some(Command::Run | Command::RunBg | Command::Capture)
+        Some(Command::Run | Command::RunBg | Command::CaptureToFile)
     )
 }
 
@@ -299,7 +299,7 @@ fn walk(
                 let mut should_finalize = false;
                 if is_command && !trimmed_empty && !guard_prefix {
                     should_finalize =
-                        !matches!(current_line_command(trimmed), Some(Command::Capture));
+                        !matches!(current_line_command(trimmed), Some(Command::CaptureToFile));
                 }
                 if is_command
                     && !trimmed_empty

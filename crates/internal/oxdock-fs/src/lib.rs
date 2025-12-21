@@ -1,12 +1,5 @@
 use anyhow::{Context, Result};
 
-/// Returns true if the filesystem is running in an isolated environment (e.g. Miri)
-/// where access to the host filesystem is restricted.
-#[allow(clippy::disallowed_macros)]
-pub fn is_isolated() -> bool {
-    cfg!(miri)
-}
-
 pub fn discover_workspace_root() -> Result<GuardedPath> {
     if let Ok(root) = std::env::var("OXDOCK_WORKSPACE_ROOT") {
         return GuardedPath::new_root_from_str(&root)
@@ -29,9 +22,7 @@ pub fn discover_workspace_root() -> Result<GuardedPath> {
 }
 
 pub mod workspace_fs;
-pub use workspace_fs::git::{
-    GitIdentity, WorkspaceSnapshot, copy_workspace_to, current_head_commit, ensure_git_identity,
-};
+pub use workspace_fs::git::{GitIdentity, current_head_commit, ensure_git_identity};
 pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, to_forward_slashes};
@@ -140,7 +131,13 @@ pub trait WorkspaceFs {
     #[allow(clippy::disallowed_types)]
     fn entry_kind_unguarded(&self, path: &UnguardedPath) -> Result<EntryKind>;
 
-    fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()>;
+    fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()>;
 }
 
 impl WorkspaceFs for PathResolver {
@@ -352,7 +349,13 @@ impl WorkspaceFs for PathResolver {
         }
     }
 
-    fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
-        PathResolver::copy_from_git(self, rev, from, to)
+    fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()> {
+        PathResolver::copy_from_git(self, rev, from, to, include_dirty)
     }
 }

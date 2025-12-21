@@ -1,0 +1,4 @@
+name = "escape_write"
+
+[expect.error]
+contains = "WRITE"

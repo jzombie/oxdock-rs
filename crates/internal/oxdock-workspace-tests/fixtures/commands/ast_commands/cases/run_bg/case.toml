@@ -1,0 +1,4 @@
+name = "run_bg"
+
+[expect]
+files = { "bg.txt" = "bar" }

@@ -11,14 +11,9 @@ use super::PathResolver;
 use crate::GuardedPath;
 #[cfg(not(miri))]
 use anyhow::bail;
-#[cfg(not(miri))]
-#[allow(clippy::disallowed_types)]
-use std::path::PathBuf;
 
 pub mod config;
-pub mod snapshot;
 pub use config::{GitIdentity, ensure_git_identity};
-pub use snapshot::{WorkspaceSnapshot, copy_workspace_to};
 
 #[allow(clippy::disallowed_types)]
 pub fn git_root_from_path(start: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -83,11 +78,21 @@ impl PathResolver {
         Ok(false)
     }
 
-    pub fn copy_from_git(&self, rev: &str, from: &str, to: &GuardedPath) -> Result<()> {
+    pub fn copy_from_git(
+        &self,
+        rev: &str,
+        from: &str,
+        to: &GuardedPath,
+        include_dirty: bool,
+    ) -> Result<()> {
+        let source = self
+            .resolve_copy_source(from)
+            .with_context(|| format!("COPY_GIT failed to resolve source {}", from))?;
+
         #[cfg(miri)]
         {
             let _ = rev;
-            let source = self.resolve_copy_source(from)?;
+            let _ = include_dirty;
             if let Some(parent) = to.as_path().parent() {
                 let parent_guard = GuardedPath::new(to.root(), parent)?;
                 self.create_dir_all(&parent_guard)
@@ -104,9 +109,24 @@ impl PathResolver {
 
         #[cfg(not(miri))]
         {
-            if PathBuf::from(from).is_absolute() {
-                bail!("COPY_GIT source must be relative to build context");
+            if source.root() != self.build_context.as_path() {
+                bail!("COPY_GIT source must resolve within build context");
             }
+            let rel = source
+                .as_path()
+                .strip_prefix(self.build_context.as_path())
+                .with_context(|| {
+                    format!(
+                        "COPY_GIT source {} is not under build context {}",
+                        source.display(),
+                        self.build_context.display()
+                    )
+                })?;
+            let rel = if rel.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                super::to_forward_slashes(&rel.to_string_lossy())
+            };
 
             let _ = self
                 .check_access_with_root(&self.root, to.as_path(), AccessMode::Write)
@@ -125,7 +145,7 @@ impl PathResolver {
                 let mut cmd = self.git_command();
                 cmd.arg("cat-file")
                     .arg("-t")
-                    .arg(format!("{}:{}", rev, from));
+                    .arg(format!("{}:{}", rev, rel));
                 cmd.output()
             };
 
@@ -135,10 +155,10 @@ impl PathResolver {
                 let typ = String::from_utf8_lossy(&tout.stdout).trim().to_string();
                 if typ == "blob" {
                     let mut show_cmd = self.git_command();
-                    show_cmd.arg("show").arg(format!("{}:{}", rev, from));
+                    show_cmd.arg("show").arg(format!("{}:{}", rev, rel));
                     let show = show_cmd
                         .output()
-                        .with_context(|| format!("failed to run git show for {}:{}", rev, from))?;
+                        .with_context(|| format!("failed to run git show for {}:{}", rev, rel))?;
 
                     if show.status.success() {
                         if let Some(parent) = to.as_path().parent() {
@@ -148,6 +168,20 @@ impl PathResolver {
                         }
                         self.write_file(to, &show.stdout)
                             .with_context(|| format!("writing git blob to {}", to.display()))?;
+                        if include_dirty {
+                            if let Some(parent) = to.as_path().parent() {
+                                let parent_guard = GuardedPath::new(to.root(), parent)?;
+                                self.create_dir_all(&parent_guard).with_context(|| {
+                                    format!("creating parent {}", parent.display())
+                                })?;
+                            }
+                            match self.entry_kind(&source)? {
+                                super::EntryKind::Dir => self.copy_dir_recursive(&source, to)?,
+                                super::EntryKind::File => {
+                                    self.copy_file(&source, to)?;
+                                }
+                            }
+                        }
                         return Ok(());
                     }
                 }
@@ -160,18 +194,18 @@ impl PathResolver {
                 .arg("-z")
                 .arg(rev)
                 .arg("--")
-                .arg(from);
+                .arg(&rel);
             let ls = ls_cmd
                 .output()
-                .with_context(|| format!("failed to run git ls-tree for {}:{}", rev, from))?;
+                .with_context(|| format!("failed to run git ls-tree for {}:{}", rev, rel))?;
 
             if !ls.status.success() {
-                bail!("git ls-tree failed for {}:{}", rev, from);
+                bail!("git ls-tree failed for {}:{}", rev, rel);
             }
 
             let out = ls.stdout;
             if out.is_empty() {
-                bail!("path {} not found in rev {}", from, rev);
+                bail!("path {} not found in rev {}", rel, rev);
             }
 
             for chunk in out.split(|b| *b == 0) {
@@ -188,9 +222,9 @@ impl PathResolver {
                     let _hash = parts.next().unwrap_or("");
 
                     let path_str = String::from_utf8_lossy(path).into_owned();
-                    let rel = if path_str.starts_with(&format!("{}/", from)) {
-                        path_str[from.len() + 1..].to_string()
-                    } else if path_str == from {
+                    let rel = if path_str.starts_with(&format!("{}/", rel)) {
+                        path_str[rel.len() + 1..].to_string()
+                    } else if path_str == rel {
                         String::new()
                     } else {
                         path_str.clone()
@@ -268,6 +302,20 @@ impl PathResolver {
                             bail!("submodule entries are not supported: {}", path_str);
                         }
                         _ => {}
+                    }
+                }
+            }
+
+            if include_dirty {
+                if let Some(parent) = to.as_path().parent() {
+                    let parent_guard = GuardedPath::new(to.root(), parent)?;
+                    self.create_dir_all(&parent_guard)
+                        .with_context(|| format!("creating parent {}", parent.display()))?;
+                }
+                match self.entry_kind(&source)? {
+                    super::EntryKind::Dir => self.copy_dir_recursive(&source, to)?,
+                    super::EntryKind::File => {
+                        self.copy_file(&source, to)?;
                     }
                 }
             }
