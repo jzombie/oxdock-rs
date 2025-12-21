@@ -287,7 +287,7 @@ mod tests {
         let script = format!(
             indoc!(
                 r#"
-                [env:PROFILE={0}] WRITE hit.txt yes
+                [env:PROFILE=={0}] WRITE hit.txt yes
                 [env:PROFILE!={0}] WRITE miss.txt no
                 "#
             ),
@@ -320,7 +320,7 @@ mod tests {
         let script = format!(
             indoc!(
                 r#"
-                [env:{k},env:{k}=ok] WRITE hit.txt yes
+                [env:{k},env:{k}==ok] WRITE hit.txt yes
                 WRITE always.txt ok
                 "#
             ),

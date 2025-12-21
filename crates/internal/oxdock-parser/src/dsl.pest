@@ -41,7 +41,7 @@ guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | "]" | linebreak | "//" | "/
 
 env_comparison = { not_equals | equals }
 
-equals = { "=" ~ env_value }
+equals = { "==" ~ env_value }
 
 not_equals = { "!=" ~ env_value }
 

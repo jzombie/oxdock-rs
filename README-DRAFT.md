@@ -165,7 +165,7 @@ COPY_GIT --include-dirty HEAD client/dist public/assets
 Guards can now span multiple lines and wrap entire blocks of commands. This makes it easy to express platform or environment specific logic without repeating the same `[]` prefix on every line.
 
 ```text
-[ env:PROFILE=release,
+[ env:PROFILE==release,
   linux
 ]
 WRITE linux-release.txt generated
