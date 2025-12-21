@@ -50,6 +50,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    libtest_mimic::run(&args, tests).exit();
+    let result = libtest_mimic::run(&args, tests);
     drop(temp_target);
+    result.exit();
 }

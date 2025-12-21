@@ -15,6 +15,7 @@ anyhow.workspace = true
 libtest-mimic.workspace = true
 oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
+toml_edit.workspace = true
 
 [dev-dependencies]
 oxdock-parser = { workspace = true, features = ["proc-macro-api"] }

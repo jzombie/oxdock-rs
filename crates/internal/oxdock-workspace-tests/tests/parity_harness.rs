@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use libtest_mimic::{Arguments, Failed, Trial};
 use oxdock_fs::{EntryKind, PathResolver, is_isolated};
 use oxdock_parser::{Step, parse_braced_tokens, parse_script};
+use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
 use proc_macro2::TokenStream;
 use std::str::FromStr;
 
@@ -9,7 +10,7 @@ struct ParityCase {
     name: String,
     dsl: String,
     tokens: String,
-    expect_error: Option<String>,
+    expect_error: Option<ErrorExpectation>,
 }
 
 fn main() {
@@ -74,17 +75,7 @@ fn discover_cases(resolver: &PathResolver) -> Result<Vec<ParityCase>> {
             let token_contents = resolver
                 .read_to_string(&tokens)
                 .with_context(|| format!("failed to read tokens fixture {name}"))?;
-            let expect_error = if matches!(
-                resolver.entry_kind(&case_root.join("expect_error.txt")?),
-                Ok(EntryKind::File)
-            ) {
-                let contents = resolver
-                    .read_to_string(&case_root.join("expect_error.txt")?)
-                    .context("failed to read expect_error.txt")?;
-                Some(contents)
-            } else {
-                None
-            };
+            let expect_error = expectations::load_error_expectation(resolver, &case_root)?;
             cases.push(ParityCase {
                 name,
                 dsl: dsl_contents,
@@ -119,8 +110,16 @@ fn run_case_inner(case: &ParityCase) -> Result<()> {
                 token_error.is_some()
             );
         }
-        verify_error("DSL", &case.name, dsl_error.unwrap(), expected)?;
-        verify_error("token", &case.name, token_error.unwrap(), expected)?;
+        expectations::assert_error_matches(
+            expected,
+            dsl_error.unwrap(),
+            &format!("DSL parser error for case {}", case.name),
+        )?;
+        expectations::assert_error_matches(
+            expected,
+            token_error.unwrap(),
+            &format!("token parser error for case {}", case.name),
+        )?;
         return Ok(());
     }
 
@@ -145,16 +144,4 @@ fn render_steps(steps: &[Step]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn verify_error(kind: &str, case: &str, err: &anyhow::Error, expected: &str) -> Result<()> {
-    let msg = err.to_string().replace("\r\n", "\n");
-    let expected = expected.replace("\r\n", "\n");
-    let expected = expected.trim_end();
-    if msg != expected {
-        anyhow::bail!(
-            "{kind} parser error for case {case} did not match expected message.\nexpected:\n{expected}\n\nactual:\n{msg}"
-        );
-    }
-    Ok(())
 }

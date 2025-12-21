@@ -4,7 +4,8 @@ pub mod harness {
     use anyhow::{Context, Result, anyhow};
     use libtest_mimic::Trial;
     use oxdock_fixture::FixtureBuilder;
-    use oxdock_fs::{GuardedPath, PathResolver, command_path, discover_workspace_root};
+    use oxdock_fs::{EntryKind, GuardedPath, PathResolver, command_path, discover_workspace_root};
+    use toml_edit::{DocumentMut, Item};
 
     #[derive(Clone)]
     pub struct FixtureSpec {
@@ -19,6 +20,7 @@ pub mod harness {
         pub env: Vec<(String, String)>,
         pub env_remove: Vec<String>,
         pub expect_success: bool,
+        pub error_expectation: Option<super::expectations::ErrorExpectation>,
         pub stdout_contains: Vec<String>,
         pub stdout_not_contains: Vec<String>,
         pub stderr_contains: Vec<String>,
@@ -111,19 +113,29 @@ pub mod harness {
             }
         }
 
-        let expectations_path = config
-            .fixtures_root
-            .join(&spec.name)?
-            .join("expectations.txt")?;
+        let fixture_root = config.fixtures_root.join(&spec.name)?;
+        let case_path = fixture_root.join("case.toml")?;
+        let cases_dir = fixture_root.join("cases")?;
 
-        if resolver.entry_kind(&expectations_path).is_err() {
-            return Ok(vec![FixtureCase::default_case()]);
+        let has_case = matches!(resolver.entry_kind(&case_path), Ok(EntryKind::File));
+        let has_cases_dir = matches!(resolver.entry_kind(&cases_dir), Ok(EntryKind::Dir));
+        if has_case && has_cases_dir {
+            return Err(anyhow!(
+                "fixture {} defines both case.toml and cases/",
+                spec.name
+            ));
         }
 
-        let contents = resolver
-            .read_to_string(&expectations_path)
-            .context("failed to read expectations.txt")?;
-        parse_expectations(&contents)
+        if has_cases_dir {
+            return load_case_dir_cases(resolver, &cases_dir);
+        }
+
+        if has_case {
+            let case = load_case_file(resolver, &case_path, &spec.name)?;
+            return Ok(vec![case]);
+        }
+
+        Ok(vec![FixtureCase::default_case()])
     }
 
     fn load_case_dir_fixtures(
@@ -248,19 +260,28 @@ pub mod harness {
                     .join("crates/internal/oxdock-process")?
                     .to_string(),
             )
+            .with_path_dependency(
+                "oxdock-workspace-tests",
+                workspace_root
+                    .join("crates/internal/oxdock-workspace-tests")?
+                    .to_string(),
+            )
             .with_path_dependency("oxdock-cli", workspace_root.join("oxdock-cli")?.to_string())
             .instantiate()
             .context("failed to instantiate fixture")?;
 
-        let mut owned_target = None;
+        let owned_target = if config.set_temp_target_dir && config.shared_target_dir.is_none() {
+            Some(GuardedPath::tempdir().context("create temp target dir")?)
+        } else {
+            None
+        };
         let temp_target = if config.set_temp_target_dir {
             if let Some(shared) = &config.shared_target_dir {
                 Some(shared.clone())
             } else {
-                let temp = GuardedPath::tempdir().context("create temp target dir")?;
-                let guard = temp.as_guarded_path().clone();
-                owned_target = Some(temp);
-                Some(guard)
+                owned_target
+                    .as_ref()
+                    .map(|temp| temp.as_guarded_path().clone())
             }
         } else {
             None
@@ -299,6 +320,17 @@ pub mod harness {
             );
         }
 
+        if let Some(expectation) = &case.error_expectation {
+            if output.success() {
+                anyhow::bail!("fixture {} expected error, got success", spec.name);
+            }
+            super::expectations::assert_text_matches(
+                expectation,
+                &stderr,
+                &format!("fixture {} error output", spec.name),
+            )?;
+        }
+
         assert_contains(&stdout, &case.stdout_contains, "stdout", spec)?;
         assert_not_contains(&stdout, &case.stdout_not_contains, "stdout", spec)?;
         assert_contains(&stderr, &case.stderr_contains, "stderr", spec)?;
@@ -315,6 +347,7 @@ pub mod harness {
                 env: Vec::new(),
                 env_remove: Vec::new(),
                 expect_success: true,
+                error_expectation: None,
                 stdout_contains: Vec::new(),
                 stdout_not_contains: Vec::new(),
                 stderr_contains: Vec::new(),
@@ -323,61 +356,144 @@ pub mod harness {
         }
     }
 
-    fn parse_expectations(contents: &str) -> Result<Vec<FixtureCase>> {
+    fn load_case_dir_cases(resolver: &PathResolver, cases_dir: &GuardedPath) -> Result<Vec<FixtureCase>> {
+        let entries = resolver
+            .read_dir_entries(cases_dir)
+            .context("failed to read cases directory")?;
         let mut cases = Vec::new();
-        let mut current = FixtureCase::default_case();
-        let mut has_content = false;
 
-        for (idx, raw_line) in contents.lines().enumerate() {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
+        for entry in entries {
+            let file_type = entry
+                .file_type()
+                .context("failed to read case entry type")?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
                 continue;
             }
-            if line == "---" {
-                if has_content {
-                    cases.push(current);
-                    current = FixtureCase::default_case();
-                    has_content = false;
+
+            let entry_path = cases_dir.join(&name)?;
+            if file_type.is_dir() {
+                let case_path = entry_path.join("case.toml")?;
+                if matches!(resolver.entry_kind(&case_path), Ok(EntryKind::File)) {
+                    cases.push(load_case_file(resolver, &case_path, &name)?);
                 }
-                continue;
-            }
-            has_content = true;
-            if let Some(rest) = line.strip_prefix("case:") {
-                current.name = rest.trim().to_string();
-            } else if let Some(rest) = line.strip_prefix("args:") {
-                current.args = rest.split_whitespace().map(|s| s.to_string()).collect();
-            } else if let Some(rest) = line.strip_prefix("env:") {
-                if let Some((k, v)) = rest.trim().split_once('=') {
-                    current.env.push((k.to_string(), v.to_string()));
-                } else {
-                    return Err(anyhow!("line {}: env requires KEY=VALUE", idx + 1));
-                }
-            } else if let Some(rest) = line.strip_prefix("env_remove:") {
-                current.env_remove.push(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("expect:") {
-                match rest.trim() {
-                    "success" => current.expect_success = true,
-                    "failure" => current.expect_success = false,
-                    other => return Err(anyhow!("line {}: invalid expect {}", idx + 1, other)),
-                }
-            } else if let Some(rest) = line.strip_prefix("stdout_contains:") {
-                current.stdout_contains.push(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("stdout_not_contains:") {
-                current.stdout_not_contains.push(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("stderr_contains:") {
-                current.stderr_contains.push(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("stderr_not_contains:") {
-                current.stderr_not_contains.push(rest.trim().to_string());
-            } else {
-                return Err(anyhow!("line {}: unrecognized directive", idx + 1));
+            } else if file_type.is_file() && name.ends_with(".toml") {
+                let default_name = name.trim_end_matches(".toml");
+                cases.push(load_case_file(resolver, &entry_path, default_name)?);
             }
         }
 
-        if has_content {
-            cases.push(current);
-        }
-
+        cases.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(cases)
+    }
+
+    fn load_case_file(
+        resolver: &PathResolver,
+        case_path: &GuardedPath,
+        default_name: &str,
+    ) -> Result<FixtureCase> {
+        let contents = resolver
+            .read_to_string(case_path)
+            .with_context(|| format!("read {}", case_path.display()))?;
+        let doc = contents.parse::<DocumentMut>().context("parse case.toml")?;
+        let mut case = FixtureCase::default_case();
+        case.name = doc
+            .get("name")
+            .and_then(|item| item.as_str())
+            .unwrap_or(default_name)
+            .to_string();
+
+        if let Some(item) = doc.get("args") {
+            case.args = parse_string_list(item, "args")?;
+        }
+        if let Some(item) = doc.get("env") {
+            case.env = parse_env_table(item)?;
+        }
+        if let Some(item) = doc.get("env_remove") {
+            case.env_remove = parse_string_list(item, "env_remove")?;
+        }
+
+        let mut expect_success_override = None;
+        if let Some(expect) = doc.get("expect").and_then(|item| item.as_table()) {
+            if let Some(status) = expect.get("status").and_then(|item| item.as_str()) {
+                expect_success_override = Some(parse_expect_status(status)?);
+            }
+            if let Some(stdout) = expect.get("stdout").and_then(|item| item.as_table()) {
+                if let Some(item) = stdout.get("contains") {
+                    case.stdout_contains = parse_string_list(item, "expect.stdout.contains")?;
+                }
+                if let Some(item) = stdout.get("not_contains") {
+                    case.stdout_not_contains =
+                        parse_string_list(item, "expect.stdout.not_contains")?;
+                }
+            }
+            if let Some(stderr) = expect.get("stderr").and_then(|item| item.as_table()) {
+                if let Some(item) = stderr.get("contains") {
+                    case.stderr_contains = parse_string_list(item, "expect.stderr.contains")?;
+                }
+                if let Some(item) = stderr.get("not_contains") {
+                    case.stderr_not_contains =
+                        parse_string_list(item, "expect.stderr.not_contains")?;
+                }
+            }
+        }
+
+        case.error_expectation = super::expectations::parse_error_expectation(&doc)?;
+        if case.error_expectation.is_some() {
+            if expect_success_override == Some(true) {
+                return Err(anyhow!(
+                    "case {} cannot expect success with expect.error",
+                    case.name
+                ));
+            }
+            if expect_success_override.is_none() {
+                case.expect_success = false;
+            }
+        }
+        if let Some(expect_success) = expect_success_override {
+            case.expect_success = expect_success;
+        }
+
+        Ok(case)
+    }
+
+    fn parse_env_table(item: &Item) -> Result<Vec<(String, String)>> {
+        let table = item
+            .as_table()
+            .ok_or_else(|| anyhow!("env must be a table"))?;
+        let mut env = Vec::new();
+        for (key, value) in table.iter() {
+            let value = value
+                .as_str()
+                .ok_or_else(|| anyhow!("env {} must be a string", key))?;
+            env.push((key.to_string(), value.to_string()));
+        }
+        Ok(env)
+    }
+
+    fn parse_string_list(item: &Item, label: &str) -> Result<Vec<String>> {
+        if let Some(array) = item.as_array() {
+            let mut values = Vec::new();
+            for entry in array.iter() {
+                let value = entry
+                    .as_str()
+                    .ok_or_else(|| anyhow!("{label} entries must be strings"))?;
+                values.push(value.to_string());
+            }
+            return Ok(values);
+        }
+        if let Some(value) = item.as_str() {
+            return Ok(vec![value.to_string()]);
+        }
+        Err(anyhow!("{label} must be a string or array of strings"))
+    }
+
+    fn parse_expect_status(value: &str) -> Result<bool> {
+        match value {
+            "success" => Ok(true),
+            "failure" => Ok(false),
+            other => Err(anyhow!("expect.status must be success or failure, got {}", other)),
+        }
     }
 
     fn assert_contains(
@@ -470,5 +586,108 @@ pub mod harness {
         }
 
         Ok(())
+    }
+}
+
+pub mod expectations {
+    use anyhow::{Context, Result, anyhow};
+    use oxdock_fs::{EntryKind, GuardedPath, PathResolver};
+    use toml_edit::DocumentMut;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum ErrorExpectation {
+        Contains(String),
+        Equals(String),
+    }
+
+    pub fn load_error_expectation(
+        resolver: &PathResolver,
+        case_root: &GuardedPath,
+    ) -> Result<Option<ErrorExpectation>> {
+        let case_path = case_root.join("case.toml")?;
+        if !matches!(resolver.entry_kind(&case_path), Ok(EntryKind::File)) {
+            return Ok(None);
+        }
+        let contents = resolver
+            .read_to_string(&case_path)
+            .with_context(|| format!("read {}", case_path.display()))?;
+        let doc = contents
+            .parse::<DocumentMut>()
+            .context("parse case.toml")?;
+        parse_error_expectation(&doc)
+    }
+
+    pub fn parse_error_expectation(doc: &DocumentMut) -> Result<Option<ErrorExpectation>> {
+        let mut out = None;
+
+        if let Some(value) = doc.get("expect_error_contains").and_then(|item| item.as_str()) {
+            set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
+        }
+        if let Some(value) = doc.get("expect_error_equals").and_then(|item| item.as_str()) {
+            set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
+        }
+
+        if let Some(expect) = doc.get("expect").and_then(|item| item.as_table()) {
+            if let Some(error) = expect.get("error").and_then(|item| item.as_table()) {
+                if let Some(value) = error.get("contains").and_then(|item| item.as_str()) {
+                    set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
+                }
+                if let Some(value) = error.get("equals").and_then(|item| item.as_str()) {
+                    set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub fn assert_error_matches(
+        expectation: &ErrorExpectation,
+        err: &anyhow::Error,
+        context: &str,
+    ) -> Result<()> {
+        assert_text_matches(expectation, &err.to_string(), context)
+    }
+
+    pub fn assert_text_matches(
+        expectation: &ErrorExpectation,
+        actual: &str,
+        context: &str,
+    ) -> Result<()> {
+        let actual = normalize_error_text(actual);
+        match expectation {
+            ErrorExpectation::Contains(expected) => {
+                let expected = normalize_error_text(expected);
+                if !actual.contains(&expected) {
+                    anyhow::bail!(
+                        "{context} did not contain expected error text.\nexpected fragment:\n{expected}\n\nactual:\n{actual}"
+                    );
+                }
+            }
+            ErrorExpectation::Equals(expected) => {
+                let expected = normalize_error_text(expected);
+                if actual != expected {
+                    anyhow::bail!(
+                        "{context} did not match expected error text.\nexpected:\n{expected}\n\nactual:\n{actual}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn set_expectation(
+        slot: &mut Option<ErrorExpectation>,
+        next: ErrorExpectation,
+    ) -> Result<()> {
+        if slot.is_some() {
+            return Err(anyhow!("only one error expectation can be set"));
+        }
+        *slot = Some(next);
+        Ok(())
+    }
+
+    fn normalize_error_text(input: &str) -> String {
+        input.replace("\r\n", "\n").trim_end().to_string()
     }
 }

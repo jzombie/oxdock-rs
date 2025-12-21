@@ -1,5 +1,0 @@
-case: guard_scope
-args: run --quiet
-env: OXDOCK_EMBED_FORCE_REBUILD=1
-env: TEST_SCOPE=1
-expect: success

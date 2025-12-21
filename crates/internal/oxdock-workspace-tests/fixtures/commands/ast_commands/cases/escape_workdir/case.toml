@@ -1,2 +1,4 @@
 name = "escape_workdir"
-expect_error_contains = "WORKDIR"
+
+[expect.error]
+contains = "WORKDIR"

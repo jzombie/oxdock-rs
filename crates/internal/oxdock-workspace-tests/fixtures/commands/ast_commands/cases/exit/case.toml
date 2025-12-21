@@ -1,5 +1,7 @@
 name = "exit"
-expect_error_contains = "EXIT requested with code 5"
+
+[expect.error]
+contains = "EXIT requested with code 5"
 
 [expect]
 files = { "before.txt" = "ok", "nested_before.txt" = "ok" }

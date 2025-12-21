@@ -1,3 +1,0 @@
-case: no_std_embed
-args: check --quiet
-expect: success

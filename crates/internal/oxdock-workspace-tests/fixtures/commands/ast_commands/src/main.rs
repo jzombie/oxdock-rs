@@ -6,6 +6,7 @@ use oxdock_fs::{
 };
 use oxdock_parser::{Step, StepKind};
 use oxdock_process::CommandBuilder;
+use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
@@ -70,7 +71,7 @@ struct CaseSpec {
     script_rel: String,
     build_context: BuildContext,
     setup: Option<String>,
-    expect_error_contains: Option<String>,
+    expect_error: Option<ErrorExpectation>,
     expectations: Expectations,
 }
 
@@ -237,10 +238,7 @@ fn load_case_spec(
         .get("setup")
         .and_then(|item| item.as_str())
         .map(|s| s.to_string());
-    let expect_error_contains = doc
-        .get("expect_error_contains")
-        .and_then(|item| item.as_str())
-        .map(|s| s.to_string());
+    let expect_error = expectations::parse_error_expectation(&doc)?;
     let expectations = parse_expectations(doc.get("expect").and_then(|i| i.as_table()))?;
 
     Ok(CaseSpec {
@@ -249,7 +247,7 @@ fn load_case_spec(
         script_rel,
         build_context,
         setup,
-        expect_error_contains,
+        expect_error,
         expectations,
     })
 }
@@ -598,16 +596,16 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     };
 
     let result = run_steps_with_context(&snapshot, &build_context, steps);
-    match (&case.expect_error_contains, result) {
-        (Some(expected), Err(err)) => {
-            if !err.to_string().contains(expected) {
-                return Err(anyhow!(
-                    "expected error containing {expected}, got: {err}"
-                ));
-            }
+    match (&case.expect_error, result) {
+        (Some(expectation), Err(err)) => {
+            expectations::assert_error_matches(
+                expectation,
+                &err,
+                &format!("AST case {} error", case.name),
+            )?;
         }
-        (Some(expected), Ok(_)) => {
-            return Err(anyhow!("expected error containing {expected}, got success"));
+        (Some(_), Ok(_)) => {
+            return Err(anyhow!("expected error, got success"));
         }
         (None, Err(err)) => {
             return Err(err).with_context(|| format!("run {}", case.script_rel));

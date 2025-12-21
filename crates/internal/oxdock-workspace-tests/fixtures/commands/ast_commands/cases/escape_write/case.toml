@@ -1,2 +1,4 @@
 name = "escape_write"
-expect_error_contains = "WRITE"
+
+[expect.error]
+contains = "WRITE"
