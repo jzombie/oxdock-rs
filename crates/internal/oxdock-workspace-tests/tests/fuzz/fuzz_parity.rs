@@ -163,7 +163,10 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
         (StepKind::RunBg(l), StepKind::RunBg(r)) => {
             assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
         }
-        (StepKind::CaptureToFile { path: lp, cmd: lc }, StepKind::CaptureToFile { path: rp, cmd: rc }) => {
+        (
+            StepKind::CaptureToFile { path: lp, cmd: lc },
+            StepKind::CaptureToFile { path: rp, cmd: rc },
+        ) => {
             assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
             assert_eq!(lc, rc, "Capture cmd mismatch: {}", msg);
         }

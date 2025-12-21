@@ -353,19 +353,16 @@ fn execute_steps<P: ProcessManager>(
                             .with_context(|| format!("failed to write {}", target.display()))?;
                     }
                     StepKind::CaptureToFile { path, cmd } => {
-                        let target = state
-                            .fs
-                            .resolve_write(&state.cwd, path)
-                            .with_context(|| {
+                        let target =
+                            state.fs.resolve_write(&state.cwd, path).with_context(|| {
                                 format!("step {}: CAPTURE_TO_FILE {}", idx + 1, path)
                             })?;
                         state.fs.ensure_parent_dir(&target).with_context(|| {
                             format!("failed to create parent for {}", target.display())
                         })?;
-                        let steps = oxdock_parser::parse_script(cmd)
-                            .with_context(|| {
-                                format!("step {}: CAPTURE_TO_FILE parse failed", idx + 1)
-                            })?;
+                        let steps = oxdock_parser::parse_script(cmd).with_context(|| {
+                            format!("step {}: CAPTURE_TO_FILE parse failed", idx + 1)
+                        })?;
                         if steps.len() != 1 {
                             bail!("CAPTURE_TO_FILE expects exactly one instruction");
                         }
