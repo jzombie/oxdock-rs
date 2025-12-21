@@ -26,3 +26,7 @@ harness = false
 [[test]]
 name = "parity_harness"
 harness = false
+
+[[test]]
+name = "commands_harness"
+harness = false

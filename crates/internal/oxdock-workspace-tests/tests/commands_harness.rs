@@ -28,18 +28,18 @@ fn main() {
 
     if is_isolated() {
         eprintln!(
-            "Skipping workspace fixture harness under isolated runner: requires spawning cargo and filesystem access."
+            "Skipping commands fixture harness under isolated runner: requires spawning cargo and filesystem access."
         );
         libtest_mimic::run(&args, Vec::new()).exit();
     }
 
     let resolver = PathResolver::from_manifest_env().unwrap_or_else(|err| {
-        eprintln!("fixture harness failed to resolve manifest dir: {err:#}");
+        eprintln!("commands harness failed to resolve manifest dir: {err:#}");
         std::process::exit(1);
     });
 
     let fixtures = discover_fixtures(&resolver).unwrap_or_else(|err| {
-        eprintln!("fixture harness failed to discover fixtures: {err:#}");
+        eprintln!("commands harness failed to discover fixtures: {err:#}");
         std::process::exit(1);
     });
 
@@ -48,7 +48,7 @@ fn main() {
         .flat_map(|fixture| {
             let cases = load_fixture_cases(&resolver, &fixture).unwrap_or_else(|err| {
                 eprintln!(
-                    "fixture harness failed to load expectations for {}: {err:#}",
+                    "commands harness failed to load expectations for {}: {err:#}",
                     fixture.name
                 );
                 std::process::exit(1);
@@ -66,7 +66,7 @@ fn main() {
 }
 
 fn discover_fixtures(resolver: &PathResolver) -> Result<Vec<FixtureSpec>> {
-    let fixtures_root = resolver.root().join("fixtures")?;
+    let fixtures_root = resolver.root().join("fixtures")?.join("commands")?;
     let mut fixtures = Vec::new();
     discover_fixtures_recursive(resolver, &fixtures_root, "", &mut fixtures)?;
 
@@ -78,6 +78,7 @@ fn load_fixture_cases(resolver: &PathResolver, spec: &FixtureSpec) -> Result<Vec
     let expectations_path = resolver
         .root()
         .join("fixtures")?
+        .join("commands")?
         .join(&spec.name)?
         .join("expectations.txt")?;
 
@@ -106,10 +107,10 @@ fn run_fixture(spec: &FixtureSpec, case: &FixtureCase) -> std::result::Result<()
 fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
     let workspace_root = discover_workspace_root().context("failed to locate workspace root")?;
 
-    let mut fixture = FixtureBuilder::new(spec.template.as_str())
+    let fixture = FixtureBuilder::new(spec.template.as_str())
         .context("failed to load fixture template")?
-        .with_workspace_manifest_root(workspace_root.as_path());
-    let fixture = fixture
+        .with_workspace_manifest_root(workspace_root.as_path())
+        .with_workspace_root(workspace_root.as_path())
         .with_path_dependency(
             "oxdock-buildtime-macros",
             workspace_root.join("oxdock-buildtime-macros")?.to_string(),
@@ -224,71 +225,40 @@ fn parse_expectations(contents: &str) -> Result<Vec<FixtureCase>> {
             }
             continue;
         }
-
-        let (key, value) = line
-            .split_once(':')
-            .ok_or_else(|| anyhow!("invalid expectations line {}: {}", idx + 1, raw_line))?;
-        let key = key.trim();
-        let value = value.trim();
-
-        match key {
-            "case" | "name" => {
-                current.name = value.to_string();
+        has_content = true;
+        if let Some(rest) = line.strip_prefix("case:") {
+            current.name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("args:") {
+            current.args = rest.split_whitespace().map(|s| s.to_string()).collect();
+        } else if let Some(rest) = line.strip_prefix("env:") {
+            if let Some((k, v)) = rest.trim().split_once('=') {
+                current.env.push((k.to_string(), v.to_string()));
+            } else {
+                return Err(anyhow!("line {}: env requires KEY=VALUE", idx + 1));
             }
-            "args" => {
-                current.args = value
-                    .split_whitespace()
-                    .map(|arg| arg.to_string())
-                    .collect();
-            }
-            "env" => {
-                let (env_key, env_value) = value.split_once('=').ok_or_else(|| {
-                    anyhow!(
-                        "invalid env entry on line {}: {} (expected KEY=VALUE)",
-                        idx + 1,
-                        raw_line
-                    )
-                })?;
-                current
-                    .env
-                    .push((env_key.trim().to_string(), env_value.trim().to_string()));
-            }
-            "env_remove" => {
-                current.env_remove.push(value.to_string());
-            }
-            "expect" => match value {
+        } else if let Some(rest) = line.strip_prefix("env_remove:") {
+            current.env_remove.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("expect:") {
+            match rest.trim() {
                 "success" => current.expect_success = true,
                 "failure" => current.expect_success = false,
-                _ => {
-                    return Err(anyhow!(
-                        "invalid expect value on line {}: {}",
-                        idx + 1,
-                        raw_line
-                    ));
-                }
-            },
-            "stdout_contains" => current.stdout_contains.push(value.to_string()),
-            "stdout_not_contains" => current.stdout_not_contains.push(value.to_string()),
-            "stderr_contains" => current.stderr_contains.push(value.to_string()),
-            "stderr_not_contains" => current.stderr_not_contains.push(value.to_string()),
-            _ => {
-                return Err(anyhow!(
-                    "invalid expectations key on line {}: {}",
-                    idx + 1,
-                    raw_line
-                ));
+                other => return Err(anyhow!("line {}: invalid expect {}", idx + 1, other)),
             }
+        } else if let Some(rest) = line.strip_prefix("stdout_contains:") {
+            current.stdout_contains.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("stdout_not_contains:") {
+            current.stdout_not_contains.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("stderr_contains:") {
+            current.stderr_contains.push(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("stderr_not_contains:") {
+            current.stderr_not_contains.push(rest.trim().to_string());
+        } else {
+            return Err(anyhow!("line {}: unrecognized directive", idx + 1));
         }
-
-        has_content = true;
     }
 
     if has_content {
         cases.push(current);
-    }
-
-    if cases.is_empty() {
-        return Err(anyhow!("expectations.txt did not define any cases"));
     }
 
     Ok(cases)

@@ -95,6 +95,7 @@ fn run() -> Result<()> {
     assert_coverage(&case_steps, &coverage).context("validate AST command coverage")?;
 
     for case in cases {
+        println!("ast case: {}", case.name);
         let steps = case_steps
             .get(case.name.as_str())
             .ok_or_else(|| anyhow!("missing steps for case {}", case.name))?;
