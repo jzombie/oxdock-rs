@@ -23,9 +23,7 @@ struct ParityCase {
 
 #[cfg(miri)]
 fn main() {
-    eprintln!(
-        "Skipping DSL parity harness under Miri: requires fixture filesystem access."
-    );
+    eprintln!("Skipping DSL parity harness under Miri: requires fixture filesystem access.");
 }
 
 #[cfg(not(miri))]
