@@ -30,6 +30,13 @@ fn main() {
     let mut config = HarnessConfig::new("commands", fixtures_root);
     config.set_workspace_root_env = true;
     config.set_temp_target_dir = true;
+    config.case_config = Some(oxdock_workspace_tests::harness::CaseConfig {
+        fixture_name: "ast_commands".to_string(),
+        cases_dir: "cases".to_string(),
+        case_env: "OXDOCK_AST_CASE".to_string(),
+        coverage_env: Some("OXDOCK_AST_ONLY_COVERAGE".to_string()),
+        coverage_case_name: "coverage".to_string(),
+    });
 
     let tests = build_trials(&resolver, &config).unwrap_or_else(|err| {
         eprintln!("commands harness failed to discover fixtures: {err:#}");

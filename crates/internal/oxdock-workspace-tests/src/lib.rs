@@ -31,6 +31,7 @@ pub mod harness {
         pub exclude_root_dirs: Vec<String>,
         pub set_workspace_root_env: bool,
         pub set_temp_target_dir: bool,
+        pub case_config: Option<CaseConfig>,
         pub name: &'static str,
     }
 
@@ -41,9 +42,19 @@ pub mod harness {
                 exclude_root_dirs: Vec::new(),
                 set_workspace_root_env: false,
                 set_temp_target_dir: false,
+                case_config: None,
                 name,
             }
         }
+    }
+
+    #[derive(Clone)]
+    pub struct CaseConfig {
+        pub fixture_name: String,
+        pub cases_dir: String,
+        pub case_env: String,
+        pub coverage_env: Option<String>,
+        pub coverage_case_name: String,
     }
 
     pub fn build_trials(
@@ -95,6 +106,12 @@ pub mod harness {
         config: &HarnessConfig,
         spec: &FixtureSpec,
     ) -> Result<Vec<FixtureCase>> {
+        if let Some(case_config) = &config.case_config {
+            if spec.name == case_config.fixture_name {
+                return load_case_dir_fixtures(resolver, config, spec, case_config);
+            }
+        }
+
         let expectations_path = config
             .fixtures_root
             .join(&spec.name)?
@@ -108,6 +125,58 @@ pub mod harness {
             .read_to_string(&expectations_path)
             .context("failed to read expectations.txt")?;
         parse_expectations(&contents)
+    }
+
+    fn load_case_dir_fixtures(
+        resolver: &PathResolver,
+        config: &HarnessConfig,
+        spec: &FixtureSpec,
+        case_config: &CaseConfig,
+    ) -> Result<Vec<FixtureCase>> {
+        let cases_root = config
+            .fixtures_root
+            .join(&spec.name)?
+            .join(&case_config.cases_dir)?;
+        let mut cases = Vec::new();
+
+        let entries = resolver
+            .read_dir_entries(&cases_root)
+            .context("failed to read case directory")?;
+        for entry in entries {
+            let file_type = entry
+                .file_type()
+                .context("failed to read case entry type")?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+
+            let case_dir = cases_root.join(&name)?;
+            let case_toml = case_dir.join("case.toml")?;
+            if resolver.entry_kind(&case_toml).is_err() {
+                continue;
+            }
+
+            let mut case = FixtureCase::default_case();
+            case.name = name.clone();
+            case.env
+                .push((case_config.case_env.clone(), name.clone()));
+            cases.push(case);
+        }
+
+        cases.sort_by(|a, b| a.name.cmp(&b.name));
+
+        if let Some(coverage_env) = &case_config.coverage_env {
+            let mut coverage = FixtureCase::default_case();
+            coverage.name = case_config.coverage_case_name.clone();
+            coverage.env.push((coverage_env.clone(), "1".to_string()));
+            cases.insert(0, coverage);
+        }
+
+        Ok(cases)
     }
 
     fn case_display_name(fixture_name: &str, case: &FixtureCase, total: usize) -> String {

@@ -8,6 +8,7 @@ use oxdock_parser::{Step, StepKind};
 use oxdock_process::CommandBuilder;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::env;
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +66,7 @@ struct Expectations {
 
 struct CaseSpec {
     name: String,
+    dir_name: String,
     script_rel: String,
     build_context: BuildContext,
     setup: Option<String>,
@@ -87,12 +89,24 @@ fn main() {
 fn run() -> Result<()> {
     let resolver = PathResolver::from_manifest_env().context("resolve fixture manifest dir")?;
     let coverage = load_coverage(&resolver)?;
-    let cases = load_cases(&resolver)?;
+    let case_filter = env::var("OXDOCK_AST_CASE").ok();
+    let only_coverage = env::var_os("OXDOCK_AST_ONLY_COVERAGE").is_some();
+
+    let mut cases = load_cases(&resolver)?;
+    if let Some(filter) = &case_filter {
+        cases = filter_cases(cases, filter)?;
+    }
+
     let case_steps = load_case_steps(&resolver, &cases)?;
 
     // This fixture enforces AST coverage: every StepKind in ast.rs must be mapped in
     // coverage.toml and appear in at least one case, or the test fails.
-    assert_coverage(&case_steps, &coverage).context("validate AST command coverage")?;
+    if case_filter.is_none() {
+        assert_coverage(&case_steps, &coverage).context("validate AST command coverage")?;
+    }
+    if only_coverage {
+        return Ok(());
+    }
 
     for case in cases {
         println!("ast case: {}", case.name);
@@ -179,6 +193,18 @@ fn load_cases(resolver: &PathResolver) -> Result<Vec<CaseSpec>> {
     Ok(cases)
 }
 
+fn filter_cases(cases: Vec<CaseSpec>, filter: &str) -> Result<Vec<CaseSpec>> {
+    let mut filtered: Vec<CaseSpec> = cases
+        .into_iter()
+        .filter(|case| case.name == filter || case.dir_name == filter)
+        .collect();
+    if filtered.is_empty() {
+        return Err(anyhow!("no AST case matched {filter}"));
+    }
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(filtered)
+}
+
 fn load_case_spec(
     resolver: &PathResolver,
     case_dir: &GuardedPath,
@@ -219,6 +245,7 @@ fn load_case_spec(
 
     Ok(CaseSpec {
         name,
+        dir_name: dir_name.to_string(),
         script_rel,
         build_context,
         setup,
