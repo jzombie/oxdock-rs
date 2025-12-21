@@ -18,4 +18,16 @@ HashSha256 = ["scripts/hash_sha256.oxdock"]
 Exit = ["scripts/exit.oxdock"]
 
 [extras]
-scripts = ["scripts/guards.oxdock", "scripts/scopes.oxdock"]
+scripts = [
+  "scripts/guards.oxdock",
+  "scripts/scopes.oxdock",
+  "scripts/escape_workdir.oxdock",
+  "scripts/escape_write.oxdock",
+  "scripts/escape_write_missing.oxdock",
+  "scripts/escape_read.oxdock",
+  "scripts/escape_symlink.oxdock",
+  "scripts/workspace_symlink.oxdock",
+  "scripts/semicolon.oxdock",
+  "scripts/cat_stdout.oxdock",
+  "scripts/cwd_stdout.oxdock",
+]

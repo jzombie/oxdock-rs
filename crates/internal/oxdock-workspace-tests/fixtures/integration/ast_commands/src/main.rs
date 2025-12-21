@@ -328,6 +328,14 @@ fn exists(root: &GuardedPath, rel: &str) -> Result<bool> {
     Ok(root.join(rel)?.exists())
 }
 
+fn parent_guard(root: &GuardedPath) -> Result<GuardedPath> {
+    let parent = root
+        .as_path()
+        .parent()
+        .ok_or_else(|| anyhow!("root should have a parent"))?;
+    GuardedPath::new_root(parent).context("guard parent path")
+}
+
 fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("git");
     cmd.arg("-C").arg(repo.as_path());
@@ -372,6 +380,36 @@ fn setup_copy_git(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
     Ok(())
 }
 
+fn setup_read_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    let parent = parent_guard(snapshot)?;
+    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
+    let secret = parent.join("secret.txt")?;
+    resolver.write_file(&secret, b"nope")?;
+    Ok(())
+}
+
+fn setup_symlink_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    let parent = parent_guard(snapshot)?;
+    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
+    let secret = parent.join("symlink-secret.txt")?;
+    resolver.write_file(&secret, b"top secret")?;
+    let link_path = snapshot.as_path().join("leak.txt");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(secret.as_path(), &link_path)
+        .context("create unix symlink")?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(secret.as_path(), &link_path)
+        .context("create windows symlink")?;
+    Ok(())
+}
+
+fn setup_workspace_symlink(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
+    let client = local.join("client")?;
+    create_dirs(&client)?;
+    write_text(&client.join("version.txt")?, "1.2.3")?;
+    Ok(())
+}
+
 fn verify_workdir(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
     assert_eq!(
         read_trimmed(&snapshot.join("workspace/note.txt")?)?,
@@ -387,6 +425,43 @@ fn verify_workspace(snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
     Ok(())
 }
 
+fn verify_escape_workdir(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    if exists(snapshot, "escape.txt")? {
+        return Err(anyhow!("escape.txt should not exist"));
+    }
+    Ok(())
+}
+
+fn verify_escape_write(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    if exists(snapshot, "escape.txt")? {
+        return Err(anyhow!("escape.txt should not exist"));
+    }
+    Ok(())
+}
+
+fn verify_escape_write_missing(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    if exists(snapshot, "outside.txt")? {
+        return Err(anyhow!("outside.txt should not exist"));
+    }
+    Ok(())
+}
+
+fn verify_read_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    let parent = parent_guard(snapshot)?;
+    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
+    let secret = parent.join("secret.txt")?;
+    let _ = resolver.remove_file(&secret);
+    Ok(())
+}
+
+fn verify_symlink_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    let parent = parent_guard(snapshot)?;
+    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
+    let secret = parent.join("symlink-secret.txt")?;
+    let _ = resolver.remove_file(&secret);
+    Ok(())
+}
+
 fn verify_env(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
     assert_eq!(read_trimmed(&snapshot.join("env.txt")?)?, "value=bar");
     Ok(())
@@ -399,6 +474,14 @@ fn verify_run(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
 
 fn verify_run_bg(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
     assert_eq!(read_trimmed(&snapshot.join("bg.txt")?)?, "bar");
+    Ok(())
+}
+
+fn verify_workspace_symlink(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
+    let seen = local.join("client/seen.txt")?;
+    let resolver = PathResolver::new(local.as_path(), local.as_path())?;
+    let content = resolver.read_to_string(&seen)?;
+    assert_eq!(content.trim(), "1.2.3");
     Ok(())
 }
 
@@ -547,6 +630,24 @@ fn verify_scopes(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
         "outer"
     );
     assert_eq!(read_trimmed(&snapshot.join("env.txt")?)?, "scope=");
+    Ok(())
+}
+
+fn verify_semicolon(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    assert_eq!(read_trimmed(&snapshot.join("one.txt")?)?, "1");
+    assert_eq!(read_trimmed(&snapshot.join("two.txt")?)?, "2");
+    Ok(())
+}
+
+fn verify_cat_stdout(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    assert_eq!(read_trimmed(&snapshot.join("note.txt")?)?, "hello");
+    Ok(())
+}
+
+fn verify_cwd_stdout(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    if !snapshot.join("a/b")?.exists() {
+        return Err(anyhow!("missing workdir a/b"));
+    }
     Ok(())
 }
 
@@ -706,6 +807,51 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
         },
     );
     cases.insert(
+        "scripts/escape_workdir.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_escape_workdir,
+            expect_error: Some("WORKDIR"),
+        },
+    );
+    cases.insert(
+        "scripts/escape_write.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_escape_write,
+            expect_error: Some("WRITE"),
+        },
+    );
+    cases.insert(
+        "scripts/escape_write_missing.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_escape_write_missing,
+            expect_error: Some("WRITE"),
+        },
+    );
+    cases.insert(
+        "scripts/escape_read.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_read_escape,
+            verify: verify_read_escape,
+            expect_error: Some("CAT"),
+        },
+    );
+    cases.insert(
+        "scripts/escape_symlink.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_symlink_escape,
+            verify: verify_symlink_escape,
+            expect_error: Some("CAT"),
+        },
+    );
+    cases.insert(
         "scripts/guards.oxdock",
         ScriptCase {
             build_context: BuildContext::Local,
@@ -720,6 +866,42 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
             build_context: BuildContext::Local,
             setup: setup_noop,
             verify: verify_scopes,
+            expect_error: None,
+        },
+    );
+    cases.insert(
+        "scripts/workspace_symlink.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_workspace_symlink,
+            verify: verify_workspace_symlink,
+            expect_error: None,
+        },
+    );
+    cases.insert(
+        "scripts/semicolon.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_semicolon,
+            expect_error: None,
+        },
+    );
+    cases.insert(
+        "scripts/cat_stdout.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_cat_stdout,
+            expect_error: None,
+        },
+    );
+    cases.insert(
+        "scripts/cwd_stdout.oxdock",
+        ScriptCase {
+            build_context: BuildContext::Local,
+            setup: setup_noop,
+            verify: verify_cwd_stdout,
             expect_error: None,
         },
     );
