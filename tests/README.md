@@ -1,0 +1,1 @@
+Tests are currently found throughtout internal crates as integration and unit tests, with a growing focus on centralizing most logic testing in [oxdock-workspace-tests](../crates/internal/oxdock-workspace-tests/).
