@@ -1,11 +1,19 @@
+#[cfg(not(miri))]
 use anyhow::{Context, Result};
+#[cfg(not(miri))]
 use libtest_mimic::{Arguments, Failed, Trial};
+#[cfg(not(miri))]
 use oxdock_fs::{EntryKind, PathResolver};
+#[cfg(not(miri))]
 use oxdock_parser::{Step, parse_braced_tokens, parse_script};
+#[cfg(not(miri))]
 use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
+#[cfg(not(miri))]
 use proc_macro2::TokenStream;
+#[cfg(not(miri))]
 use std::str::FromStr;
 
+#[cfg(not(miri))]
 struct ParityCase {
     name: String,
     dsl: String,
@@ -13,6 +21,14 @@ struct ParityCase {
     expect_error: Option<ErrorExpectation>,
 }
 
+#[cfg(miri)]
+fn main() {
+    eprintln!(
+        "Skipping DSL parity harness under Miri: requires fixture filesystem access."
+    );
+}
+
+#[cfg(not(miri))]
 fn main() {
     let args = Arguments::from_args();
 
@@ -37,6 +53,7 @@ fn main() {
     libtest_mimic::run(&args, tests).exit();
 }
 
+#[cfg(not(miri))]
 fn discover_cases(resolver: &PathResolver) -> Result<Vec<ParityCase>> {
     let fixtures_root = resolver.root().join("fixtures")?.join("parity")?;
     let entries = resolver
@@ -84,10 +101,12 @@ fn discover_cases(resolver: &PathResolver) -> Result<Vec<ParityCase>> {
     Ok(cases)
 }
 
+#[cfg(not(miri))]
 fn run_case(case: &ParityCase) -> std::result::Result<(), Failed> {
     run_case_inner(case).map_err(|err| Failed::from(err.to_string()))
 }
 
+#[cfg(not(miri))]
 fn run_case_inner(case: &ParityCase) -> Result<()> {
     let dsl_steps = parse_script(case.dsl.trim());
     let token_steps = TokenStream::from_str(case.tokens.as_str())
@@ -133,6 +152,7 @@ fn run_case_inner(case: &ParityCase) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(miri))]
 fn render_steps(steps: &[Step]) -> String {
     steps
         .iter()

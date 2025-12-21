@@ -1,7 +1,18 @@
+#[cfg(not(miri))]
 use libtest_mimic::Arguments;
+#[cfg(not(miri))]
 use oxdock_fs::{GuardedPath, PathResolver};
+#[cfg(not(miri))]
 use oxdock_workspace_tests::harness::{HarnessConfig, build_trials};
 
+#[cfg(miri)]
+fn main() {
+    eprintln!(
+        "Skipping commands fixture harness under Miri: requires cargo execution and fixture filesystem access."
+    );
+}
+
+#[cfg(not(miri))]
 fn main() {
     let mut args = Arguments::from_args();
     args.test_threads = Some(1);
