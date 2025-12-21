@@ -1,0 +1,6 @@
+name = "symlink"
+setup = "symlink_inputs"
+build_context = "snapshot"
+
+[expect]
+files = { "linked/inner.txt" = "symlink target" }

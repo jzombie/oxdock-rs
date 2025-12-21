@@ -1,0 +1,3 @@
+name = "escape_read"
+setup = "read_escape"
+expect_error_contains = "CAT"

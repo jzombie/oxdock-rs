@@ -1,0 +1,4 @@
+name = "cwd_stdout"
+
+[expect]
+dirs = ["a/b"]

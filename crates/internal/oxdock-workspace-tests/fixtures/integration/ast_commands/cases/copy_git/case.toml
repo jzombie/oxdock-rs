@@ -1,0 +1,6 @@
+name = "copy_git"
+setup = "copy_git"
+build_context = "local_subdir:repo"
+
+[expect]
+files = { "out_hello.txt" = "git hello" }

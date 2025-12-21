@@ -1,0 +1,5 @@
+name = "copy"
+setup = "copy_inputs"
+
+[expect]
+files = { "copied.txt" = "from build" }

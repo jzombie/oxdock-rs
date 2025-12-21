@@ -7,24 +7,69 @@ use oxdock_fs::{
 use oxdock_parser::{Step, StepKind};
 use oxdock_process::CommandBuilder;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet};
-use toml_edit::DocumentMut;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use toml_edit::{DocumentMut, Item, Table, Value};
 
-type SetupFn = fn(&GuardedPath, &GuardedPath) -> Result<()>;
-type VerifyFn = fn(&GuardedPath, &GuardedPath) -> Result<()>;
-
-#[derive(Clone, Copy)]
-enum BuildContext {
-    Local,
-    LocalSubdir(&'static str),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Root {
     Snapshot,
+    Local,
 }
 
-struct ScriptCase {
+#[derive(Clone, Debug)]
+enum BuildContext {
+    Local,
+    Snapshot,
+    LocalSubdir(String),
+}
+
+#[derive(Clone, Default)]
+struct RootExpect {
+    files: BTreeMap<String, String>,
+    missing: Vec<String>,
+    dirs: Vec<String>,
+}
+
+struct PlatformExpect {
+    unix: RootExpect,
+    windows: RootExpect,
+}
+
+struct LsExpect {
+    root: Root,
+    file: String,
+    entries: Vec<String>,
+}
+
+struct CwdExpect {
+    root: Root,
+    file: String,
+    dir: String,
+}
+
+struct HashExpect {
+    root: Root,
+    file: String,
+    source: String,
+}
+
+#[derive(Default)]
+struct Expectations {
+    snapshot: RootExpect,
+    local: RootExpect,
+    platform: Option<PlatformExpect>,
+    ls: Option<LsExpect>,
+    cwd: Option<CwdExpect>,
+    hash: Option<HashExpect>,
+}
+
+struct CaseSpec {
+    name: String,
+    script_rel: String,
     build_context: BuildContext,
-    setup: SetupFn,
-    verify: VerifyFn,
-    expect_error: Option<&'static str>,
+    setup: Option<String>,
+    expect_error_contains: Option<String>,
+    expectations: Expectations,
 }
 
 struct CoverageSpec {
@@ -41,26 +86,20 @@ fn main() {
 
 fn run() -> Result<()> {
     let resolver = PathResolver::from_manifest_env().context("resolve fixture manifest dir")?;
-
     let coverage = load_coverage(&resolver)?;
-    let scripts = collect_scripts(&coverage)?;
-    let script_data = load_scripts(&resolver, &scripts)?;
-    let cases = script_cases();
+    let cases = load_cases(&resolver)?;
+    let case_steps = load_case_steps(&resolver, &cases)?;
 
     // This fixture enforces AST coverage: every StepKind in ast.rs must be mapped in
-    // coverage.toml and appear in at least one script, or the test fails.
-    assert_coverage(&script_data, &coverage).context("validate AST command coverage")?;
+    // coverage.toml and appear in at least one case, or the test fails.
+    assert_coverage(&case_steps, &coverage).context("validate AST command coverage")?;
 
-    for script in scripts {
-        let case = cases
-            .get(script.as_str())
-            .ok_or_else(|| anyhow!("missing ScriptCase for {}", script))?;
-        let steps = script_data
-            .get(script.as_str())
-            .ok_or_else(|| anyhow!("missing parsed steps for {}", script))?;
-        let script_path = resolver.root().join(&script)?;
-        run_case(case, steps, &script_path)
-            .with_context(|| format!("script {}", script))?;
+    for case in cases {
+        let steps = case_steps
+            .get(case.name.as_str())
+            .ok_or_else(|| anyhow!("missing steps for case {}", case.name))?;
+        run_case(&case, steps)
+            .with_context(|| format!("case {}", case.name))?;
     }
 
     Ok(())
@@ -81,21 +120,21 @@ fn load_coverage(resolver: &PathResolver) -> Result<CoverageSpec> {
             let array = value
                 .as_array()
                 .ok_or_else(|| anyhow!("coverage.{key} must be an array"))?;
-            let mut scripts = Vec::new();
+            let mut cases = Vec::new();
             for item in array.iter() {
-                let script = item
+                let case = item
                     .as_str()
                     .ok_or_else(|| anyhow!("coverage.{key} entries must be strings"))?;
-                scripts.push(script.to_string());
+                cases.push(case.to_string());
             }
-            coverage.insert(key.to_string(), scripts);
+            coverage.insert(key.to_string(), cases);
         }
     }
 
     let extras = doc
         .get("extras")
         .and_then(|item| item.as_table())
-        .and_then(|table| table.get("scripts"))
+        .and_then(|table| table.get("cases"))
         .and_then(|item| item.as_array())
         .map(|array| {
             array
@@ -108,41 +147,273 @@ fn load_coverage(resolver: &PathResolver) -> Result<CoverageSpec> {
     Ok(CoverageSpec { coverage, extras })
 }
 
-fn collect_scripts(spec: &CoverageSpec) -> Result<Vec<String>> {
-    let mut scripts: BTreeSet<String> = BTreeSet::new();
-    for paths in spec.coverage.values() {
-        for path in paths {
-            scripts.insert(path.to_string());
+fn load_cases(resolver: &PathResolver) -> Result<Vec<CaseSpec>> {
+    let cases_root = resolver.root().join("cases")?;
+    let entries = resolver
+        .read_dir_entries(&cases_root)
+        .context("read cases directory")?;
+    let mut cases = Vec::new();
+
+    for entry in entries {
+        let file_type = entry
+            .file_type()
+            .context("read case entry type")?;
+        if !file_type.is_dir() {
+            continue;
         }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let case_dir = cases_root.join(&name)?;
+        let case_toml = case_dir.join("case.toml")?;
+        if resolver.entry_kind(&case_toml).is_err() {
+            continue;
+        }
+        cases.push(load_case_spec(resolver, &case_dir, &name)?);
     }
-    for extra in &spec.extras {
-        scripts.insert(extra.to_string());
-    }
-    if scripts.is_empty() {
-        return Err(anyhow!("coverage.toml did not list any scripts"));
-    }
-    Ok(scripts.into_iter().collect())
+
+    cases.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(cases)
 }
 
-fn load_scripts(
+fn load_case_spec(
     resolver: &PathResolver,
-    scripts: &[String],
+    case_dir: &GuardedPath,
+    dir_name: &str,
+) -> Result<CaseSpec> {
+    let case_path = case_dir.join("case.toml")?;
+    let contents = resolver
+        .read_to_string(&case_path)
+        .with_context(|| format!("read {}", case_path.display()))?;
+    let doc = contents
+        .parse::<DocumentMut>()
+        .context("parse case.toml")?;
+
+    let name = doc
+        .get("name")
+        .and_then(|item| item.as_str())
+        .unwrap_or(dir_name)
+        .to_string();
+    let script_name = doc
+        .get("script")
+        .and_then(|item| item.as_str())
+        .unwrap_or("script.oxdock");
+    let script_rel = format!("cases/{}/{}", dir_name, script_name);
+
+    let build_context = parse_build_context(
+        doc.get("build_context")
+            .and_then(|item| item.as_str()),
+    )?;
+    let setup = doc
+        .get("setup")
+        .and_then(|item| item.as_str())
+        .map(|s| s.to_string());
+    let expect_error_contains = doc
+        .get("expect_error_contains")
+        .and_then(|item| item.as_str())
+        .map(|s| s.to_string());
+    let expectations = parse_expectations(doc.get("expect").and_then(|i| i.as_table()))?;
+
+    Ok(CaseSpec {
+        name,
+        script_rel,
+        build_context,
+        setup,
+        expect_error_contains,
+        expectations,
+    })
+}
+
+fn parse_build_context(value: Option<&str>) -> Result<BuildContext> {
+    match value.unwrap_or("local") {
+        "local" => Ok(BuildContext::Local),
+        "snapshot" => Ok(BuildContext::Snapshot),
+        other if other.starts_with("local_subdir:") => {
+            Ok(BuildContext::LocalSubdir(other["local_subdir:".len()..].to_string()))
+        }
+        other => Err(anyhow!("unknown build_context {other}")),
+    }
+}
+
+fn parse_expectations(expect: Option<&Table>) -> Result<Expectations> {
+    let mut out = Expectations::default();
+    let Some(expect) = expect else {
+        return Ok(out);
+    };
+
+    out.snapshot = parse_root_expect(expect)?;
+
+    if let Some(local_table) = expect.get("local").and_then(|item| item.as_table()) {
+        out.local = parse_root_expect(local_table)?;
+    }
+
+    if let Some(platform_table) = expect.get("platform").and_then(|item| item.as_table()) {
+        let unix = platform_table
+            .get("unix")
+            .and_then(|item| item.as_table())
+            .map(parse_root_expect)
+            .transpose()?
+            .unwrap_or_default();
+        let windows = platform_table
+            .get("windows")
+            .and_then(|item| item.as_table())
+            .map(parse_root_expect)
+            .transpose()?
+            .unwrap_or_default();
+        if !unix.files.is_empty()
+            || !unix.missing.is_empty()
+            || !unix.dirs.is_empty()
+            || !windows.files.is_empty()
+            || !windows.missing.is_empty()
+            || !windows.dirs.is_empty()
+        {
+            out.platform = Some(PlatformExpect { unix, windows });
+        }
+    }
+
+    out.ls = expect
+        .get("ls")
+        .and_then(|item| item.as_table())
+        .map(parse_ls_expect)
+        .transpose()?;
+    out.cwd = expect
+        .get("cwd")
+        .and_then(|item| item.as_table())
+        .map(parse_cwd_expect)
+        .transpose()?;
+    out.hash = expect
+        .get("hash")
+        .and_then(|item| item.as_table())
+        .map(parse_hash_expect)
+        .transpose()?;
+
+    Ok(out)
+}
+
+fn parse_root_expect(table: &Table) -> Result<RootExpect> {
+    let mut out = RootExpect::default();
+    if let Some(files_item) = table.get("files") {
+        out.files = parse_files_table(files_item)?;
+    }
+    if let Some(missing) = table.get("missing").and_then(|item| item.as_array()) {
+        out.missing = parse_string_array(missing)?;
+    }
+    if let Some(dirs) = table.get("dirs").and_then(|item| item.as_array()) {
+        out.dirs = parse_string_array(dirs)?;
+    }
+    Ok(out)
+}
+
+fn parse_files_table(item: &Item) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    match item {
+        Item::Table(table) => {
+            for (key, value) in table.iter() {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| anyhow!("files.{key} must be a string"))?;
+                out.insert(key.to_string(), value.to_string());
+            }
+        }
+        Item::Value(Value::InlineTable(table)) => {
+            for (key, value) in table.iter() {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| anyhow!("files.{key} must be a string"))?;
+                out.insert(key.to_string(), value.to_string());
+            }
+        }
+        _ => return Err(anyhow!("files must be a table")),
+    }
+    Ok(out)
+}
+
+fn parse_string_array(array: &toml_edit::Array) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for item in array.iter() {
+        let value = item
+            .as_str()
+            .ok_or_else(|| anyhow!("array entries must be strings"))?;
+        out.push(value.to_string());
+    }
+    Ok(out)
+}
+
+fn parse_root(value: Option<&str>) -> Result<Root> {
+    match value.unwrap_or("snapshot") {
+        "snapshot" => Ok(Root::Snapshot),
+        "local" => Ok(Root::Local),
+        other => Err(anyhow!("unknown root {other}")),
+    }
+}
+
+fn parse_ls_expect(table: &Table) -> Result<LsExpect> {
+    let file = table
+        .get("file")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| anyhow!("expect.ls.file is required"))?
+        .to_string();
+    let entries = table
+        .get("entries")
+        .and_then(|item| item.as_array())
+        .map(parse_string_array)
+        .transpose()?
+        .unwrap_or_default();
+    let root = parse_root(table.get("root").and_then(|item| item.as_str()))?;
+    Ok(LsExpect { root, file, entries })
+}
+
+fn parse_cwd_expect(table: &Table) -> Result<CwdExpect> {
+    let file = table
+        .get("file")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| anyhow!("expect.cwd.file is required"))?
+        .to_string();
+    let dir = table
+        .get("dir")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| anyhow!("expect.cwd.dir is required"))?
+        .to_string();
+    let root = parse_root(table.get("root").and_then(|item| item.as_str()))?;
+    Ok(CwdExpect { root, file, dir })
+}
+
+fn parse_hash_expect(table: &Table) -> Result<HashExpect> {
+    let file = table
+        .get("file")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| anyhow!("expect.hash.file is required"))?
+        .to_string();
+    let source = table
+        .get("source")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| anyhow!("expect.hash.source is required"))?
+        .to_string();
+    let root = parse_root(table.get("root").and_then(|item| item.as_str()))?;
+    Ok(HashExpect { root, file, source })
+}
+
+fn load_case_steps(
+    resolver: &PathResolver,
+    cases: &[CaseSpec],
 ) -> Result<HashMap<String, Vec<Step>>> {
     let mut out = HashMap::new();
     let placeholders = command_placeholders();
-    for script in scripts {
+    for case in cases {
         let path = resolver
             .root()
-            .join(script)
-            .with_context(|| format!("resolve script {}", script))?;
+            .join(&case.script_rel)
+            .with_context(|| format!("resolve script {}", case.script_rel))?;
         let template = resolver
             .read_to_string(&path)
-            .with_context(|| format!("read script {}", script))?;
+            .with_context(|| format!("read script {}", case.script_rel))?;
         let rendered = apply_placeholders(&template, &placeholders)
-            .with_context(|| format!("render script {}", script))?;
+            .with_context(|| format!("render script {}", case.script_rel))?;
         let steps = oxdock_parser::parse_script(&rendered)
-            .with_context(|| format!("parse script {}", script))?;
-        out.insert(script.to_string(), steps);
+            .with_context(|| format!("parse script {}", case.script_rel))?;
+        out.insert(case.name.clone(), steps);
     }
     Ok(out)
 }
@@ -201,7 +472,7 @@ fn command_placeholders() -> HashMap<&'static str, String> {
 }
 
 fn assert_coverage(
-    scripts: &HashMap<String, Vec<Step>>,
+    cases: &HashMap<String, Vec<Step>>,
     spec: &CoverageSpec,
 ) -> Result<()> {
     let step_kinds = step_kind_variants().context("load StepKind variants")?;
@@ -226,23 +497,36 @@ fn assert_coverage(
         }
     }
 
-    for (kind, script_list) in &spec.coverage {
-        if script_list.is_empty() {
+    let mut referenced = BTreeSet::new();
+    for (kind, case_list) in &spec.coverage {
+        if case_list.is_empty() {
             return Err(anyhow!("coverage entry {} is empty", kind));
         }
-        for script in script_list {
-            let steps = scripts
-                .get(script)
-                .ok_or_else(|| anyhow!("coverage references unknown script {}", script))?;
+        for case_name in case_list {
+            let steps = cases
+                .get(case_name)
+                .ok_or_else(|| anyhow!("coverage references unknown case {}", case_name))?;
             let script_kinds = step_kinds_in_steps(steps);
             if !script_kinds.contains(kind) {
                 return Err(anyhow!(
-                    "coverage {} expects {}, but script does not include it",
-                    script,
+                    "coverage case {} expects {}, but script does not include it",
+                    case_name,
                     kind
                 ));
             }
+            referenced.insert(case_name.clone());
         }
+    }
+
+    for extra in &spec.extras {
+        if !cases.contains_key(extra) {
+            return Err(anyhow!("extras references unknown case {}", extra));
+        }
+        referenced.insert(extra.clone());
+    }
+
+    if referenced.is_empty() {
+        return Err(anyhow!("coverage.toml did not reference any cases"));
     }
 
     Ok(())
@@ -267,49 +551,163 @@ fn step_kinds_in_steps(steps: &[Step]) -> HashSet<String> {
         .collect()
 }
 
-fn run_case(
-    case: &ScriptCase,
-    steps: &[Step],
-    script_path: &GuardedPath,
-) -> Result<()> {
+fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     let snapshot_temp = GuardedPath::tempdir().context("create snapshot tempdir")?;
     let snapshot = guard_root(&snapshot_temp);
     let local_temp = GuardedPath::tempdir().context("create local tempdir")?;
     let local = guard_root(&local_temp);
 
-    (case.setup)(&snapshot, &local).context("setup case")?;
+    if let Some(setup) = &case.setup {
+        run_setup(setup, &case.name, &snapshot, &local)?;
+    }
 
-    let build_context = match case.build_context {
+    let build_context = match &case.build_context {
         BuildContext::Local => local.clone(),
+        BuildContext::Snapshot => snapshot.clone(),
         BuildContext::LocalSubdir(rel) => local
             .join(rel)
             .with_context(|| format!("resolve build context {}", rel))?,
-        BuildContext::Snapshot => snapshot.clone(),
     };
 
     let result = run_steps_with_context(&snapshot, &build_context, steps);
-    if let Some(expected) = case.expect_error {
-        let err = result.unwrap_err();
-        if !err.to_string().contains(expected) {
-            return Err(anyhow!(
-                "expected error containing {expected}, got: {err}"
-            ));
+    match (&case.expect_error_contains, result) {
+        (Some(expected), Err(err)) => {
+            if !err.to_string().contains(expected) {
+                return Err(anyhow!(
+                    "expected error containing {expected}, got: {err}"
+                ));
+            }
         }
-    } else {
-        result.with_context(|| format!("run {}", script_path.display()))?;
+        (Some(expected), Ok(_)) => {
+            return Err(anyhow!("expected error containing {expected}, got success"));
+        }
+        (None, Err(err)) => {
+            return Err(err).with_context(|| format!("run {}", case.script_rel));
+        }
+        (None, Ok(_)) => {}
     }
 
-    (case.verify)(&snapshot, &local).context("verify case")?;
+    verify_expectations(&case.expectations, &snapshot, &local)?;
+    if let Some(setup) = &case.setup {
+        run_cleanup(setup, &snapshot, &local)?;
+    }
     Ok(())
+}
+
+fn verify_expectations(
+    expect: &Expectations,
+    snapshot: &GuardedPath,
+    local: &GuardedPath,
+) -> Result<()> {
+    verify_root(&expect.snapshot, snapshot)?;
+    verify_root(&expect.local, local)?;
+
+    if let Some(platform) = &expect.platform {
+        #[allow(clippy::disallowed_macros)]
+        if cfg!(windows) {
+            verify_root(&platform.windows, snapshot)?;
+        } else {
+            verify_root(&platform.unix, snapshot)?;
+        }
+    }
+
+    if let Some(ls) = &expect.ls {
+        let root = match ls.root {
+            Root::Snapshot => snapshot,
+            Root::Local => local,
+        };
+        let content = read_trimmed_root(root, &ls.file)?;
+        let mut lines: Vec<_> = content.lines().map(str::to_string).collect();
+        if lines.is_empty() {
+            return Err(anyhow!("LS output missing header"));
+        }
+        lines.remove(0);
+        for entry in &ls.entries {
+            if !lines.contains(entry) {
+                return Err(anyhow!("LS output missing {}", entry));
+            }
+        }
+    }
+
+    if let Some(cwd) = &expect.cwd {
+        let root = match cwd.root {
+            Root::Snapshot => snapshot,
+            Root::Local => local,
+        };
+        let expected = PathResolver::new(root.as_path(), root.as_path())?
+            .canonicalize(&root.join(&cwd.dir)?)?
+            .display()
+            .to_string();
+        let actual = read_trimmed_root(root, &cwd.file)?;
+        if actual != expected {
+            return Err(anyhow!("CWD output mismatch: expected {expected}, got {actual}"));
+        }
+    }
+
+    if let Some(hash) = &expect.hash {
+        let root = match hash.root {
+            Root::Snapshot => snapshot,
+            Root::Local => local,
+        };
+        let actual = read_trimmed_root(root, &hash.file)?;
+        let mut hasher = Sha256::new();
+        hasher.update(hash.source.as_bytes());
+        let expected = format!("{:x}", hasher.finalize());
+        if actual != expected {
+            return Err(anyhow!(
+                "HASH_SHA256 output mismatch: expected {expected}, got {actual}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn verify_root(expect: &RootExpect, root: &GuardedPath) -> Result<()> {
+    if expect.files.is_empty() && expect.missing.is_empty() && expect.dirs.is_empty() {
+        return Ok(());
+    }
+
+    for (path, expected) in &expect.files {
+        let actual = read_trimmed_root(root, path)?;
+        if actual != *expected {
+            return Err(anyhow!(
+                "expected {} to contain {}, got {}",
+                path,
+                expected,
+                actual
+            ));
+        }
+    }
+
+    for path in &expect.missing {
+        if exists(root, path)? {
+            return Err(anyhow!("{} should not exist", path));
+        }
+    }
+
+    if !expect.dirs.is_empty() {
+        let resolver = PathResolver::new(root.as_path(), root.as_path())?;
+        for path in &expect.dirs {
+            let dir = root.join(path)?;
+            let is_dir = matches!(resolver.entry_kind(&dir)?, oxdock_fs::EntryKind::Dir);
+            if is_dir {
+                continue;
+            }
+            return Err(anyhow!("{} should be a directory", path));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_trimmed_root(root: &GuardedPath, rel: &str) -> Result<String> {
+    let resolver = PathResolver::new(root.as_path(), root.as_path())?;
+    Ok(resolver.read_to_string(&root.join(rel)?)?.trim().to_string())
 }
 
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
-}
-
-fn read_trimmed(path: &GuardedPath) -> Result<String> {
-    let resolver = PathResolver::new(path.root(), path.root())?;
-    Ok(resolver.read_to_string(path)?.trim().to_string())
 }
 
 fn write_text(path: &GuardedPath, contents: &str) -> Result<()> {
@@ -340,6 +738,41 @@ fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("git");
     cmd.arg("-C").arg(repo.as_path());
     cmd
+}
+
+fn run_setup(
+    name: &str,
+    case_name: &str,
+    snapshot: &GuardedPath,
+    local: &GuardedPath,
+) -> Result<()> {
+    match name {
+        "copy_inputs" => setup_copy_inputs(snapshot, local),
+        "symlink_inputs" => setup_symlink_inputs(snapshot, local),
+        "copy_git" => setup_copy_git(snapshot, local),
+        "read_escape" => setup_read_escape(snapshot, local),
+        "symlink_escape" => setup_symlink_escape(snapshot, local),
+        "workspace_symlink" => setup_workspace_symlink(snapshot, local),
+        _ => Err(anyhow!(
+            "unknown setup {name} (available: copy_inputs, symlink_inputs, copy_git, read_escape, symlink_escape, workspace_symlink). referenced by {case_name}",
+        )),
+    }
+}
+
+fn run_cleanup(name: &str, snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    match name {
+        "read_escape" => cleanup_escape(snapshot, "secret.txt"),
+        "symlink_escape" => cleanup_escape(snapshot, "symlink-secret.txt"),
+        _ => Ok(()),
+    }
+}
+
+fn cleanup_escape(snapshot: &GuardedPath, filename: &str) -> Result<()> {
+    let parent = parent_guard(snapshot)?;
+    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
+    let secret = parent.join(filename)?;
+    let _ = resolver.remove_file(&secret);
+    Ok(())
 }
 
 fn setup_copy_inputs(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
@@ -407,508 +840,6 @@ fn setup_workspace_symlink(_snapshot: &GuardedPath, local: &GuardedPath) -> Resu
     let client = local.join("client")?;
     create_dirs(&client)?;
     write_text(&client.join("version.txt")?, "1.2.3")?;
-    Ok(())
-}
-
-fn verify_workdir(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(
-        read_trimmed(&snapshot.join("workspace/note.txt")?)?,
-        "hi"
-    );
-    Ok(())
-}
-
-fn verify_workspace(snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("snap.txt")?)?, "snap");
-    assert_eq!(read_trimmed(&snapshot.join("snap2.txt")?)?, "snap2");
-    assert_eq!(read_trimmed(&local.join("local.txt")?)?, "local");
-    Ok(())
-}
-
-fn verify_escape_workdir(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if exists(snapshot, "escape.txt")? {
-        return Err(anyhow!("escape.txt should not exist"));
-    }
-    Ok(())
-}
-
-fn verify_escape_write(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if exists(snapshot, "escape.txt")? {
-        return Err(anyhow!("escape.txt should not exist"));
-    }
-    Ok(())
-}
-
-fn verify_escape_write_missing(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if exists(snapshot, "outside.txt")? {
-        return Err(anyhow!("outside.txt should not exist"));
-    }
-    Ok(())
-}
-
-fn verify_read_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let parent = parent_guard(snapshot)?;
-    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
-    let secret = parent.join("secret.txt")?;
-    let _ = resolver.remove_file(&secret);
-    Ok(())
-}
-
-fn verify_symlink_escape(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let parent = parent_guard(snapshot)?;
-    let resolver = PathResolver::new(parent.as_path(), parent.as_path())?;
-    let secret = parent.join("symlink-secret.txt")?;
-    let _ = resolver.remove_file(&secret);
-    Ok(())
-}
-
-fn verify_env(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("env.txt")?)?, "value=bar");
-    Ok(())
-}
-
-fn verify_run(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("run.txt")?)?, "bar");
-    Ok(())
-}
-
-fn verify_run_bg(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("bg.txt")?)?, "bar");
-    Ok(())
-}
-
-fn verify_workspace_symlink(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
-    let seen = local.join("client/seen.txt")?;
-    let resolver = PathResolver::new(local.as_path(), local.as_path())?;
-    let content = resolver.read_to_string(&seen)?;
-    assert_eq!(content.trim(), "1.2.3");
-    Ok(())
-}
-
-fn verify_echo(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("echo.txt")?)?, "hello");
-    Ok(())
-}
-
-fn verify_copy(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("copied.txt")?)?, "from build");
-    Ok(())
-}
-
-fn verify_symlink(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let linked = snapshot.join("linked/inner.txt")?;
-    assert_eq!(read_trimmed(&linked)?, "symlink target");
-    Ok(())
-}
-
-fn verify_mkdir(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if !snapshot.join("a/b/c")?.exists() {
-        return Err(anyhow!("missing directory a/b/c"));
-    }
-    Ok(())
-}
-
-fn verify_ls(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let items = snapshot.join("items")?;
-    let ls_content = read_trimmed(&snapshot.join("ls.txt")?)?;
-    let mut lines: Vec<_> = ls_content.lines().map(str::to_string).collect();
-    if lines.is_empty() {
-        return Err(anyhow!("LS output missing header"));
-    }
-    let expected_header = format!(
-        "{}:",
-        PathResolver::new(snapshot.root(), snapshot.root())?
-            .canonicalize(&items)?
-            .display()
-    );
-    assert_eq!(lines.remove(0), expected_header);
-    for entry in ["a.txt", "b.txt"] {
-        if !lines.contains(&entry.to_string()) {
-            return Err(anyhow!("LS output missing {}", entry));
-        }
-    }
-    Ok(())
-}
-
-fn verify_cwd(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let expected = PathResolver::new(snapshot.root(), snapshot.root())?
-        .canonicalize(&snapshot.join("a/b")?)?
-        .display()
-        .to_string();
-    assert_eq!(read_trimmed(&snapshot.join("a/b/pwd.txt")?)?, expected);
-    Ok(())
-}
-
-fn verify_cat(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("out.txt")?)?, "hello");
-    Ok(())
-}
-
-fn verify_write(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("note.txt")?)?, "hello");
-    Ok(())
-}
-
-fn verify_capture_to_file(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("out.txt")?)?, "hello");
-    Ok(())
-}
-
-fn verify_exit(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("before.txt")?)?, "ok");
-    assert_eq!(
-        read_trimmed(&snapshot.join("nested_before.txt")?)?,
-        "ok"
-    );
-    if exists(snapshot, "nested_after.txt")? {
-        return Err(anyhow!("nested_after.txt should not exist"));
-    }
-    if exists(snapshot, "after.txt")? {
-        return Err(anyhow!("after.txt should not exist"));
-    }
-    Ok(())
-}
-
-fn verify_copy_git(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(
-        read_trimmed(&snapshot.join("out_hello.txt")?)?,
-        "git hello"
-    );
-    Ok(())
-}
-
-fn verify_hash_sha256(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    let hash = read_trimmed(&snapshot.join("hash.txt")?)?;
-    let mut hasher = Sha256::new();
-    hasher.update(b"hello");
-    let expected_hash = format!("{:x}", hasher.finalize());
-    assert_eq!(hash, expected_hash);
-    Ok(())
-}
-
-fn verify_guards(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if !exists(snapshot, "guarded.txt")? {
-        return Err(anyhow!("missing guarded.txt"));
-    }
-    if !exists(snapshot, "guarded_not.txt")? {
-        return Err(anyhow!("missing guarded_not.txt"));
-    }
-    if !exists(snapshot, "guarded_or.txt")? {
-        return Err(anyhow!("missing guarded_or.txt"));
-    }
-    if exists(snapshot, "guarded_skip.txt")? {
-        return Err(anyhow!("guarded_skip.txt should not exist"));
-    }
-
-    #[allow(clippy::disallowed_macros)]
-    if cfg!(windows) {
-        if !exists(snapshot, "guarded_windows.txt")? {
-            return Err(anyhow!("missing guarded_windows.txt"));
-        }
-        if exists(snapshot, "guarded_unix.txt")? {
-            return Err(anyhow!("guarded_unix.txt should not exist"));
-        }
-    } else {
-        if !exists(snapshot, "guarded_unix.txt")? {
-            return Err(anyhow!("missing guarded_unix.txt"));
-        }
-        if exists(snapshot, "guarded_windows.txt")? {
-            return Err(anyhow!("guarded_windows.txt should not exist"));
-        }
-    }
-
-    Ok(())
-}
-
-fn verify_scopes(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(
-        read_trimmed(&snapshot.join("scoped/inner.txt")?)?,
-        "inner"
-    );
-    assert_eq!(
-        read_trimmed(&snapshot.join("outer.txt")?)?,
-        "outer"
-    );
-    assert_eq!(read_trimmed(&snapshot.join("env.txt")?)?, "scope=");
-    Ok(())
-}
-
-fn verify_semicolon(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("one.txt")?)?, "1");
-    assert_eq!(read_trimmed(&snapshot.join("two.txt")?)?, "2");
-    Ok(())
-}
-
-fn verify_cat_stdout(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    assert_eq!(read_trimmed(&snapshot.join("note.txt")?)?, "hello");
-    Ok(())
-}
-
-fn verify_cwd_stdout(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
-    if !snapshot.join("a/b")?.exists() {
-        return Err(anyhow!("missing workdir a/b"));
-    }
-    Ok(())
-}
-
-fn script_cases() -> HashMap<&'static str, ScriptCase> {
-    let mut cases = HashMap::new();
-    cases.insert(
-        "scripts/workdir.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_workdir,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/workspace.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_workspace,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/env.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_env,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/run.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_run,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/run_bg.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_run_bg,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/echo.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_echo,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/copy.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_copy_inputs,
-            verify: verify_copy,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/symlink.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Snapshot,
-            setup: setup_symlink_inputs,
-            verify: verify_symlink,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/mkdir.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_mkdir,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/ls.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_ls,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/cwd.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_cwd,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/cat.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_cat,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/write.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_write,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/capture_to_file.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_capture_to_file,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/copy_git.oxdock",
-        ScriptCase {
-            build_context: BuildContext::LocalSubdir("repo"),
-            setup: setup_copy_git,
-            verify: verify_copy_git,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/hash_sha256.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_hash_sha256,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/exit.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_exit,
-            expect_error: Some("EXIT requested with code 5"),
-        },
-    );
-    cases.insert(
-        "scripts/escape_workdir.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_escape_workdir,
-            expect_error: Some("WORKDIR"),
-        },
-    );
-    cases.insert(
-        "scripts/escape_write.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_escape_write,
-            expect_error: Some("WRITE"),
-        },
-    );
-    cases.insert(
-        "scripts/escape_write_missing.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_escape_write_missing,
-            expect_error: Some("WRITE"),
-        },
-    );
-    cases.insert(
-        "scripts/escape_read.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_read_escape,
-            verify: verify_read_escape,
-            expect_error: Some("CAT"),
-        },
-    );
-    cases.insert(
-        "scripts/escape_symlink.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_symlink_escape,
-            verify: verify_symlink_escape,
-            expect_error: Some("CAT"),
-        },
-    );
-    cases.insert(
-        "scripts/guards.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_guards,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/scopes.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_scopes,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/workspace_symlink.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_workspace_symlink,
-            verify: verify_workspace_symlink,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/semicolon.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_semicolon,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/cat_stdout.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_cat_stdout,
-            expect_error: None,
-        },
-    );
-    cases.insert(
-        "scripts/cwd_stdout.oxdock",
-        ScriptCase {
-            build_context: BuildContext::Local,
-            setup: setup_noop,
-            verify: verify_cwd_stdout,
-            expect_error: None,
-        },
-    );
-    cases
-}
-
-fn setup_noop(_snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
     Ok(())
 }
 

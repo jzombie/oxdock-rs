@@ -1,0 +1,4 @@
+name = "echo"
+
+[expect]
+files = { "echo.txt" = "hello" }

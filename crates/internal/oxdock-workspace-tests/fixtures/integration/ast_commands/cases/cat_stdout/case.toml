@@ -1,0 +1,4 @@
+name = "cat_stdout"
+
+[expect]
+files = { "note.txt" = "hello" }

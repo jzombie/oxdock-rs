@@ -1,0 +1,4 @@
+name = "run"
+
+[expect]
+files = { "run.txt" = "bar" }

@@ -1,0 +1,2 @@
+name = "escape_write_missing"
+expect_error_contains = "WRITE"

@@ -1,0 +1,3 @@
+name = "escape_symlink"
+setup = "symlink_escape"
+expect_error_contains = "CAT"

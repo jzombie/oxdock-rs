@@ -1,0 +1,5 @@
+name = "cwd"
+
+[expect.cwd]
+file = "a/b/pwd.txt"
+dir = "a/b"
