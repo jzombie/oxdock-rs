@@ -1,0 +1,2 @@
+WRITE note.txt hello
+CAPTURE_TO_FILE out.txt CAT note.txt

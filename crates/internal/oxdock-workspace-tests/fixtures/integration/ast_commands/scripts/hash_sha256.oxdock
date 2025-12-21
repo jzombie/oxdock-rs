@@ -1,0 +1,2 @@
+WRITE data.txt hello
+CAPTURE_TO_FILE hash.txt HASH_SHA256 data.txt

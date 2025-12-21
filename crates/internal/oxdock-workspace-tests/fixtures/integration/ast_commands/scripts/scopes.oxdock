@@ -1,0 +1,8 @@
+WORKDIR /
+{
+  WORKDIR scoped
+  WRITE inner.txt inner
+  ENV SCOPE=inner
+}
+CAPTURE_TO_FILE env.txt ECHO scope=${SCOPE}
+WRITE outer.txt outer
