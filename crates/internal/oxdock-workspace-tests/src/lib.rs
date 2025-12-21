@@ -356,7 +356,10 @@ pub mod harness {
         }
     }
 
-    fn load_case_dir_cases(resolver: &PathResolver, cases_dir: &GuardedPath) -> Result<Vec<FixtureCase>> {
+    fn load_case_dir_cases(
+        resolver: &PathResolver,
+        cases_dir: &GuardedPath,
+    ) -> Result<Vec<FixtureCase>> {
         let entries = resolver
             .read_dir_entries(cases_dir)
             .context("failed to read cases directory")?;
@@ -492,7 +495,10 @@ pub mod harness {
         match value {
             "success" => Ok(true),
             "failure" => Ok(false),
-            other => Err(anyhow!("expect.status must be success or failure, got {}", other)),
+            other => Err(anyhow!(
+                "expect.status must be success or failure, got {}",
+                other
+            )),
         }
     }
 
@@ -611,19 +617,23 @@ pub mod expectations {
         let contents = resolver
             .read_to_string(&case_path)
             .with_context(|| format!("read {}", case_path.display()))?;
-        let doc = contents
-            .parse::<DocumentMut>()
-            .context("parse case.toml")?;
+        let doc = contents.parse::<DocumentMut>().context("parse case.toml")?;
         parse_error_expectation(&doc)
     }
 
     pub fn parse_error_expectation(doc: &DocumentMut) -> Result<Option<ErrorExpectation>> {
         let mut out = None;
 
-        if let Some(value) = doc.get("expect_error_contains").and_then(|item| item.as_str()) {
+        if let Some(value) = doc
+            .get("expect_error_contains")
+            .and_then(|item| item.as_str())
+        {
             set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
         }
-        if let Some(value) = doc.get("expect_error_equals").and_then(|item| item.as_str()) {
+        if let Some(value) = doc
+            .get("expect_error_equals")
+            .and_then(|item| item.as_str())
+        {
             set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
         }
 
@@ -676,10 +686,7 @@ pub mod expectations {
         Ok(())
     }
 
-    fn set_expectation(
-        slot: &mut Option<ErrorExpectation>,
-        next: ErrorExpectation,
-    ) -> Result<()> {
+    fn set_expectation(slot: &mut Option<ErrorExpectation>, next: ErrorExpectation) -> Result<()> {
         if slot.is_some() {
             return Err(anyhow!("only one error expectation can be set"));
         }
