@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use libtest_mimic::{Arguments, Failed, Trial};
 use oxdock_fixture::FixtureBuilder;
-use oxdock_fs::{PathResolver, discover_workspace_root, is_isolated};
+use oxdock_fs::{
+    GuardedPath, PathResolver, command_path, discover_workspace_root, is_isolated,
+};
 
 #[derive(Clone)]
 struct FixtureSpec {
@@ -153,8 +155,13 @@ fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
         .instantiate()
         .context("failed to instantiate fixture")?;
 
+    let temp_target = GuardedPath::tempdir().context("create temp target dir")?;
     let mut cmd = fixture.cargo();
     cmd.args(&case.args);
+    cmd.env(
+        "CARGO_TARGET_DIR",
+        command_path(temp_target.as_guarded_path()).into_owned(),
+    );
     for (key, value) in &case.env {
         cmd.env(key, value);
     }

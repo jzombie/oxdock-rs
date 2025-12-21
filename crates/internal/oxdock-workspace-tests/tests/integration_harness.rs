@@ -106,10 +106,9 @@ fn run_fixture(spec: &FixtureSpec, case: &FixtureCase) -> std::result::Result<()
 fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
     let workspace_root = discover_workspace_root().context("failed to locate workspace root")?;
 
-    let mut fixture = FixtureBuilder::new(spec.template.as_str())
+    let fixture = FixtureBuilder::new(spec.template.as_str())
         .context("failed to load fixture template")?
-        .with_workspace_manifest_root(workspace_root.as_path());
-    let fixture = fixture
+        .with_workspace_manifest_root(workspace_root.as_path())
         .with_path_dependency(
             "oxdock-buildtime-macros",
             workspace_root.join("oxdock-buildtime-macros")?.to_string(),
@@ -351,7 +350,7 @@ fn discover_fixtures_recursive(
         }
 
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || name == "target" {
+        if name.starts_with('.') || name == "target" || (rel.is_empty() && name == "commands") {
             continue;
         }
 
