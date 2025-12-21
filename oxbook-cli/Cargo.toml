@@ -11,7 +11,8 @@ publish.workspace = true
 anyhow.workspace = true
 notify = "6.1.1"
 oxdock-fs.workspace = true
-similar = "2.6.0"
+oxdock-process.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
