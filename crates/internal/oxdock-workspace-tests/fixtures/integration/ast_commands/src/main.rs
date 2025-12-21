@@ -47,6 +47,8 @@ fn run() -> Result<()> {
     let script_data = load_scripts(&resolver, &scripts)?;
     let cases = script_cases();
 
+    // This fixture enforces AST coverage: every StepKind in ast.rs must be mapped in
+    // coverage.toml and appear in at least one script, or the test fails.
     assert_coverage(&script_data, &coverage).context("validate AST command coverage")?;
 
     for script in scripts {
