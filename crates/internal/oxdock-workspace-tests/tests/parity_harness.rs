@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use libtest_mimic::{Arguments, Failed, Trial};
-use oxdock_fs::{EntryKind, PathResolver, is_isolated};
+use oxdock_fs::{EntryKind, PathResolver};
 use oxdock_parser::{Step, parse_braced_tokens, parse_script};
 use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
 use proc_macro2::TokenStream;
@@ -15,11 +15,6 @@ struct ParityCase {
 
 fn main() {
     let args = Arguments::from_args();
-
-    if is_isolated() {
-        eprintln!("Skipping DSL parity harness under isolated runner: requires filesystem access.");
-        libtest_mimic::run(&args, Vec::new()).exit();
-    }
 
     let resolver = PathResolver::from_manifest_env().unwrap_or_else(|err| {
         eprintln!("parity harness failed to resolve manifest dir: {err:#}");

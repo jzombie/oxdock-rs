@@ -395,6 +395,10 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg_attr(
+        miri,
+        ignore = "timing-sensitive background process test is unreliable under Miri"
+    )]
     #[test]
     fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
         let temp = GuardedPath::tempdir().unwrap();
@@ -427,7 +431,7 @@ mod tests {
             "second background should be terminated once the first exits"
         );
 
-        let upper = if oxdock_fs::is_isolated() { 2.5 } else { 0.45 };
+        let upper = 0.45;
         assert!(
             elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
             "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"

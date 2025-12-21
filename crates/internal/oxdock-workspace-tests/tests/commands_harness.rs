@@ -1,17 +1,10 @@
 use libtest_mimic::Arguments;
-use oxdock_fs::{GuardedPath, PathResolver, is_isolated};
+use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_workspace_tests::harness::{HarnessConfig, build_trials};
 
 fn main() {
     let mut args = Arguments::from_args();
     args.test_threads = Some(1);
-
-    if is_isolated() {
-        eprintln!(
-            "Skipping commands fixture harness under isolated runner: requires spawning cargo and filesystem access."
-        );
-        libtest_mimic::run(&args, Vec::new()).exit();
-    }
 
     let resolver = PathResolver::from_manifest_env().unwrap_or_else(|err| {
         eprintln!("commands harness failed to resolve manifest dir: {err:#}");

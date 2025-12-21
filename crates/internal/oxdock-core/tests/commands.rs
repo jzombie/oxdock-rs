@@ -65,8 +65,6 @@ fn commands_behave_cross_platform() {
     #[allow(clippy::disallowed_macros)]
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
-    } else if oxdock_fs::is_isolated() {
-        "sleep 1; printf %s \"$FOO\" > bg.txt"
     } else {
         "sleep 0.2; printf %s \"$FOO\" > bg.txt"
     };

@@ -477,7 +477,7 @@ fn prepare_macro_plan(input: &DslMacroInput) -> syn::Result<MacroPlan> {
     let manifest_resolver = PathResolver::from_manifest_env()
         .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
 
-    if oxdock_fs::is_isolated() || embed_execution_is_skipped() {
+    if embed_execution_is_skipped() {
         return Ok(MacroPlan::Skip);
     }
 

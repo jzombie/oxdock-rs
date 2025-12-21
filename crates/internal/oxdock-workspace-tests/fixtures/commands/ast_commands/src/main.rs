@@ -2,7 +2,6 @@ use anyhow::{Context, Result, anyhow};
 use oxdock_core::run_steps_with_context;
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, ensure_git_identity,
-    is_isolated,
 };
 use oxdock_parser::{Step, StepKind};
 use oxdock_process::CommandBuilder;
@@ -469,8 +468,6 @@ fn command_placeholders() -> HashMap<&'static str, String> {
     #[allow(clippy::disallowed_macros)]
     let bg_cmd = if cfg!(windows) {
         "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt".to_string()
-    } else if is_isolated() {
-        "sleep 1 && printf %s \"$FOO\" > bg.txt".to_string()
     } else {
         "sleep 0.2 && printf %s \"$FOO\" > bg.txt".to_string()
     };
