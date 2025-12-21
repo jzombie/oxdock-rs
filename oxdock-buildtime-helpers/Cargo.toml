@@ -11,3 +11,6 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 oxdock-process.workspace = true
+
+[dev-dependencies]
+oxdock-fs.workspace = true

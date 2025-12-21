@@ -39,3 +39,7 @@ Prefer encapsulation over scattered platform/test-runner checks.
 
 - **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-workspace-tests/fixtures/integration/buildtime_macros`.
 - **Workspace layout**: Internal crates live under `crates/internal`; the CLI & build-time macros sit at the workspace root.
+
+## Workflow
+
+- **Autonomy**: When test failures are reported or observed, proceed to investigate and fix them without asking for confirmation unless there are multiple viable options or the change is risky/behavior-altering.

@@ -33,7 +33,11 @@ fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_./-]+".prop_filter("Avoids comments", |s| !s.contains("//"))
+    "[a-zA-Z0-9_./-]+"
+        .prop_filter("Avoids comments", |s| !s.contains("//"))
+        .prop_filter("Avoids invalid numeric prefixes", |s| {
+            !has_invalid_prefixed_literal(s)
+        })
 }
 
 fn safe_msg() -> impl Strategy<Value = String> {
@@ -80,6 +84,36 @@ fn safe_msg() -> impl Strategy<Value = String> {
             }
             true
         })
+        .prop_filter("Avoids invalid numeric prefixes", |s| {
+            !has_invalid_prefixed_literal(s)
+        })
+}
+
+fn has_invalid_prefixed_literal(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'0' {
+            let next = bytes[i + 1];
+            let after = bytes.get(i + 2).copied();
+            let valid = match next {
+                b'b' | b'B' => after.is_some_and(|c| c == b'0' || c == b'1'),
+                b'o' | b'O' => after.is_some_and(|c| matches!(c, b'0'..=b'7')),
+                b'x' | b'X' => after.is_some_and(|c| {
+                    matches!(c, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
+                }),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            if !valid {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
