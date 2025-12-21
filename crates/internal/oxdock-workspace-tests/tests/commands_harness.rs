@@ -1,5 +1,5 @@
 use libtest_mimic::Arguments;
-use oxdock_fs::{PathResolver, is_isolated};
+use oxdock_fs::{GuardedPath, PathResolver, is_isolated};
 use oxdock_workspace_tests::harness::{HarnessConfig, build_trials};
 
 fn main() {
@@ -27,9 +27,16 @@ fn main() {
             std::process::exit(1);
         });
 
+    let temp_target = GuardedPath::tempdir().unwrap_or_else(|err| {
+        eprintln!("commands harness failed to create temp target dir: {err:#}");
+        std::process::exit(1);
+    });
+    let shared_target = temp_target.as_guarded_path().clone();
+
     let mut config = HarnessConfig::new("commands", fixtures_root);
     config.set_workspace_root_env = true;
     config.set_temp_target_dir = true;
+    config.shared_target_dir = Some(shared_target);
     config.case_config = Some(oxdock_workspace_tests::harness::CaseConfig {
         fixture_name: "ast_commands".to_string(),
         cases_dir: "cases".to_string(),
@@ -44,4 +51,5 @@ fn main() {
     });
 
     libtest_mimic::run(&args, tests).exit();
+    drop(temp_target);
 }

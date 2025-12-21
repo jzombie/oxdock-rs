@@ -31,6 +31,7 @@ pub mod harness {
         pub exclude_root_dirs: Vec<String>,
         pub set_workspace_root_env: bool,
         pub set_temp_target_dir: bool,
+        pub shared_target_dir: Option<GuardedPath>,
         pub case_config: Option<CaseConfig>,
         pub name: &'static str,
     }
@@ -42,6 +43,7 @@ pub mod harness {
                 exclude_root_dirs: Vec::new(),
                 set_workspace_root_env: false,
                 set_temp_target_dir: false,
+                shared_target_dir: None,
                 case_config: None,
                 name,
             }
@@ -253,8 +255,16 @@ pub mod harness {
             .instantiate()
             .context("failed to instantiate fixture")?;
 
+        let mut owned_target = None;
         let temp_target = if config.set_temp_target_dir {
-            Some(GuardedPath::tempdir().context("create temp target dir")?)
+            if let Some(shared) = &config.shared_target_dir {
+                Some(shared.clone())
+            } else {
+                let temp = GuardedPath::tempdir().context("create temp target dir")?;
+                let guard = temp.as_guarded_path().clone();
+                owned_target = Some(temp);
+                Some(guard)
+            }
         } else {
             None
         };
@@ -262,10 +272,7 @@ pub mod harness {
         let mut cmd = fixture.cargo();
         cmd.args(&case.args);
         if let Some(target) = &temp_target {
-            cmd.env(
-                "CARGO_TARGET_DIR",
-                command_path(target.as_guarded_path()).into_owned(),
-            );
+            cmd.env("CARGO_TARGET_DIR", command_path(target).into_owned());
         }
         for (key, value) in &case.env {
             cmd.env(key, value);
