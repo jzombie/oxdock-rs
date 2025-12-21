@@ -90,7 +90,6 @@ fn run_watch_loop(
                 if event_maybe_affects(&event, watched) && is_relevant_kind(&event) {
                     if let Ok(new_contents) = read_stable_contents(resolver, watched) {
                         if new_contents != *last_contents {
-                            print_change(watched, last_contents, &new_contents);
                             report_fence_changes(watched, last_contents, &new_contents);
                             *last_contents = new_contents;
                         }
