@@ -10,6 +10,7 @@ members = [
     "oxdock-buildtime-helpers",
     "oxdock-buildtime-macros",
     "oxdock-cli",
+    "oxbook-cli"
 ]
 resolver = "2"
 

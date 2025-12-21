@@ -1,0 +1,17 @@
+[package]
+name = "oxbook-cli"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+notify = "6.1.1"
+oxdock-fs.workspace = true
+similar = "2.6.0"
+
+[lints]
+workspace = true
