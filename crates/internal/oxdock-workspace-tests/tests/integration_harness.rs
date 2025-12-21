@@ -100,15 +100,19 @@ fn case_display_name(fixture_name: &str, case: &FixtureCase, total: usize) -> St
 }
 
 fn run_fixture(spec: &FixtureSpec, case: &FixtureCase) -> std::result::Result<(), Failed> {
-    run_fixture_inner(spec, case).map_err(|err| Failed::from(err.to_string()))
+    run_fixture_inner(spec, case).map_err(|err| Failed::from(format!("{err:#}")))
 }
 
 fn run_fixture_inner(spec: &FixtureSpec, case: &FixtureCase) -> Result<()> {
     let workspace_root = discover_workspace_root().context("failed to locate workspace root")?;
 
-    let fixture = FixtureBuilder::new(spec.template.as_str())
+    let mut fixture = FixtureBuilder::new(spec.template.as_str())
         .context("failed to load fixture template")?
-        .with_workspace_root(workspace_root.as_path())
+        .with_workspace_manifest_root(workspace_root.as_path());
+    if spec.name == "integration/ast_commands" {
+        fixture = fixture.with_workspace_root(workspace_root.as_path());
+    }
+    let fixture = fixture
         .with_path_dependency(
             "oxdock-buildtime-macros",
             workspace_root.join("oxdock-buildtime-macros")?.to_string(),
