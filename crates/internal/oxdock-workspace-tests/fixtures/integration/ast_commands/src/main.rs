@@ -471,6 +471,21 @@ fn verify_capture_to_file(snapshot: &GuardedPath, _local: &GuardedPath) -> Resul
     Ok(())
 }
 
+fn verify_exit(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
+    assert_eq!(read_trimmed(&snapshot.join("before.txt")?)?, "ok");
+    assert_eq!(
+        read_trimmed(&snapshot.join("nested_before.txt")?)?,
+        "ok"
+    );
+    if exists(snapshot, "nested_after.txt")? {
+        return Err(anyhow!("nested_after.txt should not exist"));
+    }
+    if exists(snapshot, "after.txt")? {
+        return Err(anyhow!("after.txt should not exist"));
+    }
+    Ok(())
+}
+
 fn verify_copy_git(snapshot: &GuardedPath, _local: &GuardedPath) -> Result<()> {
     assert_eq!(
         read_trimmed(&snapshot.join("out_hello.txt")?)?,
@@ -686,7 +701,7 @@ fn script_cases() -> HashMap<&'static str, ScriptCase> {
         ScriptCase {
             build_context: BuildContext::Local,
             setup: setup_noop,
-            verify: setup_noop,
+            verify: verify_exit,
             expect_error: Some("EXIT requested with code 5"),
         },
     );
