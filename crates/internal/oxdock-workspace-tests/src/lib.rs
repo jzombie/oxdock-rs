@@ -107,10 +107,10 @@ pub mod harness {
         config: &HarnessConfig,
         spec: &FixtureSpec,
     ) -> Result<Vec<FixtureCase>> {
-        if let Some(case_config) = &config.case_config {
-            if spec.name == case_config.fixture_name {
-                return load_case_dir_fixtures(resolver, config, spec, case_config);
-            }
+        if let Some(case_config) = &config.case_config
+            && spec.name == case_config.fixture_name
+        {
+            return load_case_dir_fixtures(resolver, config, spec, case_config);
         }
 
         let fixture_root = config.fixtures_root.join(&spec.name)?;
@@ -637,14 +637,14 @@ pub mod expectations {
             set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
         }
 
-        if let Some(expect) = doc.get("expect").and_then(|item| item.as_table()) {
-            if let Some(error) = expect.get("error").and_then(|item| item.as_table()) {
-                if let Some(value) = error.get("contains").and_then(|item| item.as_str()) {
-                    set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
-                }
-                if let Some(value) = error.get("equals").and_then(|item| item.as_str()) {
-                    set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
-                }
+        if let Some(expect) = doc.get("expect").and_then(|item| item.as_table())
+            && let Some(error) = expect.get("error").and_then(|item| item.as_table())
+        {
+            if let Some(value) = error.get("contains").and_then(|item| item.as_str()) {
+                set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
+            }
+            if let Some(value) = error.get("equals").and_then(|item| item.as_str()) {
+                set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
             }
         }
 

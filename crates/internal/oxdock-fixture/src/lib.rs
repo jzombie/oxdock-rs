@@ -140,6 +140,7 @@ impl FixtureInstance {
     }
 }
 
+#[allow(clippy::disallowed_types)]
 fn patch_manifest(
     resolver: &PathResolver,
     root: &GuardedPath,
@@ -168,6 +169,7 @@ fn patch_manifest(
     Ok(())
 }
 
+#[allow(clippy::disallowed_types)]
 fn copy_fixture_template(
     resolver: &PathResolver,
     src: &UnguardedPath,
@@ -272,6 +274,7 @@ fn insert_or_replace(table: &mut Table, key: &str, val: Value) {
     }
 }
 
+#[allow(clippy::disallowed_types)]
 fn load_workspace_dependencies(
     resolver: &PathResolver,
     workspace_root: Option<&Path>,
@@ -299,10 +302,10 @@ fn load_workspace_dependencies(
             out.insert(name.to_string(), version.to_string());
             continue;
         }
-        if let Some(table) = item.as_table() {
-            if let Some(version) = table.get("version").and_then(|v| v.as_str()) {
-                out.insert(name.to_string(), version.to_string());
-            }
+        if let Some(table) = item.as_table()
+            && let Some(version) = table.get("version").and_then(|v| v.as_str())
+        {
+            out.insert(name.to_string(), version.to_string());
         }
     }
     Ok(out)
