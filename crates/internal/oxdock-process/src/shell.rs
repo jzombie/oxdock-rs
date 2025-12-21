@@ -75,6 +75,10 @@ mod tests {
     use super::{ShellLauncher, shell_cmd, shell_program};
     use std::env;
     use std::ffi::OsStr;
+    use std::sync::Mutex;
+
+    // For Windows, fixing COMSPEC override test race condition
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
         key: &'static str,
@@ -106,6 +110,7 @@ mod tests {
 
     #[test]
     fn shell_program_prefers_env_override() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
         #[cfg(windows)]
         let _guard = EnvGuard::set("COMSPEC", "custom-cmd");
         #[cfg(not(windows))]
@@ -123,6 +128,7 @@ mod tests {
     )]
     #[test]
     fn shell_launcher_run_with_output_captures_stdout() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
         let launcher = ShellLauncher;
         let mut cmd = shell_cmd("echo hello");
         let (status, stdout, _stderr) = launcher.run_with_output(&mut cmd).expect("run output");
