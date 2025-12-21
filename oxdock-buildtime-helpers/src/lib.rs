@@ -89,7 +89,10 @@ fn cfg_env_lines(output: &str) -> Vec<String> {
                 value
             ));
         } else {
-            lines.push(format!("cargo:rustc-env=CARGO_CFG_{}=1", line.to_ascii_uppercase()));
+            lines.push(format!(
+                "cargo:rustc-env=CARGO_CFG_{}=1",
+                line.to_ascii_uppercase()
+            ));
         }
     }
     lines
@@ -97,7 +100,9 @@ fn cfg_env_lines(output: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cfg_env_lines, emit_cfg_envs, emit_feature_envs, feature_env_lines, trim_cfg_quotes};
+    use super::{
+        cfg_env_lines, emit_cfg_envs, emit_feature_envs, feature_env_lines, trim_cfg_quotes,
+    };
     use oxdock_fs::{GuardedPath, PathResolver};
     use std::env;
 
@@ -143,8 +148,16 @@ mod tests {
         let _b = EnvGuard::set("CARGO_FEATURE_BETA", "1");
         let _c = EnvGuard::set("CARGO_FEATURE_IGNORE", "0");
         let lines = feature_env_lines();
-        assert!(lines.iter().any(|line| line == "cargo:rustc-env=CARGO_FEATURE_ALPHA=1"));
-        assert!(lines.iter().any(|line| line == "cargo:rustc-env=CARGO_FEATURE_BETA=1"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "cargo:rustc-env=CARGO_FEATURE_ALPHA=1")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "cargo:rustc-env=CARGO_FEATURE_BETA=1")
+        );
         let features_line = lines
             .iter()
             .find(|line| line.starts_with("cargo:rustc-env=CARGO_CFG_FEATURE="))
@@ -167,9 +180,7 @@ mod tests {
         "#;
         let lines = cfg_env_lines(output);
         assert!(lines.contains(&"cargo:rustc-env=CARGO_CFG_UNIX=1".to_string()));
-        assert!(
-            lines.contains(&"cargo:rustc-env=CARGO_CFG_TARGET_ARCH=x86_64".to_string())
-        );
+        assert!(lines.contains(&"cargo:rustc-env=CARGO_CFG_TARGET_ARCH=x86_64".to_string()));
         assert!(lines.contains(&"cargo:rustc-env=CARGO_CFG_TARGET_OS=linux".to_string()));
     }
 
@@ -185,7 +196,9 @@ mod tests {
         let resolver = PathResolver::new(root.as_path(), root.as_path()).expect("resolver");
         let script = root.join("fake-rustc.sh").expect("script path");
         let contents = b"#!/bin/sh\necho 'target_arch=\"x86_64\"'\necho unix\n";
-        resolver.write_file(&script, contents).expect("write script");
+        resolver
+            .write_file(&script, contents)
+            .expect("write script");
         resolver
             .set_permissions_mode_unix(&script, 0o755)
             .expect("chmod");

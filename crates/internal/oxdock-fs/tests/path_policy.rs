@@ -1,9 +1,9 @@
-use oxdock_fs::{
-    GuardPolicy, GuardedPath, PolicyPath, discover_workspace_root, embed_path, to_forward_slashes,
-    WorkspaceFs,
-};
 #[allow(clippy::disallowed_types)]
 use oxdock_fs::UnguardedPath;
+use oxdock_fs::{
+    GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, embed_path,
+    to_forward_slashes,
+};
 use std::env;
 
 struct EnvGuard {
@@ -108,10 +108,7 @@ fn mock_fs_writes_and_reads_files() {
     assert_eq!(contents, "hello");
     let dir = root.join("dir").expect("dir path");
     assert_eq!(fs.entry_kind(&dir).expect("dir kind"), EntryKind::Dir);
-    assert_eq!(
-        fs.entry_kind(&file).expect("file kind"),
-        EntryKind::File
-    );
+    assert_eq!(fs.entry_kind(&file).expect("file kind"), EntryKind::File);
 }
 
 #[cfg(feature = "mock-fs")]

@@ -638,10 +638,7 @@ mod tests {
             tempdir.as_guarded_path().root(),
         )
         .expect("resolver");
-        let out = tempdir
-            .as_guarded_path()
-            .join("out.txt")
-            .expect("out path");
+        let out = tempdir.as_guarded_path().join("out.txt").expect("out path");
         let contents = temp_resolver.read_to_string(&out).expect("read out");
         assert_eq!(contents.trim(), "hi");
     }
