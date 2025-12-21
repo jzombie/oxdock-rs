@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     let mut manager = default_process_manager();
 
     let initial_contents = read_stable_contents(&resolver, &watched)?;
-    let rendered = render_shell_outputs(&initial_contents, &ctx, &mut manager)?;
+    let rendered = render_shell_outputs(&initial_contents, &ctx, &mut manager, true)?;
     if rendered != initial_contents {
         resolver
             .write_file(&watched, rendered.as_bytes())
@@ -150,7 +150,7 @@ fn run_watch_loop(
         if let Ok(new_contents) = read_stable_contents(resolver, watched) {
             if new_contents != *last_contents {
                 report_fence_changes(watched, last_contents, &new_contents);
-                let rendered = render_shell_outputs(&new_contents, ctx, manager)?;
+                            let rendered = render_shell_outputs(&new_contents, ctx, manager, false)?;
                 if rendered != new_contents {
                     resolver
                         .write_file(watched, rendered.as_bytes())
@@ -384,6 +384,7 @@ fn render_shell_outputs(
     contents: &str,
     ctx: &CommandContext,
     manager: &mut impl ProcessManager,
+    only_missing_outputs: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     let mut out_lines: Vec<String> = Vec::new();
@@ -421,11 +422,15 @@ fn render_shell_outputs(
                     let existing = parse_output_block(&lines, i);
                     let should_run = match &existing {
                         Some(block) => {
-                            let expected_output_hash = sha256_hex(&block.output);
                             let matches_code = block.code_hash.as_deref() == Some(&code_hash);
-                            let matches_output =
-                                block.output_hash.as_deref() == Some(&expected_output_hash);
-                            !(matches_code && matches_output)
+                            if only_missing_outputs {
+                                !matches_code
+                            } else {
+                                let expected_output_hash = sha256_hex(&block.output);
+                                let matches_output =
+                                    block.output_hash.as_deref() == Some(&expected_output_hash);
+                                !(matches_code && matches_output)
+                            }
                         }
                         None => true,
                     };
