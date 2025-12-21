@@ -1,7 +1,9 @@
 use oxdock_fs::{
-    GuardPolicy, GuardedPath, PolicyPath, UnguardedPath, discover_workspace_root, embed_path,
-    to_forward_slashes, WorkspaceFs,
+    GuardPolicy, GuardedPath, PolicyPath, discover_workspace_root, embed_path, to_forward_slashes,
+    WorkspaceFs,
 };
+#[allow(clippy::disallowed_types)]
+use oxdock_fs::UnguardedPath;
 use std::env;
 
 struct EnvGuard {
@@ -55,6 +57,7 @@ fn guarded_path_join_parent_and_display() {
 fn policy_path_accessors_and_policy() {
     let tempdir = GuardedPath::tempdir().expect("tempdir");
     let guarded = tempdir.as_guarded_path().clone();
+    #[allow(clippy::disallowed_types)]
     let unguarded = UnguardedPath::new(guarded.as_path());
     let guarded_policy = PolicyPath::from(guarded.clone());
     let unguarded_policy = PolicyPath::from(unguarded.clone());

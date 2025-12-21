@@ -99,9 +99,7 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
             let valid = match next {
                 b'b' | b'B' => after.is_some_and(|c| c == b'0' || c == b'1'),
                 b'o' | b'O' => after.is_some_and(|c| matches!(c, b'0'..=b'7')),
-                b'x' | b'X' => after.is_some_and(|c| {
-                    matches!(c, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
-                }),
+                b'x' | b'X' => after.is_some_and(|c| c.is_ascii_hexdigit()),
                 _ => {
                     i += 1;
                     continue;
