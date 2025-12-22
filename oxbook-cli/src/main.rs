@@ -492,19 +492,32 @@ fn render_shell_outputs(
                     None => true,
                 };
                 if should_run {
-                    let output = run_interpreter(
+                    let run_res = run_interpreter(
                         resolver,
                         workspace_root,
                         source_dir,
                         cache,
                         &spec,
                         &script,
-                    )?;
-                    let output_block = format_output_block(&code_hash, &output);
-                    if let Some(block) = existing {
-                        i = block.end_index;
+                    );
+                    match run_res {
+                        Ok(output) => {
+                            let output_block = format_output_block(&code_hash, &output);
+                            if let Some(block) = existing {
+                                i = block.end_index;
+                            }
+                            out_lines.extend(output_block);
+                        }
+                        Err(err) => {
+                            // Don't crash — write the error into the output block.
+                            let err_msg = format!("error: {}", err);
+                            if let Some(block) = existing {
+                                i = block.end_index;
+                            }
+                            let output_block = format_output_block(&code_hash, &err_msg);
+                            out_lines.extend(output_block);
+                        }
                     }
-                    out_lines.extend(output_block);
                 } else if let Some(block) = existing {
                     out_lines.extend(
                         lines[block.start_index..block.end_index]
