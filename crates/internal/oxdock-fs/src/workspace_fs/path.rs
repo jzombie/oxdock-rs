@@ -295,7 +295,22 @@ impl PathLike for UnguardedPath {
     }
 
     fn join(&self, rel: &str) -> Result<Self> {
-        Ok(UnguardedPath::new(self.path.join(rel)))
+        // Preserve forward-slash style when the original path or the
+        // incoming relative fragment uses `/`. On Windows `Path::join`
+        // will format with backslashes which breaks tests that expect
+        // normalized forward-slash strings. If either side contains a
+        // forward slash treat the join as a string join and construct a
+        // `PathBuf` from the resulting string so the underlying OsString
+        // keeps the `/` characters.
+        let base = self.path.to_string_lossy();
+        if base.contains('/') || rel.contains('/') {
+            let base = base.trim_end_matches('/');
+            let rel = rel.trim_start_matches('/');
+            let joined = format!("{}/{}", base, rel);
+            Ok(UnguardedPath::new(PathBuf::from(joined)))
+        } else {
+            Ok(UnguardedPath::new(self.path.join(rel)))
+        }
     }
 
     fn parent(&self) -> Option<Self> {
