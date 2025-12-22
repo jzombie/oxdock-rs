@@ -399,10 +399,9 @@ mod tests {
 
     #[test]
     fn braced_script_splits_semicolon_commands() {
-        let input: DslMacroInput = parse_str(
-            "name: foo, script: { RUN echo; LS; RUN echo && ls }, out_dir: \"out\"",
-        )
-        .expect("parse braced script");
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { RUN echo; LS; RUN echo && ls }, out_dir: \"out\"")
+                .expect("parse braced script");
         let ScriptSource::Braced(ts) = input.script else {
             panic!("expected braced script");
         };
