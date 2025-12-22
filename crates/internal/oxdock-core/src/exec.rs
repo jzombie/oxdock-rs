@@ -1222,7 +1222,7 @@ mod tests {
         let fs = MockFs::new();
         let mut state = create_exec_state(fs);
         let mut proc = MockProcessManager::default();
-        let mut sink = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::new(Mutex::new(Vec::new()));
         let err = execute_steps(
             &mut state,
             &mut proc,
