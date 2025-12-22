@@ -190,24 +190,24 @@ fn run_watch_loop(
             }
         }
 
-        if let Ok(new_contents) = read_stable_contents(resolver, watched) {
-            if new_contents != *last_contents {
-                report_fence_changes(watched, last_contents, &new_contents);
-                let rendered = render_shell_outputs(
-                    &new_contents,
-                    resolver,
-                    workspace_root,
-                    source_dir,
-                    cache,
-                    false,
-                )?;
-                if rendered != new_contents {
-                    resolver
-                        .write_file(watched, rendered.as_bytes())
-                        .with_context(|| format!("write {}", watched.display()))?;
-                }
-                *last_contents = rendered;
+        if let Ok(new_contents) = read_stable_contents(resolver, watched)
+            && new_contents != *last_contents
+        {
+            report_fence_changes(watched, last_contents, &new_contents);
+            let rendered = render_shell_outputs(
+                &new_contents,
+                resolver,
+                workspace_root,
+                source_dir,
+                cache,
+                false,
+            )?;
+            if rendered != new_contents {
+                resolver
+                    .write_file(watched, rendered.as_bytes())
+                    .with_context(|| format!("write {}", watched.display()))?;
             }
+            *last_contents = rendered;
         }
     }
 }
@@ -430,75 +430,75 @@ fn render_shell_outputs(
     while i < lines.len() {
         let line = lines[i];
         let (ws, rest) = split_leading_ws(line);
-        if ws <= MAX_FENCE_PREFIX_WS {
-            if let Some((fence_char, fence_len, info)) = parse_fence_start(rest) {
-                out_lines.push(line.to_string());
-                i += 1;
-                let mut body_lines: Vec<&str> = Vec::new();
-                let mut closed = false;
-                while i < lines.len() {
-                    let inner = lines[i];
-                    let (inner_ws, inner_rest) = split_leading_ws(inner);
-                    if inner_ws <= MAX_FENCE_PREFIX_WS
-                        && is_fence_close(inner_rest, fence_char, fence_len)
-                    {
-                        out_lines.push(inner.to_string());
-                        i += 1;
-                        closed = true;
-                        break;
-                    }
-                    body_lines.push(inner);
+        if ws <= MAX_FENCE_PREFIX_WS
+            && let Some((fence_char, fence_len, info)) = parse_fence_start(rest)
+        {
+            out_lines.push(line.to_string());
+            i += 1;
+            let mut body_lines: Vec<&str> = Vec::new();
+            let mut closed = false;
+            while i < lines.len() {
+                let inner = lines[i];
+                let (inner_ws, inner_rest) = split_leading_ws(inner);
+                if inner_ws <= MAX_FENCE_PREFIX_WS
+                    && is_fence_close(inner_rest, fence_char, fence_len)
+                {
                     out_lines.push(inner.to_string());
                     i += 1;
+                    closed = true;
+                    break;
                 }
-                if !closed {
-                    continue;
-                }
-                if let Some(spec) =
-                    interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
-                {
-                    let script = body_lines.join("\n");
-                    let code_hash = code_hash(&script, &spec);
-                    let existing = parse_output_block(&lines, i);
-                    let should_run = match &existing {
-                        Some(block) => {
-                            let matches_code = block.code_hash.as_deref() == Some(&code_hash);
-                            if only_missing_outputs {
-                                !matches_code
-                            } else {
-                                let expected_output_hash = sha256_hex(&block.output);
-                                let matches_output =
-                                    block.output_hash.as_deref() == Some(&expected_output_hash);
-                                !(matches_code && matches_output)
-                            }
-                        }
-                        None => true,
-                    };
-                    if should_run {
-                        let output = run_interpreter(
-                            resolver,
-                            workspace_root,
-                            source_dir,
-                            cache,
-                            &spec,
-                            &script,
-                        )?;
-                        let output_block = format_output_block(&code_hash, &output);
-                        if let Some(block) = existing {
-                            i = block.end_index;
-                        }
-                        out_lines.extend(output_block);
-                    } else if let Some(block) = existing {
-                        out_lines.extend(
-                            lines[block.start_index..block.end_index]
-                                .iter()
-                                .map(|line| (*line).to_string()),
-                        );
-                        i = block.end_index;
-                    }
-                }
+                body_lines.push(inner);
+                out_lines.push(inner.to_string());
+                i += 1;
+            }
+            if !closed {
                 continue;
             }
+            if let Some(spec) =
+                interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
+            {
+                let script = body_lines.join("\n");
+                let code_hash = code_hash(&script, &spec);
+                let existing = parse_output_block(&lines, i);
+                let should_run = match &existing {
+                    Some(block) => {
+                        let matches_code = block.code_hash.as_deref() == Some(&code_hash);
+                        if only_missing_outputs {
+                            !matches_code
+                        } else {
+                            let expected_output_hash = sha256_hex(&block.output);
+                            let matches_output =
+                                block.output_hash.as_deref() == Some(&expected_output_hash);
+                            !(matches_code && matches_output)
+                        }
+                    }
+                    None => true,
+                };
+                if should_run {
+                    let output = run_interpreter(
+                        resolver,
+                        workspace_root,
+                        source_dir,
+                        cache,
+                        &spec,
+                        &script,
+                    )?;
+                    let output_block = format_output_block(&code_hash, &output);
+                    if let Some(block) = existing {
+                        i = block.end_index;
+                    }
+                    out_lines.extend(output_block);
+                } else if let Some(block) = existing {
+                    out_lines.extend(
+                        lines[block.start_index..block.end_index]
+                            .iter()
+                            .map(|line| (*line).to_string()),
+                    );
+                    i = block.end_index;
+                }
+            }
+            continue;
         }
         out_lines.push(line.to_string());
         i += 1;
@@ -931,7 +931,7 @@ fn command_output_to_string(output: &CommandOutput) -> String {
     if output.success() {
         combined
     } else if combined.is_empty() {
-        format!("error: command failed")
+        "error: command failed".to_string()
     } else {
         combined
     }

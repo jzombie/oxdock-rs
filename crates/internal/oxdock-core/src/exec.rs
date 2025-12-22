@@ -140,17 +140,12 @@ fn run_steps_with_manager<P: ProcessManager>(
     };
 
     let _default_stdout = io::stdout();
-    let (out, capture_output) = if let Some(s) = stdout {
-        (Some(s), true)
-    } else {
-        (None, false)
-    };
+    let out = stdout;
     let mut proc_mgr = process;
     execute_steps(
         &mut state,
         &mut proc_mgr,
         steps,
-        capture_output,
         stdin,
         false,
         out.clone(),
@@ -164,7 +159,6 @@ fn execute_steps<P: ProcessManager>(
     state: &mut ExecState<P>,
     process: &mut P,
     steps: &[Step],
-    capture_output: bool,
     stdin: Option<SharedInput>,
     expose_stdin: bool,
     out: Option<SharedOutput>,
@@ -522,7 +516,6 @@ fn execute_steps<P: ProcessManager>(
                             state,
                             process,
                             &steps,
-                            capture_output,
                             step_stdin,
                             next_expose_stdin,
                             step_stdout,
@@ -579,7 +572,6 @@ fn execute_steps<P: ProcessManager>(
                             &mut sub_state,
                             &mut sub_process,
                             &steps,
-                            true,
                             stdin.clone(),
                             expose_stdin,
                             Some(buf.clone()),
@@ -1063,7 +1055,7 @@ mod tests {
         let fs = MockFs::new();
         let mut state = create_exec_state(fs.clone());
         let mut proc = MockProcessManager::default();
-        execute_steps(&mut state, &mut proc, steps, false, None, false, None, true).unwrap();
+        execute_steps(&mut state, &mut proc, steps, None, false, None, true).unwrap();
         (state.cwd, fs.snapshot())
     }
 
@@ -1235,10 +1227,10 @@ mod tests {
             &mut state,
             &mut proc,
             &steps,
-            false,
             None,
             false,
             Some(sink),
+            false,
         )
         .unwrap_err();
         let msg = format!("{err:#}");

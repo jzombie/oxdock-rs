@@ -197,29 +197,19 @@ use std::sync::{Arc, Mutex};
 pub type SharedInput = Arc<Mutex<dyn std::io::Read + Send>>;
 pub type SharedOutput = Arc<Mutex<dyn std::io::Write + Send>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CommandMode {
+    #[default]
     Foreground,
     Background,
 }
 
-impl Default for CommandMode {
-    fn default() -> Self {
-        CommandMode::Foreground
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum CommandStdout {
+    #[default]
     Inherit,
     Stream(SharedOutput),
     Capture,
-}
-
-impl Default for CommandStdout {
-    fn default() -> Self {
-        CommandStdout::Inherit
-    }
 }
 
 #[derive(Clone, Default)]
@@ -799,38 +789,38 @@ fn spawn_child_with_streams(
         .with_context(|| format!("failed to spawn {:?}", cmd))?;
     let mut io_threads = Vec::new();
 
-    if let Some(stdin_stream) = stdin {
-        if let Some(mut child_stdin) = child.stdin.take() {
-            let thread = std::thread::spawn(move || {
-                if let Ok(mut guard) = stdin_stream.lock() {
-                    let _ = std::io::copy(&mut *guard, &mut child_stdin);
-                }
-            });
-            io_threads.push(thread);
-        }
+    if let Some(stdin_stream) = stdin
+        && let Some(mut child_stdin) = child.stdin.take()
+    {
+        let thread = std::thread::spawn(move || {
+            if let Ok(mut guard) = stdin_stream.lock() {
+                let _ = std::io::copy(&mut *guard, &mut child_stdin);
+            }
+        });
+        io_threads.push(thread);
     }
 
-    if let Some(stdout_stream) = stdout {
-        if let Some(mut child_stdout) = child.stdout.take() {
-            let thread = std::thread::spawn(move || {
-                let mut buf = [0u8; 1024];
-                loop {
-                    match std::io::Read::read(&mut child_stdout, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut guard) = stdout_stream.lock() {
-                                if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
-                                    break;
-                                }
-                                let _ = std::io::Write::flush(&mut *guard);
+    if let Some(stdout_stream) = stdout
+        && let Some(mut child_stdout) = child.stdout.take()
+    {
+        let thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut child_stdout, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_stream.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
                             }
+                            let _ = std::io::Write::flush(&mut *guard);
                         }
-                        Err(_) => break,
                     }
+                    Err(_) => break,
                 }
-            });
-            io_threads.push(thread);
-        }
+            }
+        });
+        io_threads.push(thread);
     }
 
     Ok(ChildHandle { child, io_threads })
