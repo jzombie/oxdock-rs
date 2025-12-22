@@ -127,4 +127,37 @@ mod tests {
             "expected quoted args preserved, got: {script}"
         );
     }
+
+    #[test]
+    fn script_from_braced_tokens_splits_semicolons_into_lines() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("RUN", Span::call_site())),
+            TokenTree::Ident(Ident::new("echo", Span::call_site())),
+            TokenTree::Punct(Punct::new(';', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("LS", Span::call_site())),
+            TokenTree::Punct(Punct::new(';', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("RUN", Span::call_site())),
+            TokenTree::Ident(Ident::new("echo", Span::call_site())),
+            TokenTree::Punct(Punct::new('&', Spacing::Joint)),
+            TokenTree::Punct(Punct::new('&', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("ls", Span::call_site())),
+        ]);
+
+        let script = script_from_braced_tokens(&ts).expect("failed to render semicolon script");
+        assert_eq!(script, "RUN echo;\nLS;\nRUN echo && ls");
+    }
+
+    #[test]
+    fn script_from_braced_tokens_allows_command_like_ident_in_run_bg() {
+        let mut ts = TokenStream::new();
+        ts.extend([
+            TokenTree::Ident(Ident::new("RUN_BG", Span::call_site())),
+            TokenTree::Ident(Ident::new("LS", Span::call_site())),
+            TokenTree::Ident(Ident::new("a", Span::call_site())),
+        ]);
+
+        let script = script_from_braced_tokens(&ts).expect("failed to render RUN_BG script");
+        assert_eq!(script, "RUN_BG LS a");
+    }
 }

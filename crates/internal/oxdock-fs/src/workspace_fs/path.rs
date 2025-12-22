@@ -295,7 +295,22 @@ impl PathLike for UnguardedPath {
     }
 
     fn join(&self, rel: &str) -> Result<Self> {
-        Ok(UnguardedPath::new(self.path.join(rel)))
+        // Preserve forward-slash style when the original path or the
+        // incoming relative fragment uses `/`. On Windows `Path::join`
+        // will format with backslashes which breaks tests that expect
+        // normalized forward-slash strings. If either side contains a
+        // forward slash treat the join as a string join and construct a
+        // `PathBuf` from the resulting string so the underlying OsString
+        // keeps the `/` characters.
+        let base = self.path.to_string_lossy();
+        if base.contains('/') || rel.contains('/') {
+            let base = base.trim_end_matches('/');
+            let rel = rel.trim_start_matches('/');
+            let joined = format!("{}/{}", base, rel);
+            Ok(UnguardedPath::new(PathBuf::from(joined)))
+        } else {
+            Ok(UnguardedPath::new(self.path.join(rel)))
+        }
     }
 
     fn parent(&self) -> Option<Self> {
@@ -364,4 +379,61 @@ pub fn embed_path(path: &GuardedPath) -> String {
     let cmd = command_path(path);
     let s = cmd.to_string_lossy();
     to_forward_slashes(&s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::PathResolver;
+    use super::*;
+
+    #[test]
+    fn guarded_path_join_and_parent_round_trip() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let child = root.join("child/grandchild").expect("join");
+        let parent = child.parent().expect("parent");
+        assert_eq!(parent.as_path(), root.as_path().join("child"));
+        assert_eq!(child.root(), root.root());
+    }
+
+    #[test]
+    fn guarded_tempdir_persist_keeps_directory() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let persisted = temp.persist();
+        let resolver =
+            PathResolver::new_guarded(root.clone(), root.clone()).expect("path resolver");
+
+        resolver
+            .create_dir_all(&root)
+            .expect("create persisted dir");
+        assert!(resolver.exists(&persisted));
+        assert!(resolver.exists(&root));
+
+        resolver.remove_dir_all(&root).expect("cleanup tempdir");
+    }
+
+    #[allow(clippy::disallowed_types)]
+    #[test]
+    fn unguarded_path_join_and_parent_work() {
+        let root = UnguardedPath::new("/tmp/oxdock-fs-test");
+        let joined = root.join("child").expect("join");
+        assert_eq!(
+            joined.as_path().to_string_lossy(),
+            "/tmp/oxdock-fs-test/child"
+        );
+        let parent = joined.parent().expect("parent");
+        assert_eq!(parent.as_path().to_string_lossy(), "/tmp/oxdock-fs-test");
+    }
+
+    #[test]
+    fn embed_path_normalizes_backslashes() {
+        let guard = GuardedPath::new_from_str("C:\\sandbox", "C:\\sandbox\\foo\\bar")
+            .expect("guarded path");
+        let normalized = embed_path(&guard);
+        assert!(!normalized.contains('\\'));
+        assert!(normalized.contains("sandbox"));
+        assert!(normalized.contains("foo"));
+        assert!(normalized.contains("bar"));
+    }
 }
