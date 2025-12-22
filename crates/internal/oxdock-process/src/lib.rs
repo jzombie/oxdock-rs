@@ -463,7 +463,7 @@ impl ProcessManager for SyntheticProcessManager {
             CommandMode::Foreground => {
                 let needs_bytes = matches!(stdout, CommandStdout::Capture)
                     || matches!(stdout, CommandStdout::Stream(_));
-                let (mut out, status) = execute_sync(ctx, script, needs_bytes)?;
+                let (out, status) = execute_sync(ctx, script, needs_bytes)?;
                 if !status.success() {
                     bail!("command {:?} failed with status {}", script, status);
                 }
