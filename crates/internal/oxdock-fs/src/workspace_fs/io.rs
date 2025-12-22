@@ -279,3 +279,54 @@ impl PathResolver {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace_fs::GuardedPath;
+
+    #[cfg_attr(
+        miri,
+        ignore = "exercises host std::fs open calls; blocked under Miri isolation"
+    )]
+    #[test]
+    fn resolver_read_write_and_cleanup_file() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver");
+
+        let file = root.join("dir/nested.txt").expect("join");
+        resolver.ensure_parent_dir(&file).expect("ensure parent");
+        resolver.write_file(&file, b"hello").expect("write");
+        resolver
+            .set_permissions_mode_unix(&file, 0o644)
+            .expect("chmod");
+
+        let contents = resolver.read_to_string(&file).expect("read_to_string");
+        assert_eq!(contents, "hello");
+
+        let canonical = resolver.canonicalize(&file).expect("canonicalize");
+        assert_eq!(canonical.as_path(), file.as_path());
+
+        let entries = resolver
+            .read_dir_entries(&root.join("dir").expect("dir"))
+            .expect("read_dir_entries");
+        assert!(!entries.is_empty());
+
+        let meta = resolver.metadata(&file).expect("metadata");
+        assert!(meta.is_file());
+
+        #[allow(clippy::disallowed_types)]
+        {
+            let unguarded = UnguardedPath::new(file.to_path_buf());
+            let _ = resolver.open_file_unguarded(&unguarded).expect("open");
+            let _ = resolver.metadata_unguarded(&unguarded).expect("stat");
+        }
+
+        resolver.remove_file(&file).expect("remove file");
+        assert!(!resolver.exists(&file));
+        resolver
+            .remove_dir_all(&root.join("dir").expect("dir"))
+            .expect("remove dir");
+    }
+}
