@@ -93,3 +93,20 @@ fn tempdir_dropped_before_error_exit() {
     assert!(!status.success(), "child should exit with failure code: {status}");
     assert!(paths.iter().all(|path| !path.exists()));
 }
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation",
+)]
+#[test]
+fn cleanup_skips_live_tempdir() {
+    let temp = GuardedPath::tempdir().expect("tempdir");
+    let path = temp.as_guarded_path().to_path_buf();
+    assert!(path.exists());
+
+    GuardedPath::cleanup_stale_tempdirs().expect("cleanup");
+    assert!(path.exists());
+
+    drop(temp);
+    assert!(!path.exists());
+}
