@@ -1,0 +1,2 @@
+[env:OXBOOK_SNIPPET_PATH]
+WITH_IO [stdin] RUN bash -lc 'set -euo pipefail; rustc "$OXBOOK_SNIPPET_PATH" -o oxbook-snippet-rust-bin; ./oxbook-snippet-rust-bin'
