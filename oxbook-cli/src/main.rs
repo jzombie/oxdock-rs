@@ -949,7 +949,11 @@ fn get_registered_oxfile(language: &str) -> Option<String> {
     reg.get(language).cloned()
 }
 
-#[allow(clippy::disallowed_types, clippy::disallowed_methods, clippy::collapsible_if)]
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::collapsible_if
+)]
 fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
     let root = workspace_root.root();
     let mut stack = vec![root.to_path_buf()];

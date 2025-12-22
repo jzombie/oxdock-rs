@@ -498,7 +498,11 @@ pub(crate) fn run_temp_cleanup_once() {
 pub(crate) fn run_temp_cleanup_once() {}
 
 #[cfg(not(miri))]
-#[allow(clippy::disallowed_types, clippy::disallowed_methods, clippy::collapsible_if)]
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::collapsible_if
+)]
 fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     for entry in std::fs::read_dir(&base)? {

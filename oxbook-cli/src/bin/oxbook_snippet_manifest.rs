@@ -91,8 +91,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        fs::write(out_path, cargo_toml)
-            .with_context(|| format!("write {}", out_path.display()))?;
+        fs::write(out_path, cargo_toml).with_context(|| format!("write {}", out_path.display()))?;
     }
     Ok(out_path.to_path_buf())
 }
