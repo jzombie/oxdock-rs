@@ -31,7 +31,7 @@ embed! {
 embed! {
     name: InlineAssets,
     script: {
-        [env:PROFILE=release] {
+        [env:PROFILE==release] {
             WORKDIR /client
             RUN npm run build
         }

@@ -270,15 +270,15 @@ mod tests {
         cases.push((
             indoc! {r#"
                 [!env:SKIP]
-                [platform:windows] RUN echo win
-                [env:MODE=beta, linux] RUN echo combo
+                [platform==windows] RUN echo win
+                [env:MODE==beta, linux] RUN echo combo
             "#}
             .trim()
             .to_string(),
             quote! {
                 [!env:SKIP]
-                [platform:windows] RUN echo win
-                [env:MODE=beta, linux] RUN echo combo
+                [platform==windows] RUN echo win
+                [env:MODE==beta, linux] RUN echo combo
             },
         ));
 
@@ -301,14 +301,14 @@ mod tests {
 
         cases.push((
             indoc! {r#"
-                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:TEST==1] CAPTURE out.txt RUN echo hi
                 [env:FOO] WRITE foo.txt "bar"
                 SYMLINK link target
             "#}
             .trim()
             .to_string(),
             quote! {
-                [env:TEST=1] CAPTURE out.txt RUN echo hi
+                [env:TEST==1] CAPTURE out.txt RUN echo hi
                 [env:FOO] WRITE foo.txt "bar"
                 SYMLINK link target
             },

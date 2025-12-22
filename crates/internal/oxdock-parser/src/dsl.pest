@@ -41,7 +41,7 @@ guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | "]" | linebreak | "//" | "/
 
 env_comparison = { not_equals | equals }
 
-equals = { "=" ~ env_value }
+equals = { "==" ~ env_value }
 
 not_equals = { "!=" ~ env_value }
 
@@ -49,7 +49,13 @@ env_value = @{ guard_value_char+ }
 
 guard_value_char = _{ !( "," | "|" | "]" | linebreak | "//" | "/*" ) ~ ANY }
 
-platform_guard = { "platform" ~ (":" | "=") ~ ws? ~ platform_tag }
+platform_guard = { "platform" ~ platform_comparison }
+
+platform_comparison = { platform_equals | platform_not_equals }
+
+platform_equals = { "==" ~ ws? ~ platform_tag }
+
+platform_not_equals = { "!=" ~ ws? ~ platform_tag }
 
 bare_platform = { platform_tag }
 

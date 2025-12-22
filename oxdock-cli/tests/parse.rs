@@ -159,7 +159,7 @@ fn parse_semicolon_splits_multiple_instructions() {
 #[test]
 fn parse_multi_line_guard_block() {
     let script = indoc! {r#"
-        [ env:MODE=debug,
+                [ env:MODE==debug,
           linux
         ]
         WRITE guarded.txt ok
@@ -176,7 +176,7 @@ fn parse_multi_line_guard_block() {
 #[test]
 fn parse_guarded_block_applies_to_all_commands() {
     let script = indoc! {r#"
-        [env:TEST=1] {
+        [env:TEST==1] {
             WRITE one.txt 1
             WRITE two.txt 2
         }
