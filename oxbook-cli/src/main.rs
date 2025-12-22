@@ -227,7 +227,9 @@ fn event_maybe_affects(event: &Event, watched: &GuardedPath) -> bool {
     let watched_name = watched.as_path().file_name();
     event.paths.iter().any(|path| {
         path == watched.as_path()
-            || watched_name.map(|name| path.file_name() == Some(name)).unwrap_or(false)
+            || watched_name
+                .map(|name| path.file_name() == Some(name))
+                .unwrap_or(false)
     })
 }
 
@@ -573,7 +575,10 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
 }
 
 fn parse_output_meta(line: &str, code_hash: &mut Option<String>, output_hash: &mut Option<String>) {
-    let trimmed = line.trim_start_matches("<!--").trim_end_matches("-->").trim();
+    let trimmed = line
+        .trim_start_matches("<!--")
+        .trim_end_matches("-->")
+        .trim();
     let tokens: Vec<&str> = trimmed.split_whitespace().collect();
     for token in tokens {
         if let Some(value) = token.strip_prefix("code=") {
@@ -738,7 +743,8 @@ fn build_env_from_oxfile(
     hash: String,
 ) -> Result<InterpreterEnv> {
     let steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
-    let tempdir = GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
+    let tempdir =
+        GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
     let temp_root = tempdir.as_guarded_path().clone();
     let build_context = resolver.root().clone();
     let output_buf = Arc::new(Mutex::new(Vec::new()));
@@ -776,13 +782,7 @@ fn run_interpreter(
                 .with_context(|| format!("missing env for {}", path.display()))?
         }
         None => {
-            return run_in_default_env(
-                resolver,
-                workspace_root,
-                source_dir,
-                spec,
-                script,
-            );
+            return run_in_default_env(resolver, workspace_root, source_dir, spec, script);
         }
     };
     run_in_env(resolver, env, spec, script)
@@ -860,7 +860,9 @@ fn run_in_env_with_resolver(
         "CARGO_TARGET_DIR",
         command_path(&cargo_target_dir).into_owned(),
     );
-    let output = cmd.output().with_context(|| format!("run {}", spec.language))?;
+    let output = cmd
+        .output()
+        .with_context(|| format!("run {}", spec.language))?;
     Ok(command_output_to_string(&output))
 }
 
@@ -948,4 +950,3 @@ fn code_hash(script: &str, spec: &InterpreterSpec) -> String {
     }
     sha256_hex(&combined)
 }
-

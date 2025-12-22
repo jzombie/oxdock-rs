@@ -468,7 +468,7 @@ fn parse_run_args(pair: Pair<Rule>) -> Result<String> {
 
 fn parse_smart_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     let parts: Vec<_> = pair.into_inner().collect();
-    
+
     // Special case: If there is only one token and it is quoted, we assume the user
     // quoted it to satisfy the DSL (e.g. to include semicolons) but intends for the
     // content to be the raw command string. We unquote it unconditionally.
@@ -531,7 +531,6 @@ fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     }
     Ok(body)
 }
-
 
 fn parse_exit_code(pair: Pair<Rule>) -> Result<i32> {
     for inner in pair.into_inner() {

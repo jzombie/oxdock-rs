@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
-use oxdock_process::{CommandBuilder, SharedInput};
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
+use oxdock_process::{CommandBuilder, SharedInput};
 use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::sync::{Arc, Mutex};
@@ -171,11 +171,11 @@ where
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
         // can source from the original tree if needed. Capture the final working directory so shells
         // inherit whatever WORKDIR the script ended on.
-        
+
         // If we are running a script from a file, we might have stdin available for the script itself.
         // If we read the script from stdin, then stdin is consumed.
         // But if opts.script is ScriptSource::Path, stdin is still available.
-        
+
         let mut stdin_handle: Option<SharedInput> = None;
         if let ScriptSource::Path(_) = opts.script {
             let stdin = io::stdin();
@@ -189,7 +189,8 @@ where
             }
         }
 
-        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps, stdin_handle, None)?;
+        final_cwd =
+            run_steps_with_context_result(&temp_root, &workspace_root, &steps, stdin_handle, None)?;
     }
 
     // If requested, drop into an interactive shell after running the script.

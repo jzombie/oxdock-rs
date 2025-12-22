@@ -68,10 +68,7 @@ impl Command {
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(
-            self,
-            Command::CaptureToFile | Command::WithIo
-        )
+        matches!(self, Command::CaptureToFile | Command::WithIo)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
