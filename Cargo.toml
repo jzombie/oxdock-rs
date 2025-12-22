@@ -7,10 +7,10 @@ members = [
     "crates/internal/oxdock-parser",
     "crates/internal/oxdock-process",
     "crates/internal/oxdock-workspace-tests",
+    "oxbook-cli",
     "oxdock-buildtime-helpers",
     "oxdock-buildtime-macros",
     "oxdock-cli",
-    "oxbook-cli"
 ]
 resolver = "2"
 
