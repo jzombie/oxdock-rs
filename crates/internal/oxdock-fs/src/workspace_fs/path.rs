@@ -9,9 +9,9 @@ use std::fs::{File, OpenOptions};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 #[allow(clippy::disallowed_types)]
 use tempfile::{Builder, TempDir};
 use tracing::warn;
@@ -578,7 +578,11 @@ fn is_pid_alive(pid: u32) -> bool {
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
         CloseHandle(handle);
-        if ok == 0 { true } else { code == (STILL_ACTIVE as u32) }
+        if ok == 0 {
+            true
+        } else {
+            code == (STILL_ACTIVE as u32)
+        }
     }
 }
 

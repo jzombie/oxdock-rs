@@ -1,4 +1,4 @@
-use oxdock_fs::{embed_path, GuardedPath};
+use oxdock_fs::{GuardedPath, embed_path};
 use std::env;
 use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
