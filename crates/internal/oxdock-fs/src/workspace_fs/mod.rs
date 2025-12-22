@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 
 use backend::Backend;
+use path::run_temp_cleanup_once;
 
 #[cfg(not(miri))]
 pub type DirEntry = std::fs::DirEntry;
@@ -140,6 +141,7 @@ impl PathResolver {
     /// creation so callers avoid ad-hoc path construction.
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     pub fn from_manifest_env() -> Result<Self> {
+        run_temp_cleanup_once();
         let manifest_dir =
             std::env::var("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR missing")?;
         let path = Path::new(&manifest_dir);
@@ -148,6 +150,7 @@ impl PathResolver {
 
     #[allow(clippy::disallowed_types)]
     pub fn new(root: &Path, build_context: &Path) -> Result<Self> {
+        run_temp_cleanup_once();
         let root_guard = GuardedPath::new_root(root)?;
         let build_guard = GuardedPath::new_root(build_context)?;
         let backend = Backend::new(&root_guard, &build_guard)?;
@@ -160,6 +163,7 @@ impl PathResolver {
     }
 
     pub fn new_guarded(root: GuardedPath, build_context: GuardedPath) -> Result<Self> {
+        run_temp_cleanup_once();
         let backend = Backend::new(&root, &build_context)?;
         Ok(Self {
             root,

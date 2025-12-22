@@ -11,6 +11,7 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 #[allow(clippy::disallowed_types)]
 use tempfile::{Builder, TempDir};
 
@@ -437,6 +438,19 @@ fn write_temp_lock(_guard: &GuardedPath) -> Result<File> {
 fn cleanup_marked_tempdirs() -> Result<()> {
     cleanup_marked_tempdirs_in(std::env::temp_dir())
 }
+
+#[cfg(not(miri))]
+pub(crate) fn run_temp_cleanup_once() {
+    static CLEANUP: OnceLock<()> = OnceLock::new();
+    CLEANUP.get_or_init(|| {
+        if let Err(err) = cleanup_marked_tempdirs() {
+            warn!(%err, "failed to cleanup stale oxdock tempdirs");
+        }
+    });
+}
+
+#[cfg(miri)]
+pub(crate) fn run_temp_cleanup_once() {}
 
 #[cfg(not(miri))]
 fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
