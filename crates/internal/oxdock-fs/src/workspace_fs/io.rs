@@ -285,6 +285,7 @@ mod tests {
     use super::*;
     use crate::workspace_fs::GuardedPath;
 
+    #[cfg_attr(miri, ignore = "exercises host std::fs open calls; blocked under Miri isolation")]
     #[test]
     fn resolver_read_write_and_cleanup_file() {
         let temp = GuardedPath::tempdir().expect("tempdir");
