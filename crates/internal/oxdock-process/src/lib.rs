@@ -237,7 +237,6 @@ impl ProcessManager for ShellProcessManager {
         stdin: Option<SharedInput>,
         stdout: Option<SharedOutput>,
     ) -> Result<()> {
-        eprintln!("DEBUG: ShellProcessManager::run script='{}' stdin={:?} stdout={:?}", script, stdin.is_some(), stdout.is_some());
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
         
@@ -842,8 +841,20 @@ fn run_cmd_with_io(cmd: &mut ProcessCommand, stdin: SharedInput, stdout: SharedO
     if let Some(mut output) = child.stdout.take() {
         let stdout_clone = stdout.clone();
         threads.push(std::thread::spawn(move || {
-            if let Ok(mut guard) = stdout_clone.lock() {
-                let _ = std::io::copy(&mut output, &mut *guard);
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut output, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         }));
     }
@@ -875,8 +886,20 @@ fn run_cmd_with_output(cmd: &mut ProcessCommand, stdout: SharedOutput) -> Result
     if let Some(mut output) = child.stdout.take() {
         let stdout_clone = stdout.clone();
         threads.push(std::thread::spawn(move || {
-            if let Ok(mut guard) = stdout_clone.lock() {
-                let _ = std::io::copy(&mut output, &mut *guard);
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut output, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         }));
     }
@@ -922,8 +945,20 @@ fn spawn_cmd_with_io(
     if let Some(mut output) = child.stdout.take() {
         let stdout_clone = stdout.clone();
         let t = std::thread::spawn(move || {
-            if let Ok(mut guard) = stdout_clone.lock() {
-                let _ = std::io::copy(&mut output, &mut *guard);
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut output, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         });
         io_threads.push(t);
@@ -948,8 +983,20 @@ fn spawn_cmd_with_output(
     if let Some(mut output) = child.stdout.take() {
         let stdout_clone = stdout.clone();
         let t = std::thread::spawn(move || {
-            if let Ok(mut guard) = stdout_clone.lock() {
-                let _ = std::io::copy(&mut output, &mut *guard);
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut output, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         });
         io_threads.push(t);

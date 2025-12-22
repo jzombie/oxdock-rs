@@ -37,4 +37,5 @@ cases = [
   "semicolon",
   "cat_stdout",
   "cwd_stdout",
+  "with_io_bg",
 ]

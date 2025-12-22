@@ -460,10 +460,56 @@ fn parse_message(pair: Pair<Rule>) -> Result<String> {
 fn parse_run_args(pair: Pair<Rule>) -> Result<String> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::run_args {
-            return parse_raw_concatenated_string(inner);
+            return parse_smart_concatenated_string(inner);
         }
     }
     bail!("missing run args")
+}
+
+fn parse_smart_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+    let parts: Vec<_> = pair.into_inner().collect();
+    
+    // Special case: If there is only one token and it is quoted, we assume the user
+    // quoted it to satisfy the DSL (e.g. to include semicolons) but intends for the
+    // content to be the raw command string. We unquote it unconditionally.
+    if parts.len() == 1 && parts[0].as_rule() == Rule::quoted_string {
+        return parse_quoted_string(parts[0].clone());
+    }
+
+    let mut body = String::new();
+    let mut last_end = None;
+    for part in parts {
+        let span = part.as_span();
+        if let Some(end) = last_end
+            && span.start() > end
+        {
+            body.push(' ');
+        }
+        match part.as_rule() {
+            Rule::quoted_string => {
+                let raw = part.as_str();
+                let unquoted = parse_quoted_string(part.clone())?;
+                // Preserve quotes if the content needs them to be parsed correctly
+                // by the shell (e.g. contains spaces, semicolons, etc).
+                let needs_quotes = unquoted.is_empty()
+                    || unquoted
+                        .chars()
+                        .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
+                    || unquoted.contains("//")
+                    || unquoted.contains("/*");
+
+                if needs_quotes {
+                    body.push_str(raw);
+                } else {
+                    body.push_str(&unquoted);
+                }
+            }
+            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
+            _ => {}
+        }
+        last_end = Some(span.end());
+    }
+    Ok(body)
 }
 
 fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
@@ -486,55 +532,6 @@ fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     Ok(body)
 }
 
-fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
-    let parts: Vec<_> = pair.into_inner().collect();
-    if parts.len() == 1 && parts[0].as_rule() == Rule::quoted_string {
-        let raw = parts[0].as_str();
-        let unquoted = parse_quoted_string(parts[0].clone())?;
-        let needs_quotes = unquoted.is_empty()
-            || unquoted.chars().any(|c| c == ';' || c == '\n' || c == '\r')
-            || unquoted.contains("//")
-            || unquoted.contains("/*");
-        if needs_quotes {
-            return Ok(raw.to_string());
-        }
-        return Ok(unquoted);
-    }
-    let mut body = String::new();
-    let mut last_end = None;
-    for part in parts {
-        let span = part.as_span();
-        if let Some(end) = last_end
-            && span.start() > end
-        {
-            body.push(' ');
-        }
-        match part.as_rule() {
-            Rule::quoted_string => {
-                let raw = part.as_str();
-                let unquoted = parse_quoted_string(part.clone())?;
-                // Preserve quotes if the content needs them to be parsed correctly
-                // or to preserve argument grouping (spaces).
-                let needs_quotes = unquoted.is_empty()
-                    || unquoted
-                        .chars()
-                        .any(|c| c.is_whitespace() || c == ';' || c == '\n' || c == '\r')
-                    || unquoted.contains("//")
-                    || unquoted.contains("/*");
-
-                if needs_quotes {
-                    body.push_str(raw);
-                } else {
-                    body.push_str(&unquoted);
-                }
-            }
-            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
-            _ => {}
-        }
-        last_end = Some(span.end());
-    }
-    Ok(body)
-}
 
 fn parse_exit_code(pair: Pair<Rule>) -> Result<i32> {
     for inner in pair.into_inner() {

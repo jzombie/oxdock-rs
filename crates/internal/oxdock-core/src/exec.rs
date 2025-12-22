@@ -155,6 +155,7 @@ fn run_steps_with_manager<P: ProcessManager>(
         stdin,
         false,
         out.clone(),
+        true,
     )?;
 
     Ok(state.cwd)
@@ -168,6 +169,7 @@ fn execute_steps<P: ProcessManager>(
     stdin: Option<SharedInput>,
     expose_stdin: bool,
     out: Option<SharedOutput>,
+    wait_at_end: bool,
 ) -> Result<()> {
     let fs_root = state.fs.root().clone();
     let build_context = state.fs.build_context().clone();
@@ -481,6 +483,7 @@ fn execute_steps<P: ProcessManager>(
                         step_stdin,
                         next_expose_stdin,
                         step_stdout,
+                        false,
                     )?;
                     Ok(())
                 }
@@ -537,6 +540,7 @@ fn execute_steps<P: ProcessManager>(
                         stdin.clone(),
                         expose_stdin,
                         Some(buf.clone()),
+                        true,
                     )?;
                     
                     let data = buf.lock().unwrap();
@@ -571,7 +575,7 @@ fn execute_steps<P: ProcessManager>(
         }
     }
 
-    if !state.bg_children.is_empty() {
+    if wait_at_end && !state.bg_children.is_empty() {
         let mut first = state.bg_children.remove(0);
         let status = first.wait()?;
         for child in state.bg_children.iter_mut() {
@@ -1018,7 +1022,7 @@ mod tests {
         let fs = MockFs::new();
         let mut state = create_exec_state(fs.clone());
         let mut proc = MockProcessManager::default();
-        execute_steps(&mut state, &mut proc, steps, false, None, false, None).unwrap();
+        execute_steps(&mut state, &mut proc, steps, false, None, false, None, true).unwrap();
         (state.cwd, fs.snapshot())
     }
 

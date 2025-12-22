@@ -17,6 +17,7 @@ pub struct MockRunCall {
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
     pub stdin_provided: bool,
+    pub stdin: Option<Vec<u8>>,
 }
 
 /// Captured invocation for a background spawn.
@@ -28,6 +29,7 @@ pub struct MockSpawnCall {
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
     pub stdin_provided: bool,
+    pub stdin: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Default)]
@@ -70,10 +72,13 @@ impl ProcessManager for MockProcessManager {
         _stdout: Option<SharedOutput>,
     ) -> Result<()> {
         let stdin_provided = stdin.is_some();
+        let mut captured_stdin = None;
         if let Some(reader) = stdin {
-            // Stream into sink to simulate consumption without buffering
+            // Stream into buffer to simulate consumption and capture
             let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
-            std::io::copy(&mut *guard, &mut std::io::sink())?;
+            let mut buf = Vec::new();
+            std::io::copy(&mut *guard, &mut buf)?;
+            captured_stdin = Some(buf);
         }
 
         self.runs.borrow_mut().push(MockRunCall {
@@ -82,6 +87,7 @@ impl ProcessManager for MockProcessManager {
             envs: ctx.envs().clone(),
             cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
             stdin_provided,
+            stdin: captured_stdin,
         });
         Ok(())
     }
@@ -104,10 +110,13 @@ impl ProcessManager for MockProcessManager {
         _stdout: Option<SharedOutput>,
     ) -> Result<Self::Handle> {
         let stdin_provided = stdin.is_some();
+        let mut captured_stdin = None;
         if let Some(reader) = stdin {
-            // Stream into sink to simulate consumption without buffering
+            // Stream into buffer to simulate consumption and capture
             let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
-            std::io::copy(&mut *guard, &mut std::io::sink())?;
+            let mut buf = Vec::new();
+            std::io::copy(&mut *guard, &mut buf)?;
+            captured_stdin = Some(buf);
         }
 
         self.spawns.borrow_mut().push(MockSpawnCall {
@@ -116,6 +125,7 @@ impl ProcessManager for MockProcessManager {
             envs: ctx.envs().clone(),
             cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
             stdin_provided,
+            stdin: captured_stdin,
         });
         let plan = self
             .plans
