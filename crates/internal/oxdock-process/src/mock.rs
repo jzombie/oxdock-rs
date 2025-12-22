@@ -75,7 +75,9 @@ impl ProcessManager for MockProcessManager {
         let mut captured_stdin = None;
         if let Some(reader) = stdin {
             // Stream into buffer to simulate consumption and capture
-            let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
+            let mut guard = reader
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
             let mut buf = Vec::new();
             std::io::copy(&mut *guard, &mut buf)?;
             captured_stdin = Some(buf);
@@ -113,7 +115,9 @@ impl ProcessManager for MockProcessManager {
         let mut captured_stdin = None;
         if let Some(reader) = stdin {
             // Stream into buffer to simulate consumption and capture
-            let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
+            let mut guard = reader
+                .lock()
+                .map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
             let mut buf = Vec::new();
             std::io::copy(&mut *guard, &mut buf)?;
             captured_stdin = Some(buf);
