@@ -502,4 +502,29 @@ mod tests {
         push_fragment(&mut buf, "echo", true);
         assert_eq!(buf, "RUN echo");
     }
+
+    #[test]
+    fn span_gap_requires_space_detects_column_gap_on_same_line() {
+        let prev = LineColumn { line: 1, column: 1 };
+        let next = LineColumn { line: 1, column: 4 };
+        assert!(span_gap_requires_space(prev, next));
+        let new_line = LineColumn { line: 2, column: 0 };
+        assert!(!span_gap_requires_space(prev, new_line));
+    }
+
+    #[test]
+    fn sticky_matches_urlish_characters() {
+        for ch in ['/', '.', '-', ':', '=', '$', '{', '}'] {
+            assert!(sticky(ch));
+        }
+        assert!(!sticky('a'));
+    }
+
+    #[test]
+    fn line_predicates_distinguish_run_and_capture_contexts() {
+        assert!(line_is_run_context("  RUN something"));
+        assert!(!line_is_run_context("ECHO hi"));
+        assert!(line_expects_inner_command("CAPTURE_TO_FILE out"));
+        assert!(!line_expects_inner_command("RUN thing"));
+    }
 }
