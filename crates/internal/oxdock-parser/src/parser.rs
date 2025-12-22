@@ -552,32 +552,27 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
         match inner.as_rule() {
             Rule::env_key => key = inner.as_str().trim().to_string(),
             Rule::env_comparison => {
-                let inner_comp = inner.into_inner().next().unwrap();
-                match inner_comp.as_rule() {
-                    Rule::equals => {
-                        value = Some(
-                            inner_comp
-                                .into_inner()
-                                .next()
-                                .unwrap()
-                                .as_str()
-                                .trim()
-                                .to_string(),
-                        );
+                for comp_part in inner.into_inner() {
+                    match comp_part.as_rule() {
+                        Rule::equals_env | Rule::not_equals_env => {
+                            for part in comp_part.into_inner() {
+                                match part.as_rule() {
+                                    Rule::eq_op => {}
+                                    Rule::neq_op => is_not_equals = true,
+                                    Rule::env_value => {
+                                        value = Some(part.as_str().trim().to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Rule::eq_op => {}
+                        Rule::neq_op => is_not_equals = true,
+                        Rule::env_value => {
+                            value = Some(comp_part.as_str().trim().to_string());
+                        }
+                        _ => {}
                     }
-                    Rule::not_equals => {
-                        is_not_equals = true;
-                        value = Some(
-                            inner_comp
-                                .into_inner()
-                                .next()
-                                .unwrap()
-                                .as_str()
-                                .trim()
-                                .to_string(),
-                        );
-                    }
-                    _ => {}
                 }
             }
             _ => {}
@@ -604,39 +599,20 @@ fn parse_platform_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
             Rule::platform_comparison => {
                 for comp in inner.into_inner() {
                     match comp.as_rule() {
-                        Rule::platform_not_equals => {
-                            is_not_equals = true;
-                            for inner_tag in comp.into_inner() {
-                                if inner_tag.as_rule() == Rule::platform_tag {
-                                    tag = inner_tag.as_str();
+                        Rule::platform_equals | Rule::platform_not_equals => {
+                            for part in comp.into_inner() {
+                                match part.as_rule() {
+                                    Rule::eq_op => {}
+                                    Rule::neq_op => is_not_equals = true,
+                                    Rule::platform_tag => tag = part.as_str(),
+                                    _ => {}
                                 }
                             }
                         }
-                        Rule::platform_equals => {
-                            for inner_tag in comp.into_inner() {
-                                if inner_tag.as_rule() == Rule::platform_tag {
-                                    tag = inner_tag.as_str();
-                                }
-                            }
-                        }
+                        Rule::eq_op => {}
+                        Rule::neq_op => is_not_equals = true,
                         Rule::platform_tag => tag = comp.as_str(),
                         _ => {}
-                    }
-                }
-            }
-            // Gracefully handle directly nested equals/not-equals for robustness.
-            Rule::platform_not_equals => {
-                is_not_equals = true;
-                for inner_tag in inner.into_inner() {
-                    if inner_tag.as_rule() == Rule::platform_tag {
-                        tag = inner_tag.as_str();
-                    }
-                }
-            }
-            Rule::platform_equals => {
-                for inner_tag in inner.into_inner() {
-                    if inner_tag.as_rule() == Rule::platform_tag {
-                        tag = inner_tag.as_str();
                     }
                 }
             }
