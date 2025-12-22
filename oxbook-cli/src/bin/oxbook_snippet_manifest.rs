@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use cargo_metadata::{MetadataCommand, PackageId};
+use cargo_metadata::{MetadataCommand, PackageId, TargetKind};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -50,7 +50,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
         .filter(|pkg| {
             pkg.targets
                 .iter()
-                .any(|t| t.kind.iter().any(|k| k == "lib"))
+                .any(|t| t.kind.iter().any(|k| matches!(k, TargetKind::Lib)))
         })
         .filter_map(|pkg| {
             let name = pkg.name.trim();
