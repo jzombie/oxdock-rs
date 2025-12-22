@@ -1,1 +1,3 @@
-[platform=unix] WITH_IO [stdin] "RUN cat"
+[platform=unix] WITH_IO [stdin, stdout] RUN_BG cat
+
+ECHO hi

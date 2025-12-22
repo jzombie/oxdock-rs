@@ -1,0 +1,5 @@
+name = "with_io"
+stdin = "hello from stdin"
+
+[expect]
+files = { "out.txt" = "hello from stdin" }

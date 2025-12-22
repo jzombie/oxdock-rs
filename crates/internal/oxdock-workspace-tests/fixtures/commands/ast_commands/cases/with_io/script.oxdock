@@ -1,0 +1,1 @@
+CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN "cat"

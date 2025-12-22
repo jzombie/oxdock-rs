@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 
-use crate::{BackgroundHandle, CommandContext, ProcessManager, SharedInput};
+use crate::{BackgroundHandle, CommandContext, ProcessManager, SharedInput, SharedOutput};
 
 /// Captured invocation for a foreground run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ impl ProcessManager for MockProcessManager {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        _stdout: Option<std::fs::File>,
+        _stdout: Option<SharedOutput>,
     ) -> Result<()> {
         let stdin_provided = stdin.is_some();
         if let Some(reader) = stdin {
@@ -101,7 +101,7 @@ impl ProcessManager for MockProcessManager {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        _stdout: Option<std::fs::File>,
+        _stdout: Option<SharedOutput>,
     ) -> Result<Self::Handle> {
         let stdin_provided = stdin.is_some();
         if let Some(reader) = stdin {

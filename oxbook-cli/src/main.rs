@@ -3,7 +3,8 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use oxdock_core::run_steps_with_context_result;
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path, discover_workspace_root};
 use oxdock_parser::parse_script;
-use oxdock_process::{CommandBuilder, CommandOutput, SharedInput};
+use oxdock_process::{CommandBuilder, CommandOutput};
+
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -740,13 +741,13 @@ fn build_env_from_oxfile(
     let tempdir = GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
     let temp_root = tempdir.as_guarded_path().clone();
     let build_context = resolver.root().clone();
-    let mut output_buf = Vec::new();
+    let output_buf = Arc::new(Mutex::new(Vec::new()));
     let final_cwd = run_steps_with_context_result(
         &temp_root,
         &build_context,
         &steps,
         None,
-        Some(&mut output_buf),
+        Some(output_buf.clone()),
     )
     .with_context(|| format!("run {}", path.display()))?;
 
@@ -828,18 +829,19 @@ fn run_in_env_with_resolver(
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
 
         let input = Arc::new(Mutex::new(Cursor::new(script.to_string())));
-        let mut output_buf = Vec::new();
+        let output_buf = Arc::new(Mutex::new(Vec::new()));
 
         run_steps_with_context_result(
             &env.root,
             workspace_resolver.root(),
             &steps,
             Some(input),
-            Some(&mut output_buf),
+            Some(output_buf.clone()),
         )
         .with_context(|| format!("run {}", oxfile_path.display()))?;
 
-        return Ok(String::from_utf8_lossy(&output_buf).to_string());
+        let data = output_buf.lock().unwrap();
+        return Ok(String::from_utf8_lossy(&data).to_string());
     }
 
     let script_path = write_script_file(resolver, &env.cwd, &spec.language, script)?;

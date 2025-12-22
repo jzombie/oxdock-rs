@@ -3,6 +3,11 @@ use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::CommandBuilder;
 
+fn parse_one(cmd: &str) -> Box<StepKind> {
+    let steps = oxdock_parser::parse_script(cmd).unwrap();
+    Box::new(steps[0].kind.clone())
+}
+
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
 }
@@ -324,7 +329,7 @@ fn write_cmd_captures_output() {
         guards: Vec::new(),
         kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
-            cmd: cmd.into(),
+            cmd: parse_one(cmd),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -351,7 +356,7 @@ fn capture_echo_interpolates_env() {
             guards: Vec::new(),
             kind: StepKind::CaptureToFile {
                 path: "echo.txt".into(),
-                cmd: "ECHO value=${FOO}".into(),
+                cmd: parse_one("ECHO value=${FOO}"),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -382,7 +387,7 @@ fn capture_ls_lists_entries_with_header() {
             guards: Vec::new(),
             kind: StepKind::CaptureToFile {
                 path: "ls.txt".into(),
-                cmd: "LS".into(),
+                cmd: parse_one("LS"),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -415,7 +420,7 @@ fn capture_cat_emits_file_contents() {
         guards: Vec::new(),
         kind: StepKind::CaptureToFile {
             path: "out.txt".into(),
-            cmd: "CAT note.txt".into(),
+            cmd: parse_one("CAT note.txt"),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -440,7 +445,7 @@ fn capture_cwd_canonicalizes_and_writes() {
             guards: Vec::new(),
             kind: StepKind::CaptureToFile {
                 path: "pwd.txt".into(),
-                cmd: "CWD".into(),
+                cmd: parse_one("CWD"),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -836,14 +841,14 @@ fn workdir_accepts_symlink_into_workspace_root() {
             guards: Vec::new(),
             kind: StepKind::CaptureToFile {
                 path: "seen.txt".into(),
-                cmd: "CAT version.txt".into(),
+                cmd: parse_one("CAT version.txt"),
             },
             scope_enter: 0,
             scope_exit: 0,
         },
     ];
 
-    run_steps_with_fs(Box::new(resolver), &steps, None).unwrap();
+    run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap();
 
     let workspace_resolver =
         PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();

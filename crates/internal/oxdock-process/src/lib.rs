@@ -10,7 +10,6 @@ use oxdock_fs::{GuardedPath, PolicyPath};
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
-use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::fs::File;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -195,6 +194,7 @@ pub trait BackgroundHandle {
 use std::sync::{Arc, Mutex};
 
 pub type SharedInput = Arc<Mutex<dyn std::io::Read + Send>>;
+pub type SharedOutput = Arc<Mutex<dyn std::io::Write + Send>>;
 
 pub trait ProcessManager: Clone {
     type Handle: BackgroundHandle;
@@ -204,7 +204,7 @@ pub trait ProcessManager: Clone {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        stdout: Option<File>,
+        stdout: Option<SharedOutput>,
     ) -> Result<()>;
     fn run_capture(
         &mut self,
@@ -217,7 +217,7 @@ pub trait ProcessManager: Clone {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        stdout: Option<File>,
+        stdout: Option<SharedOutput>,
     ) -> Result<Self::Handle>;
 }
 
@@ -235,19 +235,29 @@ impl ProcessManager for ShellProcessManager {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        stdout: Option<File>,
+        stdout: Option<SharedOutput>,
     ) -> Result<()> {
+        eprintln!("DEBUG: ShellProcessManager::run script='{}' stdin={:?} stdout={:?}", script, stdin.is_some(), stdout.is_some());
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
-        if let Some(f) = stdout {
-            command.stdout(f);
-        }
-        if let Some(input) = stdin {
-            run_cmd_with_stdin(&mut command, input)
+        
+        if let Some(out) = stdout {
+            // If we have a shared output, we need to pipe stdout and pump it
+            command.stdout(Stdio::piped());
+            if let Some(input) = stdin {
+                run_cmd_with_io(&mut command, input, out)
+            } else {
+                command.stdin(Stdio::null());
+                run_cmd_with_output(&mut command, out)
+            }
         } else {
-            // Do not inherit stdin by default; ensure isolation unless WITH_STDIN is used.
-            command.stdin(Stdio::null());
-            run_cmd(&mut command)
+            if let Some(input) = stdin {
+                run_cmd_with_stdin(&mut command, input)
+            } else {
+                // Do not inherit stdin by default; ensure isolation unless WITH_STDIN is used.
+                command.stdin(Stdio::null());
+                run_cmd(&mut command)
+            }
         }
     }
 
@@ -280,22 +290,30 @@ impl ProcessManager for ShellProcessManager {
         ctx: &CommandContext,
         script: &str,
         stdin: Option<SharedInput>,
-        stdout: Option<File>,
+        stdout: Option<SharedOutput>,
     ) -> Result<Self::Handle> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
-        if let Some(f) = stdout {
-            command.stdout(f);
-        }
-        if let Some(input) = stdin {
-            spawn_cmd_with_stdin(&mut command, input)
+        
+        if let Some(out) = stdout {
+            command.stdout(Stdio::piped());
+            if let Some(input) = stdin {
+                spawn_cmd_with_io(&mut command, input, out)
+            } else {
+                command.stdin(Stdio::null());
+                spawn_cmd_with_output(&mut command, out)
+            }
         } else {
-            // Do not inherit stdin by default.
-            command.stdin(Stdio::null());
-            let child = command
-                .spawn()
-                .with_context(|| format!("failed to spawn {:?}", command))?;
-            Ok(ChildHandle { child })
+            if let Some(input) = stdin {
+                spawn_cmd_with_stdin(&mut command, input)
+            } else {
+                // Do not inherit stdin by default.
+                command.stdin(Stdio::null());
+                let child = command
+                    .spawn()
+                    .with_context(|| format!("failed to spawn {:?}", command))?;
+                Ok(ChildHandle { child, io_threads: Vec::new() })
+            }
         }
     }
 }
@@ -323,11 +341,21 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub struct ChildHandle {
     child: Child,
+    io_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl BackgroundHandle for ChildHandle {
     fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         Ok(self.child.try_wait()?)
+    }
+
+    fn wait(&mut self) -> Result<ExitStatus> {
+        let status = self.child.wait()?;
+        // Wait for IO threads to finish to ensure all output is captured
+        for thread in self.io_threads.drain(..) {
+            let _ = thread.join();
+        }
+        Ok(status)
     }
 
     fn kill(&mut self) -> Result<()> {
@@ -337,9 +365,7 @@ impl BackgroundHandle for ChildHandle {
         Ok(())
     }
 
-    fn wait(&mut self) -> Result<ExitStatus> {
-        Ok(self.child.wait()?)
-    }
+
 }
 
 // Synthetic process manager for Miri. Commands are interpreted with a tiny
@@ -777,9 +803,13 @@ fn run_cmd_capture_with_stdin(cmd: &mut ProcessCommand, stdin: SharedInput) -> R
         .spawn()
         .with_context(|| format!("failed to spawn {:?}", cmd))?;
     if let Some(mut input) = child.stdin.take() {
-        let mut guard = stdin.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
-        std::io::copy(&mut *guard, &mut input)
-            .with_context(|| format!("failed to write stdin for {desc}"))?;
+        let stdin_clone = stdin.clone();
+        let _desc_clone = desc.clone();
+        std::thread::spawn(move || {
+            if let Ok(mut guard) = stdin_clone.lock() {
+                let _ = std::io::copy(&mut *guard, &mut input);
+            }
+        });
     }
     let output = child
         .wait_with_output()
@@ -788,6 +818,144 @@ fn run_cmd_capture_with_stdin(cmd: &mut ProcessCommand, stdin: SharedInput) -> R
         bail!("command {} failed with status {}", desc, output.status);
     }
     Ok(output.stdout)
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn run_cmd_with_io(cmd: &mut ProcessCommand, stdin: SharedInput, stdout: SharedOutput) -> Result<()> {
+    let desc = format!("{:?}", cmd);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    
+    let mut threads = Vec::new();
+
+    if let Some(mut input) = child.stdin.take() {
+        let stdin_clone = stdin.clone();
+        threads.push(std::thread::spawn(move || {
+            if let Ok(mut guard) = stdin_clone.lock() {
+                let _ = std::io::copy(&mut *guard, &mut input);
+            }
+        }));
+    }
+
+    if let Some(mut output) = child.stdout.take() {
+        let stdout_clone = stdout.clone();
+        threads.push(std::thread::spawn(move || {
+            if let Ok(mut guard) = stdout_clone.lock() {
+                let _ = std::io::copy(&mut output, &mut *guard);
+            }
+        }));
+    }
+
+    let status = child
+        .wait()
+        .with_context(|| format!("failed to run {desc}"))?;
+    
+    for t in threads {
+        let _ = t.join();
+    }
+
+    if !status.success() {
+        bail!("command {} failed with status {}", desc, status);
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn run_cmd_with_output(cmd: &mut ProcessCommand, stdout: SharedOutput) -> Result<()> {
+    let desc = format!("{:?}", cmd);
+    cmd.stdout(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    
+    let mut threads = Vec::new();
+
+    if let Some(mut output) = child.stdout.take() {
+        let stdout_clone = stdout.clone();
+        threads.push(std::thread::spawn(move || {
+            if let Ok(mut guard) = stdout_clone.lock() {
+                let _ = std::io::copy(&mut output, &mut *guard);
+            }
+        }));
+    }
+
+    let status = child
+        .wait()
+        .with_context(|| format!("failed to run {desc}"))?;
+    
+    for t in threads {
+        let _ = t.join();
+    }
+
+    if !status.success() {
+        bail!("command {} failed with status {}", desc, status);
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn spawn_cmd_with_io(
+    cmd: &mut ProcessCommand,
+    stdin: SharedInput,
+    stdout: SharedOutput,
+) -> Result<ChildHandle> {
+    let _desc = format!("{:?}", cmd);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    
+    let mut io_threads = Vec::new();
+
+    if let Some(mut input) = child.stdin.take() {
+        let stdin_clone = stdin.clone();
+        let t = std::thread::spawn(move || {
+            if let Ok(mut guard) = stdin_clone.lock() {
+                let _ = std::io::copy(&mut *guard, &mut input);
+            }
+        });
+        io_threads.push(t);
+    }
+
+    if let Some(mut output) = child.stdout.take() {
+        let stdout_clone = stdout.clone();
+        let t = std::thread::spawn(move || {
+            if let Ok(mut guard) = stdout_clone.lock() {
+                let _ = std::io::copy(&mut output, &mut *guard);
+            }
+        });
+        io_threads.push(t);
+    }
+
+    Ok(ChildHandle { child, io_threads })
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+fn spawn_cmd_with_output(
+    cmd: &mut ProcessCommand,
+    stdout: SharedOutput,
+) -> Result<ChildHandle> {
+    let _desc = format!("{:?}", cmd);
+    cmd.stdout(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    
+    let mut io_threads = Vec::new();
+
+    if let Some(mut output) = child.stdout.take() {
+        let stdout_clone = stdout.clone();
+        let t = std::thread::spawn(move || {
+            if let Ok(mut guard) = stdout_clone.lock() {
+                let _ = std::io::copy(&mut output, &mut *guard);
+            }
+        });
+        io_threads.push(t);
+    }
+
+    Ok(ChildHandle { child, io_threads })
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -800,18 +968,22 @@ fn spawn_cmd_with_stdin(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    
+    let mut io_threads = Vec::new();
+
     if let Some(mut input) = child.stdin.take() {
         // Spawn a thread to pump stdin to the child process.
         // This allows spawn_bg to return immediately.
         let stdin_clone = stdin.clone();
-        let desc_clone = desc.clone();
-        std::thread::spawn(move || {
+        let _desc_clone = desc.clone();
+        let t = std::thread::spawn(move || {
             if let Ok(mut guard) = stdin_clone.lock() {
                 let _ = std::io::copy(&mut *guard, &mut input);
             }
         });
+        io_threads.push(t);
     }
-    Ok(ChildHandle { child })
+    Ok(ChildHandle { child, io_threads })
 }
 
 /// Builder wrapper that centralizes direct usages of `std::process::Command`.
@@ -924,7 +1096,7 @@ impl CommandBuilder {
                 .inner
                 .spawn()
                 .with_context(|| format!("failed to spawn {desc}"))?;
-            Ok(ChildHandle { child })
+            Ok(ChildHandle { child, io_threads: Vec::new() })
         }
     }
 

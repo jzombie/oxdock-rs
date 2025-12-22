@@ -1,14 +1,15 @@
 use anyhow::{Context, Result, anyhow};
-use oxdock_core::run_steps_with_context;
+use oxdock_core::run_steps_with_context_result;
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, ensure_git_identity,
 };
 use oxdock_parser::{Step, StepKind};
-use oxdock_process::CommandBuilder;
+use oxdock_process::{CommandBuilder, SharedInput};
 use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
+use std::sync::{Arc, Mutex};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +71,7 @@ struct CaseSpec {
     script_rel: String,
     build_context: BuildContext,
     setup: Option<String>,
+    stdin: Option<String>,
     expect_error: Option<ErrorExpectation>,
     expectations: Expectations,
 }
@@ -237,6 +239,10 @@ fn load_case_spec(
         .get("setup")
         .and_then(|item| item.as_str())
         .map(|s| s.to_string());
+    let stdin = doc
+        .get("stdin")
+        .and_then(|item| item.as_str())
+        .map(|s| s.to_string());
     let expect_error = expectations::parse_error_expectation(&doc)?;
     let expectations = parse_expectations(doc.get("expect").and_then(|i| i.as_table()))?;
 
@@ -246,6 +252,7 @@ fn load_case_spec(
         script_rel,
         build_context,
         setup,
+        stdin,
         expect_error,
         expectations,
     })
@@ -592,7 +599,12 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
             .with_context(|| format!("resolve build context {}", rel))?,
     };
 
-    let result = run_steps_with_context(&snapshot, &build_context, steps);
+    let stdin: Option<SharedInput> = case.stdin.as_ref().map(|s| {
+        let cursor = std::io::Cursor::new(s.as_bytes().to_vec());
+        Arc::new(Mutex::new(cursor)) as SharedInput
+    });
+    
+    let result = run_steps_with_context_result(&snapshot, &build_context, steps, stdin, None).map(|_| ());
     match (&case.expect_error, result) {
         (Some(expectation), Err(err)) => {
             expectations::assert_error_matches(
@@ -918,5 +930,6 @@ fn step_kind_name(kind: &StepKind) -> &'static str {
         StepKind::CopyGit { .. } => "CopyGit",
         StepKind::HashSha256 { .. } => "HashSha256",
         StepKind::Exit(_) => "Exit",
+        StepKind::WithIo { .. } => "WithIo",
     }
 }

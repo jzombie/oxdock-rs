@@ -153,11 +153,11 @@ pub enum StepKind {
     },
     CaptureToFile {
         path: String,
-        cmd: String,
+        cmd: Box<StepKind>,
     },
     WithIo {
         streams: Vec<String>,
-        cmd: String,
+        cmd: Box<StepKind>,
     },
     CopyGit {
         rev: String,
@@ -367,10 +367,10 @@ impl fmt::Display for StepKind {
                 write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
             }
             StepKind::CaptureToFile { path, cmd } => {
-                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), quote_run(cmd))
+                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
             }
             StepKind::WithIo { streams, cmd } => {
-                write!(f, "WITH_IO [{}] {}", streams.join(", "), quote_run(cmd))
+                write!(f, "WITH_IO [{}] {}", streams.join(", "), cmd)
             }
             StepKind::CopyGit {
                 rev,

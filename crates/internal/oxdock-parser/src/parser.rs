@@ -259,13 +259,22 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             }
         }
         Rule::capture_to_file_command => {
-            let path = parse_single_arg_from_pair(pair.clone())?;
-            let cmd = parse_run_args_from_pair(pair)?;
-            StepKind::CaptureToFile { path, cmd }
+            let mut path = None;
+            let mut cmd = None;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::argument => path = Some(parse_argument(inner)?),
+                    _ => cmd = Some(Box::new(parse_command(inner)?)),
+                }
+            }
+            StepKind::CaptureToFile {
+                path: path.ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?,
+                cmd: cmd.ok_or_else(|| anyhow!("missing command in CAPTURE_TO_FILE"))?,
+            }
         }
         Rule::with_io_command => {
             let mut streams = Vec::new();
-            let mut cmd = String::new();
+            let mut cmd = None;
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::io_flags => {
@@ -275,13 +284,15 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                             }
                         }
                     }
-                    Rule::run_args => {
-                        cmd = parse_raw_concatenated_string(inner)?;
+                    _ => {
+                        cmd = Some(Box::new(parse_command(inner)?));
                     }
-                    _ => {}
                 }
             }
-            StepKind::WithIo { streams, cmd }
+            StepKind::WithIo {
+                streams,
+                cmd: cmd.ok_or_else(|| anyhow!("missing command in WITH_IO"))?,
+            }
         }
         Rule::copy_git_command => {
             let mut args = Vec::new();
@@ -447,15 +458,6 @@ fn parse_message(pair: Pair<Rule>) -> Result<String> {
 }
 
 fn parse_run_args(pair: Pair<Rule>) -> Result<String> {
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::run_args {
-            return parse_raw_concatenated_string(inner);
-        }
-    }
-    bail!("missing run args")
-}
-
-fn parse_run_args_from_pair(pair: Pair<Rule>) -> Result<String> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::run_args {
             return parse_raw_concatenated_string(inner);
