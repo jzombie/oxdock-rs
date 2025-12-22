@@ -5,22 +5,31 @@ use crate::PathLike;
 use anyhow::Result;
 use std::borrow::Cow;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+use std::fs::OpenOptions;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
+#[cfg(not(miri))]
 use std::sync::OnceLock;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(not(miri))]
 use std::time::Duration;
 #[allow(clippy::disallowed_types)]
 use tempfile::{Builder, TempDir};
+#[cfg(not(miri))]
 use tracing::warn;
 
 #[cfg(miri)]
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg_attr(miri, allow(dead_code))]
 const OXDOCK_TEMP_PREFIX: &str = "oxdock-";
+#[cfg_attr(miri, allow(dead_code))]
 const OXDOCK_TEMP_MARKER: &str = ".oxdock-tempdir";
+#[cfg_attr(miri, allow(dead_code))]
 const OXDOCK_TEMP_LOCK: &str = ".oxdock-tempdir.lock";
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
@@ -443,6 +452,7 @@ pub fn embed_path(path: &GuardedPath) -> String {
     normalized_path(path)
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(not(miri))]
 fn write_temp_marker(guard: &GuardedPath) -> Result<()> {
     let resolver = PathResolver::new_guarded(guard.clone(), guard.clone())?;
@@ -451,11 +461,13 @@ fn write_temp_marker(guard: &GuardedPath) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(miri)]
 fn write_temp_marker(_guard: &GuardedPath) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(not(miri))]
 fn write_temp_lock(guard: &GuardedPath) -> Result<File> {
     #[allow(clippy::disallowed_methods)]
@@ -474,6 +486,7 @@ fn write_temp_lock(guard: &GuardedPath) -> Result<File> {
     Ok(file)
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(miri)]
 fn write_temp_lock(_guard: &GuardedPath) -> Result<File> {
     Err(anyhow::anyhow!("temp lock unused under miri"))
@@ -539,6 +552,13 @@ fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[cfg(miri)]
+#[allow(dead_code, clippy::disallowed_types)]
+fn cleanup_marked_tempdirs_in(_base: std::path::PathBuf) -> Result<()> {
+    Ok(())
+}
+
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(not(miri))]
 #[allow(clippy::disallowed_types)]
 fn read_lock_pid(lock_path: &Path) -> Option<u32> {
@@ -552,11 +572,14 @@ fn read_lock_pid(lock_path: &Path) -> Option<u32> {
     }
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(miri)]
+#[allow(clippy::disallowed_types)]
 fn read_lock_pid(_lock_path: &Path) -> Option<u32> {
     None
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(unix)]
 fn is_pid_alive(pid: u32) -> bool {
     if pid == 0 {
@@ -575,6 +598,7 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
@@ -600,6 +624,7 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
+#[cfg_attr(miri, allow(dead_code))]
 #[cfg(not(any(unix, windows)))]
 fn is_pid_alive(_pid: u32) -> bool {
     true
