@@ -133,7 +133,10 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         Just(StepKind::Cwd),
         safe_string().prop_map(StepKind::Cat),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
-        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile { path, cmd }),
+        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
+            path,
+            cmd: Box::new(StepKind::Run(cmd)),
+        }),
         (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
             StepKind::CopyGit {
                 rev,
@@ -157,8 +160,9 @@ fn arb_step() -> impl Strategy<Value = Step> {
         })
         .prop_filter("Avoids ambiguous CAPTURE_TO_FILE boundary", |step| {
             if let StepKind::CaptureToFile { path, cmd } = &step.kind {
+                let cmd_str = cmd.to_string();
                 // Check if path ends with something that sticks to cmd start
-                if let (Some(last), Some(first)) = (path.chars().last(), cmd.chars().next()) {
+                if let (Some(last), Some(first)) = (path.chars().last(), cmd_str.chars().next()) {
                     let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
                     // If macro_input.rs would merge them (needs_space returns false)
                     // needs_space is false if sticky(prev) || sticky(next)

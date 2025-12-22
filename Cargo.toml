@@ -23,7 +23,9 @@ publish = true
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+cargo_metadata = "0.23.1"
 indoc = "2.0.7"
+libc = "0.2.178"
 libtest-mimic = "0.8.1"
 oxdock-buildtime-helpers = { path = "oxdock-buildtime-helpers", version = "0.5.0-alpha" }
 oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.5.0-alpha" }
@@ -43,6 +45,7 @@ syn = { version = "2.0", features = ["full", "visit"] }
 tempfile = "3.23.0"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"

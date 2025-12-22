@@ -1,1 +1,1 @@
-Tests are currently found throughtout internal crates as integration and unit tests, with a growing focus on centralizing most logic testing in [oxdock-workspace-tests](../crates/internal/oxdock-workspace-tests/).
+Tests live across the workspace; prefer [oxdock-workspace-tests](../crates/internal/oxdock-workspace-tests/) for cross-crate, workflow (API instructions, etc.), and regression tests.

@@ -5,14 +5,32 @@ use crate::PathLike;
 use anyhow::Result;
 use std::borrow::Cow;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+use std::fs::File;
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+use std::fs::OpenOptions;
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
+#[cfg(not(miri))]
+use std::sync::OnceLock;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(not(miri))]
+use std::time::Duration;
 #[allow(clippy::disallowed_types)]
 use tempfile::{Builder, TempDir};
+#[cfg(not(miri))]
+use tracing::warn;
 
 #[cfg(miri)]
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg_attr(miri, allow(dead_code))]
+const OXDOCK_TEMP_PREFIX: &str = "oxdock-";
+#[cfg_attr(miri, allow(dead_code))]
+const OXDOCK_TEMP_MARKER: &str = ".oxdock-tempdir";
+#[cfg_attr(miri, allow(dead_code))]
+const OXDOCK_TEMP_LOCK: &str = ".oxdock-tempdir.lock";
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
@@ -72,10 +90,13 @@ impl GuardedPath {
         F: FnOnce(&mut Builder),
     {
         let mut builder = Builder::new();
+        builder.prefix(OXDOCK_TEMP_PREFIX);
         configure(&mut builder);
         let tempdir = builder.tempdir()?;
         let guard = GuardedPath::new_root(tempdir.path())?;
-        Ok(GuardedTempDir::new(guard, Some(tempdir)))
+        write_temp_marker(&guard)?;
+        let lock = write_temp_lock(&guard)?;
+        Ok(GuardedTempDir::new(guard, Some(tempdir), Some(lock)))
     }
 
     /// Create a synthetic temporary directory when running under Miri.
@@ -99,7 +120,20 @@ impl GuardedPath {
             root: path.clone(),
             path,
         };
-        Ok(GuardedTempDir::new(guard, None))
+        Ok(GuardedTempDir::new(guard, None, None))
+    }
+
+    /// Remove any stale tempdirs created by OxDock in the system temp dir. This helps
+    /// recover space when a process was terminated with SIGKILL and drops did not run.
+    #[cfg(not(miri))]
+    pub fn cleanup_stale_tempdirs() -> Result<()> {
+        cleanup_marked_tempdirs()
+    }
+
+    /// No-op placeholder under Miri where no host tempdirs are created.
+    #[cfg(miri)]
+    pub fn cleanup_stale_tempdirs() -> Result<()> {
+        Ok(())
     }
 
     #[allow(clippy::disallowed_types)]
@@ -188,14 +222,16 @@ impl PathLike for GuardedPath {
 pub struct GuardedTempDir {
     guard: Option<GuardedPath>,
     tempdir: Option<TempDir>,
+    lock: Option<File>,
 }
 
 impl GuardedTempDir {
     #[allow(clippy::disallowed_types)]
-    fn new(guard: GuardedPath, tempdir: Option<TempDir>) -> Self {
+    fn new(guard: GuardedPath, tempdir: Option<TempDir>, lock: Option<File>) -> Self {
         Self {
             guard: Some(guard),
             tempdir,
+            lock,
         }
     }
 
@@ -203,18 +239,9 @@ impl GuardedTempDir {
         self.guard.as_ref().unwrap()
     }
 
-    /// Prevent automatic cleanup and return the guarded path rooted at the
-    /// temporary directory.
-    #[allow(deprecated)]
-    pub fn persist(mut self) -> GuardedPath {
-        if let Some(tempdir) = self.tempdir.take() {
-            let _ = tempdir.into_path();
-        }
-        self.guard.take().unwrap()
-    }
-
     #[allow(clippy::disallowed_types)]
     pub fn into_parts(mut self) -> (Option<TempDir>, GuardedPath) {
+        let _ = self.lock.take();
         (self.tempdir.take(), self.guard.take().unwrap())
     }
 }
@@ -227,8 +254,45 @@ impl std::ops::Deref for GuardedTempDir {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 impl Drop for GuardedTempDir {
     fn drop(&mut self) {
+        // Ensure the lock file is closed before the TempDir is dropped so
+        // platform-specific file-handle semantics (Windows) don't prevent
+        // directory removal. Taking the `lock` here moves the `File` into a
+        // temporary which is dropped at the end of this function (before
+        // the fields are automatically dropped), ensuring the handle is
+        // released prior to `tempdir`'s removal.
+        let _ = self.lock.take();
+
+        // Best-effort explicit cleanup: some platforms may leave the tempdir
+        // behind if `tempfile::TempDir` cannot delete while a handle lingers.
+        // By taking ownership and dropping the TempDir early we can retry a
+        // removal if it somehow survives.
+        #[cfg(not(miri))]
+        if let Some(tempdir) = self.tempdir.take() {
+            let path = tempdir.path().to_path_buf();
+            drop(tempdir);
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(&path);
+                // Windows can defer directory teardown if a scanner briefly
+                // holds a handle; retry a few times to avoid leaving debris
+                // that breaks parent-process assertions.
+                if path.exists() {
+                    for _ in 0..5 {
+                        std::thread::sleep(Duration::from_millis(10));
+                        if !path.exists() {
+                            break;
+                        }
+                        let _ = std::fs::remove_dir_all(&path);
+                        if !path.exists() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         #[cfg(miri)]
         {
             if let Some(guard) = &self.guard {
@@ -371,19 +435,203 @@ pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
 
-/// Convert a guarded path into a string with forward slashes, suitable for
-/// use with embedded-asset tooling or other helpers that require normalized paths.
-/// This strips Windows verbatim prefixes and ensures separators are `/`.
+/// Convert a guarded path into a stable, forward-slash string suitable for
+/// serialization, embedding, logging, or CLI output. This strips Windows
+/// verbatim prefixes and ensures separators are `/`.
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-pub fn embed_path(path: &GuardedPath) -> String {
+pub fn normalized_path(path: &GuardedPath) -> String {
     let cmd = command_path(path);
     let s = cmd.to_string_lossy();
     to_forward_slashes(&s)
 }
 
+/// Backward-compatible alias for `normalized_path`. Prefer `normalized_path`
+/// in new code to make intent clearer.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+pub fn embed_path(path: &GuardedPath) -> String {
+    normalized_path(path)
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(not(miri))]
+fn write_temp_marker(guard: &GuardedPath) -> Result<()> {
+    let resolver = PathResolver::new_guarded(guard.clone(), guard.clone())?;
+    let marker = guard.join(OXDOCK_TEMP_MARKER)?;
+    resolver.write_file(&marker, b"oxdock-tempdir")?;
+    Ok(())
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(miri)]
+fn write_temp_marker(_guard: &GuardedPath) -> Result<()> {
+    Ok(())
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(not(miri))]
+fn write_temp_lock(guard: &GuardedPath) -> Result<File> {
+    #[allow(clippy::disallowed_methods)]
+    let pid = std::process::id();
+    let lock_path = guard.join(OXDOCK_TEMP_LOCK)?;
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(lock_path.as_path())?;
+    use std::io::Write;
+    writeln!(file, "{pid}")?;
+    #[allow(clippy::disallowed_methods)]
+    file.sync_all()?;
+    Ok(file)
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(miri)]
+fn write_temp_lock(_guard: &GuardedPath) -> Result<File> {
+    Err(anyhow::anyhow!("temp lock unused under miri"))
+}
+
+#[cfg(not(miri))]
+fn cleanup_marked_tempdirs() -> Result<()> {
+    cleanup_marked_tempdirs_in(std::env::temp_dir())
+}
+
+#[cfg(not(miri))]
+pub(crate) fn run_temp_cleanup_once() {
+    static CLEANUP: OnceLock<()> = OnceLock::new();
+    CLEANUP.get_or_init(|| {
+        if let Err(err) = cleanup_marked_tempdirs() {
+            warn!(%err, "failed to cleanup stale oxdock tempdirs");
+        }
+    });
+}
+
+#[cfg(miri)]
+pub(crate) fn run_temp_cleanup_once() {}
+
+#[cfg(not(miri))]
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::collapsible_if
+)]
+fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    for entry in std::fs::read_dir(&base)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if !name.starts_with(OXDOCK_TEMP_PREFIX) {
+            continue;
+        }
+
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let marker = path.join(OXDOCK_TEMP_MARKER);
+        if !marker.exists() {
+            continue;
+        }
+
+        let lock_path = path.join(OXDOCK_TEMP_LOCK);
+        if let Some(pid) = read_lock_pid(&lock_path) {
+            if is_pid_alive(pid) {
+                continue;
+            }
+        }
+
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        match std::fs::remove_dir_all(&path) {
+            Ok(_) => {}
+            Err(err) => warn!(?path, %err, "failed to remove stale oxdock tempdir"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(miri)]
+#[allow(dead_code, clippy::disallowed_types)]
+fn cleanup_marked_tempdirs_in(_base: std::path::PathBuf) -> Result<()> {
+    Ok(())
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
+fn read_lock_pid(lock_path: &Path) -> Option<u32> {
+    if !lock_path.exists() {
+        return None;
+    }
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    match std::fs::read_to_string(lock_path) {
+        Ok(contents) => contents.trim().parse::<u32>().ok(),
+        Err(_) => None,
+    }
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(miri)]
+#[allow(clippy::disallowed_types)]
+fn read_lock_pid(_lock_path: &Path) -> Option<u32> {
+    None
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[allow(clippy::disallowed_methods)]
+    let res = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if res == 0 {
+        return true;
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    match errno {
+        Some(libc::EPERM) => true,
+        Some(libc::ESRCH) => false,
+        _ => true, // default to conservative keep-alive
+    }
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            // If the process cannot be opened, assume it is gone so we can
+            // reclaim stale tempdirs rather than leaking them.
+            return false;
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
+        CloseHandle(handle);
+        if ok == 0 {
+            true
+        } else {
+            code == (STILL_ACTIVE as u32)
+        }
+    }
+}
+
+#[cfg_attr(miri, allow(dead_code))]
+#[cfg(not(any(unix, windows)))]
+fn is_pid_alive(_pid: u32) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::PathResolver;
     use super::*;
 
     #[test]
@@ -394,23 +642,6 @@ mod tests {
         let parent = child.parent().expect("parent");
         assert_eq!(parent.as_path(), root.as_path().join("child"));
         assert_eq!(child.root(), root.root());
-    }
-
-    #[test]
-    fn guarded_tempdir_persist_keeps_directory() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let root = temp.as_guarded_path().clone();
-        let persisted = temp.persist();
-        let resolver =
-            PathResolver::new_guarded(root.clone(), root.clone()).expect("path resolver");
-
-        resolver
-            .create_dir_all(&root)
-            .expect("create persisted dir");
-        assert!(resolver.exists(&persisted));
-        assert!(resolver.exists(&root));
-
-        resolver.remove_dir_all(&root).expect("cleanup tempdir");
     }
 
     #[allow(clippy::disallowed_types)]
@@ -427,13 +658,51 @@ mod tests {
     }
 
     #[test]
-    fn embed_path_normalizes_backslashes() {
+    fn normalized_path_normalizes_backslashes() {
         let guard = GuardedPath::new_from_str("C:\\sandbox", "C:\\sandbox\\foo\\bar")
             .expect("guarded path");
-        let normalized = embed_path(&guard);
+        let normalized = normalized_path(&guard);
         assert!(!normalized.contains('\\'));
         assert!(normalized.contains("sandbox"));
         assert!(normalized.contains("foo"));
         assert!(normalized.contains("bar"));
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    fn cleanup_stale_tempdirs_removes_marked_dirs() {
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let base = std::env::temp_dir().join("oxdock-cleanup-test");
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        std::fs::create_dir_all(&base).expect("create temp sandbox");
+
+        // Create a tempdir and intentionally leak it to simulate a killed process.
+        let mut builder = Builder::new();
+        builder.prefix(OXDOCK_TEMP_PREFIX);
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let tempdir = builder.tempdir_in(&base).expect("tempdir_in");
+        let guard = GuardedPath::new_root(tempdir.path()).expect("guarded root");
+        write_temp_marker(&guard).expect("marker");
+        let lock = write_temp_lock(&guard).expect("lock");
+        let temp = GuardedTempDir::new(guard, Some(tempdir), Some(lock));
+        let path = temp.as_guarded_path().to_path_buf();
+        std::mem::forget(temp);
+
+        // Ensure marker exists (already written by tempdir())
+        let marker = path.join(OXDOCK_TEMP_MARKER);
+        assert!(marker.exists());
+        assert!(path.exists());
+
+        // Simulate a dead process by removing the lock so cleanup can reclaim it.
+        let lock = path.join(OXDOCK_TEMP_LOCK);
+        let _ = std::fs::remove_file(&lock);
+
+        cleanup_marked_tempdirs_in(base.clone()).expect("cleanup");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(base);
     }
 }

@@ -10,6 +10,7 @@ pub enum Command {
     RunBg,
     Copy,
     CaptureToFile,
+    WithIo,
     CopyGit,
     HashSha256,
     Symlink,
@@ -30,6 +31,7 @@ pub const COMMANDS: &[Command] = &[
     Command::RunBg,
     Command::Copy,
     Command::CaptureToFile,
+    Command::WithIo,
     Command::CopyGit,
     Command::HashSha256,
     Command::Symlink,
@@ -52,6 +54,7 @@ impl Command {
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
             Command::CaptureToFile => "CAPTURE_TO_FILE",
+            Command::WithIo => "WITH_IO",
             Command::CopyGit => "COPY_GIT",
             Command::HashSha256 => "HASH_SHA256",
             Command::Symlink => "SYMLINK",
@@ -65,7 +68,7 @@ impl Command {
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::CaptureToFile)
+        matches!(self, Command::CaptureToFile | Command::WithIo)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -78,6 +81,7 @@ impl Command {
             "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
             "CAPTURE_TO_FILE" => Some(Command::CaptureToFile),
+            "WITH_IO" => Some(Command::WithIo),
             "COPY_GIT" => Some(Command::CopyGit),
             "HASH_SHA256" => Some(Command::HashSha256),
             "SYMLINK" => Some(Command::Symlink),
@@ -146,7 +150,11 @@ pub enum StepKind {
     },
     CaptureToFile {
         path: String,
-        cmd: String,
+        cmd: Box<StepKind>,
+    },
+    WithIo {
+        streams: Vec<String>,
+        cmd: Box<StepKind>,
     },
     CopyGit {
         rev: String,
@@ -357,7 +365,10 @@ impl fmt::Display for StepKind {
                 write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
             }
             StepKind::CaptureToFile { path, cmd } => {
-                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), quote_run(cmd))
+                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
+            }
+            StepKind::WithIo { streams, cmd } => {
+                write!(f, "WITH_IO [{}] {}", streams.join(", "), cmd)
             }
             StepKind::CopyGit {
                 rev,

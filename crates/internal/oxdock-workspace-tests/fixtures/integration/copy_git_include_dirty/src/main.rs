@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let script = "COPY_GIT --include-dirty HEAD deep/dir/level/ten output/nested/target";
     let steps = parse_script(script).map_err(|e| format!("parse script: {e}"))?;
-    run_steps_with_context_result(&snapshot_root, &repo, &steps)
+    run_steps_with_context_result(&snapshot_root, &repo, &steps, None, None)
         .map_err(|e| format!("run steps: {e}"))?;
 
     let out_root = snapshot_root.join("output")?;

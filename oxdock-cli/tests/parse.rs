@@ -1,9 +1,9 @@
 use indoc::indoc;
 use oxdock_cli::{Options, ScriptSource, Step, StepKind, parse_script};
-use oxdock_fs::GuardedPath;
+use oxdock_fs::{GuardedPath, GuardedTempDir};
 
-fn workspace_root() -> GuardedPath {
-    GuardedPath::tempdir().expect("tmpdir").persist()
+fn workspace_root() -> GuardedTempDir {
+    GuardedPath::tempdir().expect("tmpdir")
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn parse_semicolon_keeps_shell_payload_together() {
         ..
     } = steps[0]
     {
-        assert_eq!(cmd, "\"echo one; echo two\"");
+        assert_eq!(cmd, "echo one; echo two");
     } else {
         panic!("expected RUN step");
     }

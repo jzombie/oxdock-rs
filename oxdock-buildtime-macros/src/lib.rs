@@ -276,12 +276,17 @@ fn build_assets(
     let workspace_root =
         oxdock_fs::discover_workspace_root().map_err(|e| syn::Error::new(span, e.to_string()))?;
 
-    let final_cwd =
-        oxdock_core::run_steps_with_context_result(&temp_root_guard, &workspace_root, &steps)
-            .map_err(|e| {
-                // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
-                syn::Error::new(span, format!("execution error: {e:#}"))
-            })?;
+    let final_cwd = oxdock_core::run_steps_with_context_result(
+        &temp_root_guard,
+        &workspace_root,
+        &steps,
+        None,
+        None,
+    )
+    .map_err(|e| {
+        // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
+        syn::Error::new(span, format!("execution error: {e:#}"))
+    })?;
 
     if debug_embed {
         eprintln!(
@@ -350,7 +355,6 @@ fn build_assets(
         count_entries(out_dir, span)?
     );
 
-    let _ = tempdir.persist();
     Ok(final_cwd)
 }
 
@@ -795,7 +799,7 @@ mod tests {
         );
         assert_eq!(
             include_paths[0],
-            oxdock_fs::embed_path(&sample_file),
+            oxdock_fs::normalized_path(&sample_file),
             "embed should reference files under out_dir"
         );
     }
@@ -882,7 +886,7 @@ mod tests {
         assert!(
             include_paths
                 .iter()
-                .any(|p| p == &oxdock_fs::embed_path(&copied_guard)),
+                .any(|p| p == &oxdock_fs::normalized_path(&copied_guard)),
             "embed should include copied.txt under out_dir"
         );
         let contents = resolver
