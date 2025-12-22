@@ -355,7 +355,6 @@ fn build_assets(
         count_entries(out_dir, span)?
     );
 
-    let _ = tempdir.persist();
     Ok(final_cwd)
 }
 

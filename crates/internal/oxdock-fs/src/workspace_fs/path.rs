@@ -4,6 +4,7 @@ use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::borrow::Cow;
+use tracing::warn;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 #[cfg(miri)]
@@ -13,6 +14,9 @@ use tempfile::{Builder, TempDir};
 
 #[cfg(miri)]
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+const OXDOCK_TEMP_PREFIX: &str = "oxdock-";
+const OXDOCK_TEMP_MARKER: &str = ".oxdock-tempdir";
 
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
@@ -72,9 +76,11 @@ impl GuardedPath {
         F: FnOnce(&mut Builder),
     {
         let mut builder = Builder::new();
+        builder.prefix(OXDOCK_TEMP_PREFIX);
         configure(&mut builder);
         let tempdir = builder.tempdir()?;
         let guard = GuardedPath::new_root(tempdir.path())?;
+        write_temp_marker(&guard)?;
         Ok(GuardedTempDir::new(guard, Some(tempdir)))
     }
 
@@ -100,6 +106,19 @@ impl GuardedPath {
             path,
         };
         Ok(GuardedTempDir::new(guard, None))
+    }
+
+    /// Remove any stale tempdirs created by OxDock in the system temp dir. This helps
+    /// recover space when a process was terminated with SIGKILL and drops did not run.
+    #[cfg(not(miri))]
+    pub fn cleanup_stale_tempdirs() -> Result<()> {
+        cleanup_marked_tempdirs()
+    }
+
+    /// No-op placeholder under Miri where no host tempdirs are created.
+    #[cfg(miri)]
+    pub fn cleanup_stale_tempdirs() -> Result<()> {
+        Ok(())
     }
 
     #[allow(clippy::disallowed_types)]
@@ -201,16 +220,6 @@ impl GuardedTempDir {
 
     pub fn as_guarded_path(&self) -> &GuardedPath {
         self.guard.as_ref().unwrap()
-    }
-
-    /// Prevent automatic cleanup and return the guarded path rooted at the
-    /// temporary directory.
-    #[allow(deprecated)]
-    pub fn persist(mut self) -> GuardedPath {
-        if let Some(tempdir) = self.tempdir.take() {
-            let _ = tempdir.into_path();
-        }
-        self.guard.take().unwrap()
     }
 
     #[allow(clippy::disallowed_types)]
@@ -381,9 +390,56 @@ pub fn embed_path(path: &GuardedPath) -> String {
     to_forward_slashes(&s)
 }
 
+#[cfg(not(miri))]
+fn write_temp_marker(guard: &GuardedPath) -> Result<()> {
+    let resolver = PathResolver::new_guarded(guard.clone(), guard.clone())?;
+    let marker = guard.join(OXDOCK_TEMP_MARKER)?;
+    resolver.write_file(&marker, b"oxdock-tempdir")?;
+    Ok(())
+}
+
+#[cfg(miri)]
+fn write_temp_marker(_guard: &GuardedPath) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(miri))]
+fn cleanup_marked_tempdirs() -> Result<()> {
+    cleanup_marked_tempdirs_in(std::env::temp_dir())
+}
+
+#[cfg(not(miri))]
+fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    for entry in std::fs::read_dir(&base)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if !name.starts_with(OXDOCK_TEMP_PREFIX) {
+            continue;
+        }
+
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let marker = path.join(OXDOCK_TEMP_MARKER);
+        if !marker.exists() {
+            continue;
+        }
+
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        match std::fs::remove_dir_all(&path) {
+            Ok(_) => {}
+            Err(err) => warn!(?path, %err, "failed to remove stale oxdock tempdir"),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::PathResolver;
     use super::*;
 
     #[test]
@@ -394,23 +450,6 @@ mod tests {
         let parent = child.parent().expect("parent");
         assert_eq!(parent.as_path(), root.as_path().join("child"));
         assert_eq!(child.root(), root.root());
-    }
-
-    #[test]
-    fn guarded_tempdir_persist_keeps_directory() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let root = temp.as_guarded_path().clone();
-        let persisted = temp.persist();
-        let resolver =
-            PathResolver::new_guarded(root.clone(), root.clone()).expect("path resolver");
-
-        resolver
-            .create_dir_all(&root)
-            .expect("create persisted dir");
-        assert!(resolver.exists(&persisted));
-        assert!(resolver.exists(&root));
-
-        resolver.remove_dir_all(&root).expect("cleanup tempdir");
     }
 
     #[allow(clippy::disallowed_types)]
@@ -435,5 +474,37 @@ mod tests {
         assert!(normalized.contains("sandbox"));
         assert!(normalized.contains("foo"));
         assert!(normalized.contains("bar"));
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn cleanup_stale_tempdirs_removes_marked_dirs() {
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let base = std::env::temp_dir().join("oxdock-cleanup-test");
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        std::fs::create_dir_all(&base).expect("create temp sandbox");
+
+        // Create a tempdir and intentionally leak it to simulate a killed process.
+        let mut builder = Builder::new();
+        builder.prefix(OXDOCK_TEMP_PREFIX);
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let tempdir = builder.tempdir_in(&base).expect("tempdir_in");
+        let guard = GuardedPath::new_root(tempdir.path()).expect("guarded root");
+        write_temp_marker(&guard).expect("marker");
+        let temp = GuardedTempDir::new(guard, Some(tempdir));
+        let path = temp.as_guarded_path().to_path_buf();
+        std::mem::forget(temp);
+
+        // Ensure marker exists (already written by tempdir())
+        let marker = path.join(OXDOCK_TEMP_MARKER);
+        assert!(marker.exists());
+        assert!(path.exists());
+
+        cleanup_marked_tempdirs_in(base.clone()).expect("cleanup");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(base);
     }
 }
