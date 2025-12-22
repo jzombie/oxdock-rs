@@ -312,9 +312,12 @@ mod tests {
         let meta = resolver.metadata(&file).expect("metadata");
         assert!(meta.is_file());
 
-        let unguarded = UnguardedPath::new(file.to_path_buf());
-        let _ = resolver.open_file_unguarded(&unguarded).expect("open");
-        let _ = resolver.metadata_unguarded(&unguarded).expect("stat");
+        #[allow(clippy::disallowed_types)]
+        {
+            let unguarded = UnguardedPath::new(file.to_path_buf());
+            let _ = resolver.open_file_unguarded(&unguarded).expect("open");
+            let _ = resolver.metadata_unguarded(&unguarded).expect("stat");
+        }
 
         resolver.remove_file(&file).expect("remove file");
         assert!(!resolver.exists(&file));

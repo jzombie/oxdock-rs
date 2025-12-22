@@ -368,9 +368,8 @@ pub fn embed_path(path: &GuardedPath) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::PathResolver;
     use super::*;
-    use std::fs;
-    use std::path::{Path, PathBuf};
 
     #[test]
     fn guarded_path_join_and_parent_round_trip() {
@@ -385,28 +384,37 @@ mod tests {
     #[test]
     fn guarded_tempdir_persist_keeps_directory() {
         let temp = GuardedPath::tempdir().expect("tempdir");
-        let dir = temp.as_guarded_path().to_path_buf();
+        let root = temp.as_guarded_path().clone();
         let persisted = temp.persist();
-        fs::create_dir_all(persisted.as_path()).expect("create persisted dir");
-        assert!(persisted.exists());
-        assert!(dir.exists());
-        fs::remove_dir_all(dir).expect("cleanup tempdir");
+        let resolver =
+            PathResolver::new_guarded(root.clone(), root.clone()).expect("path resolver");
+
+        resolver
+            .create_dir_all(&root)
+            .expect("create persisted dir");
+        assert!(resolver.exists(&persisted));
+        assert!(resolver.exists(&root));
+
+        resolver.remove_dir_all(&root).expect("cleanup tempdir");
     }
 
+    #[allow(clippy::disallowed_types)]
     #[test]
     fn unguarded_path_join_and_parent_work() {
         let root = UnguardedPath::new("/tmp/oxdock-fs-test");
         let joined = root.join("child").expect("join");
-        assert_eq!(joined.as_path(), Path::new("/tmp/oxdock-fs-test/child"));
+        assert_eq!(
+            joined.as_path().to_string_lossy(),
+            "/tmp/oxdock-fs-test/child"
+        );
         let parent = joined.parent().expect("parent");
-        assert_eq!(parent.as_path(), Path::new("/tmp/oxdock-fs-test"));
+        assert_eq!(parent.as_path().to_string_lossy(), "/tmp/oxdock-fs-test");
     }
 
     #[test]
     fn embed_path_normalizes_backslashes() {
-        let root = PathBuf::from("C\\\\sandbox");
-        let path = PathBuf::from("C\\\\sandbox\\\\foo\\\\bar");
-        let guard = GuardedPath::from_guarded_parts(root, path);
+        let guard = GuardedPath::new_from_str("C:\\sandbox", "C:\\sandbox\\foo\\bar")
+            .expect("guarded path");
         let normalized = embed_path(&guard);
         assert!(!normalized.contains('\\'));
         assert!(normalized.contains("sandbox"));

@@ -102,10 +102,10 @@ fn env_fallback(keys: &[&str]) -> Option<String> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
+    use super::super::GitCommand;
     use super::*;
-    use std::process::Command;
 
     fn with_env(key: &str, value: &str, f: impl FnOnce()) {
         let prev = std::env::var(key).ok();
@@ -125,16 +125,22 @@ mod tests {
         });
     }
 
+    fn init_repo(repo: &GuardedPath) {
+        let mut cmd = GitCommand::new(repo.as_path());
+        cmd.arg("init");
+        let output = cmd.output().expect("run git init");
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            output.status
+        );
+    }
+
     #[test]
     fn ensure_git_identity_writes_defaults_when_missing() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let repo = temp.as_guarded_path().clone();
-        Command::new("git")
-            .arg("-C")
-            .arg(repo.as_path())
-            .arg("init")
-            .status()
-            .expect("init repo");
+        init_repo(&repo);
 
         with_git_config_isolation(|| {
             let ident = ensure_git_identity(&repo).expect("identity");
@@ -147,12 +153,7 @@ mod tests {
     fn ensure_git_identity_reads_env_fallback() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let repo = temp.as_guarded_path().clone();
-        Command::new("git")
-            .arg("-C")
-            .arg(repo.as_path())
-            .arg("init")
-            .status()
-            .expect("init repo");
+        init_repo(&repo);
 
         with_git_config_isolation(|| {
             with_env("GIT_AUTHOR_NAME", "CI Bot", || {
