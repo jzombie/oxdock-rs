@@ -282,6 +282,9 @@ fn walk(
                 push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;
                 *last_span_end = Some(span.end());
+                if ch == ';' {
+                    finalize_line(lines, line, capture_has_inner);
+                }
             }
             TokenTree::Ident(ident) => {
                 let ident_text = ident.to_string();
@@ -298,8 +301,7 @@ fn walk(
                 let line_requires_inner = line_expects_inner_command(trimmed);
                 let mut should_finalize = false;
                 if is_command && !trimmed_empty && !guard_prefix {
-                    should_finalize =
-                        !matches!(current_line_command(trimmed), Some(Command::CaptureToFile));
+                    should_finalize = !line_is_run_context(trimmed);
                 }
                 if is_command
                     && !trimmed_empty
@@ -396,6 +398,30 @@ mod tests {
     }
 
     #[test]
+    fn braced_script_splits_semicolon_commands() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { RUN echo; LS; RUN echo && ls }, out_dir: \"out\"")
+                .expect("parse braced script");
+        let ScriptSource::Braced(ts) = input.script else {
+            panic!("expected braced script");
+        };
+        let script = script_from_braced_tokens(&ts).expect("render braced script");
+        assert_eq!(script, "RUN echo;\nLS;\nRUN echo && ls");
+    }
+
+    #[test]
+    fn braced_script_allows_run_bg_with_command_like_ident() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { RUN_BG LS a }, out_dir: \"out\"")
+                .expect("parse braced script");
+        let ScriptSource::Braced(ts) = input.script else {
+            panic!("expected braced script");
+        };
+        let script = script_from_braced_tokens(&ts).expect("render braced script");
+        assert_eq!(script, "RUN_BG LS a");
+    }
+
+    #[test]
     fn parse_dsl_macro_input_rejects_unknown_label() {
         let err =
             parse_str::<DslMacroInput>("names: foo, script: \"RUN echo hi\", out_dir: \"out\"")
@@ -475,5 +501,30 @@ mod tests {
         push_fragment(&mut buf, "RUN", false);
         push_fragment(&mut buf, "echo", true);
         assert_eq!(buf, "RUN echo");
+    }
+
+    #[test]
+    fn span_gap_requires_space_detects_column_gap_on_same_line() {
+        let prev = LineColumn { line: 1, column: 1 };
+        let next = LineColumn { line: 1, column: 4 };
+        assert!(span_gap_requires_space(prev, next));
+        let new_line = LineColumn { line: 2, column: 0 };
+        assert!(!span_gap_requires_space(prev, new_line));
+    }
+
+    #[test]
+    fn sticky_matches_urlish_characters() {
+        for ch in ['/', '.', '-', ':', '=', '$', '{', '}'] {
+            assert!(sticky(ch));
+        }
+        assert!(!sticky('a'));
+    }
+
+    #[test]
+    fn line_predicates_distinguish_run_and_capture_contexts() {
+        assert!(line_is_run_context("  RUN something"));
+        assert!(!line_is_run_context("ECHO hi"));
+        assert!(line_expects_inner_command("CAPTURE_TO_FILE out"));
+        assert!(!line_expects_inner_command("RUN thing"));
     }
 }

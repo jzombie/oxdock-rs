@@ -101,3 +101,68 @@ fn env_fallback(keys: &[&str]) -> Option<String> {
     }
     None
 }
+
+#[cfg(all(test, not(miri)))]
+mod tests {
+    use super::super::GitCommand;
+    use super::*;
+
+    fn with_env(key: &str, value: &str, f: impl FnOnce()) {
+        let prev = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    fn with_git_config_isolation(f: impl FnOnce()) {
+        with_env("GIT_CONFIG_GLOBAL", "/dev/null", || {
+            with_env("GIT_CONFIG_SYSTEM", "/dev/null", f)
+        });
+    }
+
+    fn init_repo(repo: &GuardedPath) {
+        let mut cmd = GitCommand::new(repo.as_path());
+        cmd.arg("init");
+        let output = cmd.output().expect("run git init");
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            output.status
+        );
+    }
+
+    #[test]
+    fn ensure_git_identity_writes_defaults_when_missing() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let repo = temp.as_guarded_path().clone();
+        init_repo(&repo);
+
+        with_git_config_isolation(|| {
+            let ident = ensure_git_identity(&repo).expect("identity");
+            assert!(!ident.name.is_empty());
+            assert!(!ident.email.is_empty());
+        });
+    }
+
+    #[test]
+    fn ensure_git_identity_reads_env_fallback() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let repo = temp.as_guarded_path().clone();
+        init_repo(&repo);
+
+        with_git_config_isolation(|| {
+            with_env("GIT_AUTHOR_NAME", "CI Bot", || {
+                with_env("GIT_AUTHOR_EMAIL", "ci@example.com", || {
+                    let ident = ensure_git_identity(&repo).expect("identity");
+                    assert_eq!(ident.name, "CI Bot");
+                    assert_eq!(ident.email, "ci@example.com");
+                });
+            });
+        });
+    }
+}
