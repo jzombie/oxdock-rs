@@ -282,6 +282,9 @@ fn walk(
                 push_fragment(line, &ch.to_string(), force_space);
                 *last_was_command = false;
                 *last_span_end = Some(span.end());
+                if ch == ';' {
+                    finalize_line(lines, line, capture_has_inner);
+                }
             }
             TokenTree::Ident(ident) => {
                 let ident_text = ident.to_string();
@@ -298,8 +301,7 @@ fn walk(
                 let line_requires_inner = line_expects_inner_command(trimmed);
                 let mut should_finalize = false;
                 if is_command && !trimmed_empty && !guard_prefix {
-                    should_finalize =
-                        !matches!(current_line_command(trimmed), Some(Command::CaptureToFile));
+                    should_finalize = !line_is_run_context(trimmed);
                 }
                 if is_command
                     && !trimmed_empty
