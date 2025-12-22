@@ -177,7 +177,10 @@ pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
         if name == "OXBOOK_SNIPPET_PATH" || name == "OXBOOK_SNIPPET_DIR" {
             return ctx.envs().get(name).cloned();
         }
-        ctx.envs().get(name).cloned().or_else(|| std::env::var(name).ok())
+        ctx.envs()
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
     })
 }
 

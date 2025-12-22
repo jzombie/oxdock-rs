@@ -1,14 +1,14 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use os_pipe::pipe;
 use oxdock_core::run_steps_with_context_result;
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path, discover_workspace_root};
-use oxdock_parser::{parse_script, Step, StepKind};
+use oxdock_parser::{Step, StepKind, parse_script};
 use oxdock_process::{CommandBuilder, CommandOutput, SharedInput, SharedOutput};
-use os_pipe::pipe;
 
+use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -492,8 +492,10 @@ fn render_shell_outputs(
                         } else {
                             let expected_stdout_hash = sha256_hex(&block.stdout);
                             let expected_stderr_hash = sha256_hex(&block.stderr);
-                            let matches_stdout = block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
-                            let matches_stderr = block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
+                            let matches_stdout =
+                                block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
+                            let matches_stderr =
+                                block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
                             let matches_output = matches_stdout && matches_stderr;
                             !(matches_code && matches_output)
                         }
@@ -507,9 +509,11 @@ fn render_shell_outputs(
                     // Create a cross-platform anonymous pipe (reader, writer)
                     // to stream this fence's stdout to the next fence while
                     // also capturing it for embedding.
-                    let (reader, writer) = pipe().with_context(|| "create pipe for piping stdout to next fence")?;
+                    let (reader, writer) =
+                        pipe().with_context(|| "create pipe for piping stdout to next fence")?;
                     let reader_shared: SharedInput = Arc::new(Mutex::new(reader));
-                    let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> = Arc::new(Mutex::new(writer));
+                    let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> =
+                        Arc::new(Mutex::new(writer));
 
                     // Capture buffer to embed output in the markdown.
                     let capture_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -611,10 +615,8 @@ fn render_shell_outputs(
                 let parsed = parse_fence_info(&info);
                 if let Some(lang) = parsed.language {
                     let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
-                    let output = format!(
-                        "error: no interpreter registered for language '{}'",
-                        lang
-                    );
+                    let output =
+                        format!("error: no interpreter registered for language '{}'", lang);
                     if let Some(block) = existing {
                         i = block.end_index;
                     }
@@ -667,7 +669,12 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     let mut stderr_hash = None;
     if idx < lines.len() && lines[idx].trim_start().starts_with(OUTPUT_META_PREFIX) {
         let meta_line = lines[idx].trim();
-        parse_output_meta(meta_line, &mut code_hash, &mut stdout_hash, &mut stderr_hash);
+        parse_output_meta(
+            meta_line,
+            &mut code_hash,
+            &mut stdout_hash,
+            &mut stderr_hash,
+        );
         idx += 1;
     }
 
@@ -1049,7 +1056,16 @@ fn run_interpreter(
                 .with_context(|| format!("missing env for {}", path.display()))?
         }
         None => {
-            return run_in_default_env(resolver, workspace_root, source_dir, spec, script, stdin, stdout, capture_buf);
+            return run_in_default_env(
+                resolver,
+                workspace_root,
+                source_dir,
+                spec,
+                script,
+                stdin,
+                stdout,
+                capture_buf,
+            );
         }
     };
     run_in_env(resolver, env, spec, script, stdin, stdout, capture_buf)
@@ -1071,7 +1087,16 @@ fn run_in_default_env(
         env_hash: None,
         _tempdir: None,
     };
-    run_in_env_with_resolver(resolver, resolver, &env, spec, script, stdin, stdout, capture_buf)
+    run_in_env_with_resolver(
+        resolver,
+        resolver,
+        &env,
+        spec,
+        script,
+        stdin,
+        stdout,
+        capture_buf,
+    )
 }
 
 fn run_in_env(
@@ -1084,7 +1109,16 @@ fn run_in_env(
     capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
     let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
-    run_in_env_with_resolver(workspace_resolver, &resolver, env, spec, script, stdin, stdout, capture_buf)
+    run_in_env_with_resolver(
+        workspace_resolver,
+        &resolver,
+        env,
+        spec,
+        script,
+        stdin,
+        stdout,
+        capture_buf,
+    )
 }
 
 fn run_in_env_with_resolver(
@@ -1109,7 +1143,13 @@ fn run_in_env_with_resolver(
         let lang_safe: String = spec
             .language
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let snippet_name = format!("oxbook-snippet.{lang_safe}");
         let snippet_path = env
@@ -1149,14 +1189,15 @@ fn run_in_env_with_resolver(
 
         // Prepare stdout: if provided, use it; otherwise create a capture
         // buffer and use that for stdout so we can return captured output.
-        let (use_stdout, internal_capture): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) = match stdout {
-            Some(s) => (s, None),
-            None => {
-                let buf = Arc::new(Mutex::new(Vec::new()));
-                let out: SharedOutput = buf.clone();
-                (out, Some(buf))
-            }
-        };
+        let (use_stdout, internal_capture): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
+            match stdout {
+                Some(s) => (s, None),
+                None => {
+                    let buf = Arc::new(Mutex::new(Vec::new()));
+                    let out: SharedOutput = buf.clone();
+                    (out, Some(buf))
+                }
+            };
 
         run_steps_with_context_result(
             &env.root,

@@ -4,16 +4,16 @@ use super::guard_path;
 use crate::PathLike;
 use anyhow::Result;
 use std::borrow::Cow;
-use tracing::warn;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::fs::{File, OpenOptions};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 #[allow(clippy::disallowed_types)]
 use tempfile::{Builder, TempDir};
+use tracing::warn;
 
 #[cfg(miri)]
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -527,7 +527,9 @@ fn is_pid_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -537,11 +539,7 @@ fn is_pid_alive(pid: u32) -> bool {
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
         CloseHandle(handle);
-        if ok == 0 {
-            true
-        } else {
-            code == STILL_ACTIVE
-        }
+        if ok == 0 { true } else { code == STILL_ACTIVE }
     }
 }
 

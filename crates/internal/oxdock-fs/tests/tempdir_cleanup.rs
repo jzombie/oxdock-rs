@@ -1,8 +1,8 @@
 use oxdock_fs::GuardedPath;
 use std::env;
+use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::PathBuf;
-use std::io::Write;
 use std::process::{Command, ExitStatus};
 
 const CHILD_MODE_ENV: &str = "OXDOCK_FS_TEMP_CLEANUP_MODE";
@@ -60,7 +60,7 @@ fn spawn_child(mode: &str) -> (ExitStatus, Vec<PathBuf>) {
 
 #[cfg_attr(
     miri,
-    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation",
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
 )]
 #[test]
 fn tempdir_dropped_on_successful_exit() {
@@ -72,7 +72,7 @@ fn tempdir_dropped_on_successful_exit() {
 
 #[cfg_attr(
     miri,
-    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation",
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
 )]
 #[test]
 fn tempdir_dropped_on_panic_exit() {
@@ -84,19 +84,22 @@ fn tempdir_dropped_on_panic_exit() {
 
 #[cfg_attr(
     miri,
-    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation",
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
 )]
 #[test]
 fn tempdir_dropped_before_error_exit() {
     maybe_run_as_child();
     let (status, paths) = spawn_child("exit1");
-    assert!(!status.success(), "child should exit with failure code: {status}");
+    assert!(
+        !status.success(),
+        "child should exit with failure code: {status}"
+    );
     assert!(paths.iter().all(|path| !path.exists()));
 }
 
 #[cfg_attr(
     miri,
-    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation",
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
 )]
 #[test]
 fn cleanup_skips_live_tempdir() {

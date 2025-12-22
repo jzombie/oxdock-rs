@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use cargo_metadata::{MetadataCommand, PackageId};
 use std::collections::HashSet;
 use std::env;
@@ -47,7 +47,11 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
         .packages
         .into_iter()
         .filter(|pkg| workspace_ids.contains(&pkg.id))
-        .filter(|pkg| pkg.targets.iter().any(|t| t.kind.iter().any(|k| k == "lib")))
+        .filter(|pkg| {
+            pkg.targets
+                .iter()
+                .any(|t| t.kind.iter().any(|k| k == "lib"))
+        })
         .filter_map(|pkg| {
             let name = pkg.name.trim();
             if name.is_empty() {
