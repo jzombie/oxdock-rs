@@ -452,11 +452,11 @@ impl ProcessManager for SyntheticProcessManager {
             stdout,
         } = options;
 
-        if let Some(reader) = stdin {
-            if let Ok(mut guard) = reader.lock() {
-                let mut sink = std::io::sink();
-                let _ = std::io::copy(&mut *guard, &mut sink);
-            }
+        if let Some(reader) = stdin
+            && let Ok(mut guard) = reader.lock()
+        {
+            let mut sink = std::io::sink();
+            let _ = std::io::copy(&mut *guard, &mut sink);
         }
 
         match mode {
@@ -470,11 +470,9 @@ impl ProcessManager for SyntheticProcessManager {
                 match stdout {
                     CommandStdout::Inherit => Ok(CommandResult::Completed),
                     CommandStdout::Stream(writer) => {
-                        if needs_bytes {
-                            if let Ok(mut guard) = writer.lock() {
-                                let _ = std::io::Write::write_all(&mut *guard, &out);
-                                let _ = std::io::Write::flush(&mut *guard);
-                            }
+                        if needs_bytes && let Ok(mut guard) = writer.lock() {
+                            let _ = std::io::Write::write_all(&mut *guard, &out);
+                            let _ = std::io::Write::flush(&mut *guard);
                         }
                         Ok(CommandResult::Completed)
                     }
