@@ -2,9 +2,9 @@ use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
 use oxdock_core::run_steps_with_context_result;
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path, discover_workspace_root};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
 use oxdock_parser::{Step, StepKind, parse_script};
-use oxdock_process::{CommandBuilder, CommandOutput, SharedInput, SharedOutput};
+use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
@@ -54,6 +54,7 @@ struct InterpreterSpec {
     env_hash: Option<String>,
 }
 
+#[allow(dead_code)]
 struct InterpreterEnv {
     root: GuardedPath,
     cwd: GuardedPath,
@@ -478,7 +479,7 @@ fn render_shell_outputs(
             }
             let script = body_lines.join("\n");
             // Parse fence info params (currently used for language/oxfile/cmd only).
-            let fence_info = parse_fence_info(&info);
+            let _fence_info = parse_fence_info(&info);
             let existing = parse_output_block(&lines, i);
             if let Some(spec) =
                 interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
@@ -653,6 +654,7 @@ fn is_fence_close(line: &str, fence_char: char, fence_len: usize) -> bool {
     trimmed[count..].trim().is_empty()
 }
 
+#[allow(unused_assignments)]
 fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     let mut idx = start;
     if idx < lines.len() && lines[idx].trim().is_empty() {
@@ -684,8 +686,8 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     idx += 1;
 
     let mut output_lines = Vec::new();
-    let mut stdout = String::new();
-    let mut stderr = String::new();
+    let _stdout = String::new();
+    let _stderr = String::new();
     while idx < lines.len() {
         if lines[idx].trim_end() == "```" {
             idx += 1;
@@ -729,7 +731,6 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
             }
             stderr = stderr_lines.join("\n");
             // advance idx so the caller sees the whole output block consumed
-            idx = peek_idx - 1;
         }
     }
     Some(OutputBlock {
@@ -871,7 +872,7 @@ fn interpreter_spec(
     }))
 }
 
-fn parse_command_parts(cmd: Option<&String>, language: &str) -> Vec<String> {
+fn parse_command_parts(cmd: Option<&String>, _language: &str) -> Vec<String> {
     match cmd {
         Some(value) => value
             .split(',')
@@ -948,8 +949,8 @@ fn get_registered_oxfile(language: &str) -> Option<String> {
     reg.get(language).cloned()
 }
 
+#[allow(clippy::disallowed_types, clippy::disallowed_methods, clippy::collapsible_if)]
 fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
-    use std::path::Path;
     let root = workspace_root.root();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -1036,6 +1037,7 @@ fn build_env_from_oxfile(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_interpreter(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
@@ -1071,6 +1073,7 @@ fn run_interpreter(
     run_in_env(resolver, env, spec, script, stdin, stdout, capture_buf)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_in_default_env(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
@@ -1121,6 +1124,7 @@ fn run_in_env(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_in_env_with_resolver(
     workspace_resolver: &PathResolver,
     resolver: &PathResolver,
@@ -1233,6 +1237,7 @@ fn run_in_env_with_resolver(
 
 // script file execution removed: languages must delegate to an oxfile.
 
+#[allow(dead_code)]
 fn command_output_to_string(output: &CommandOutput) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

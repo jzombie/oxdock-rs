@@ -245,6 +245,7 @@ impl std::ops::Deref for GuardedTempDir {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 impl Drop for GuardedTempDir {
     fn drop(&mut self) {
         // Ensure the lock file is closed before the TempDir is dropped so
@@ -497,6 +498,7 @@ pub(crate) fn run_temp_cleanup_once() {
 pub(crate) fn run_temp_cleanup_once() {}
 
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods, clippy::collapsible_if)]
 fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     for entry in std::fs::read_dir(&base)? {
@@ -534,6 +536,7 @@ fn cleanup_marked_tempdirs_in(base: std::path::PathBuf) -> Result<()> {
 }
 
 #[cfg(not(miri))]
+#[allow(clippy::disallowed_types)]
 fn read_lock_pid(lock_path: &Path) -> Option<u32> {
     if !lock_path.exists() {
         return None;
@@ -641,6 +644,7 @@ mod tests {
         ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
     )]
     #[test]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     fn cleanup_stale_tempdirs_removes_marked_dirs() {
         #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
         let base = std::env::temp_dir().join("oxdock-cleanup-test");

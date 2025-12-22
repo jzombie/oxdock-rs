@@ -3,6 +3,7 @@ use std::env;
 use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::PathBuf;
+#[allow(clippy::disallowed_types)]
 use std::process::{Command, ExitStatus};
 
 const CHILD_MODE_ENV: &str = "OXDOCK_FS_TEMP_CLEANUP_MODE";

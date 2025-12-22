@@ -3,6 +3,7 @@ use cargo_metadata::{MetadataCommand, PackageId, TargetKind};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+#[allow(clippy::disallowed_types)]
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
@@ -11,11 +12,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::disallowed_types)]
 struct Args {
     workspace: PathBuf,
     out: PathBuf,
 }
 
+#[allow(clippy::disallowed_types)]
 impl Args {
     fn parse(raw: Vec<String>) -> Result<Self> {
         let mut workspace = None;
@@ -34,6 +37,7 @@ impl Args {
     }
 }
 
+#[allow(clippy::disallowed_types)]
 fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
     let manifest = workspace_root.join("Cargo.toml");
     let meta = MetadataCommand::new()
@@ -81,9 +85,14 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
     }
     cargo_toml.push_str("\n[[bin]]\nname = \"oxbook-snippet\"\npath = \"src/main.rs\"\n");
 
-    if let Some(parent) = out_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
+    #[allow(clippy::disallowed_methods)]
+    {
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        fs::write(out_path, cargo_toml)
+            .with_context(|| format!("write {}", out_path.display()))?;
     }
-    fs::write(out_path, cargo_toml).with_context(|| format!("write {}", out_path.display()))?;
     Ok(out_path.to_path_buf())
 }
