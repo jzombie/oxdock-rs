@@ -263,6 +263,26 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             let cmd = parse_run_args_from_pair(pair)?;
             StepKind::CaptureToFile { path, cmd }
         }
+        Rule::with_io_command => {
+            let mut streams = Vec::new();
+            let mut cmd = String::new();
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::io_flags => {
+                        for flag in inner.into_inner() {
+                            if flag.as_rule() == Rule::io_flag {
+                                streams.push(flag.as_str().to_string());
+                            }
+                        }
+                    }
+                    Rule::run_args => {
+                        cmd = parse_raw_concatenated_string(inner)?;
+                    }
+                    _ => {}
+                }
+            }
+            StepKind::WithIo { streams, cmd }
+        }
         Rule::copy_git_command => {
             let mut args = Vec::new();
             let mut include_dirty = false;

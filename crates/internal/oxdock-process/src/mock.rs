@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 
-use crate::{BackgroundHandle, CommandContext, ProcessManager};
+use crate::{BackgroundHandle, CommandContext, ProcessManager, SharedInput};
 
 /// Captured invocation for a foreground run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +16,7 @@ pub struct MockRunCall {
     pub cwd: PathBuf,
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
+    pub stdin_provided: bool,
 }
 
 /// Captured invocation for a background spawn.
@@ -26,6 +27,7 @@ pub struct MockSpawnCall {
     pub cwd: PathBuf,
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
+    pub stdin_provided: bool,
 }
 
 #[derive(Clone, Default)]
@@ -60,27 +62,60 @@ impl MockProcessManager {
 impl ProcessManager for MockProcessManager {
     type Handle = MockHandle;
 
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
+    fn run(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        stdin: Option<SharedInput>,
+        _stdout: Option<std::fs::File>,
+    ) -> Result<()> {
+        let stdin_provided = stdin.is_some();
+        if let Some(reader) = stdin {
+            // Stream into sink to simulate consumption without buffering
+            let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
+            std::io::copy(&mut *guard, &mut std::io::sink())?;
+        }
+
         self.runs.borrow_mut().push(MockRunCall {
             script: script.to_string(),
             cwd: ctx.cwd().to_path_buf(),
             envs: ctx.envs().clone(),
             cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+            stdin_provided,
         });
         Ok(())
     }
 
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
-        self.run(ctx, script)?;
+    fn run_capture(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        stdin: Option<SharedInput>,
+    ) -> Result<Vec<u8>> {
+        self.run(ctx, script, stdin, None)?;
         Ok(Vec::new())
     }
 
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
+    fn spawn_bg(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        stdin: Option<SharedInput>,
+        _stdout: Option<std::fs::File>,
+    ) -> Result<Self::Handle> {
+        let stdin_provided = stdin.is_some();
+        if let Some(reader) = stdin {
+            // Stream into sink to simulate consumption without buffering
+            let mut guard = reader.lock().map_err(|_| anyhow::anyhow!("failed to lock stdin"))?;
+            std::io::copy(&mut *guard, &mut std::io::sink())?;
+        }
+
         self.spawns.borrow_mut().push(MockSpawnCall {
             script: script.to_string(),
             cwd: ctx.cwd().to_path_buf(),
             envs: ctx.envs().clone(),
             cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+            stdin_provided,
         });
         let plan = self
             .plans

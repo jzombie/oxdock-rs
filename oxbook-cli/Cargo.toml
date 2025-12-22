@@ -10,7 +10,9 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 notify = "6.1.1"
+oxdock-core.workspace = true
 oxdock-fs.workspace = true
+oxdock-parser.workspace = true
 oxdock-process.workspace = true
 sha2.workspace = true
 

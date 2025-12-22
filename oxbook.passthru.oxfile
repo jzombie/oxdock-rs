@@ -1,0 +1,1 @@
+[platform=unix] WITH_IO [stdin] "RUN cat"

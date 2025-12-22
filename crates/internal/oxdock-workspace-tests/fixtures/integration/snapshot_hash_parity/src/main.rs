@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let core_root = core_temp.as_guarded_path().clone();
     let core_resolver = PathResolver::new_guarded(core_root.clone(), workspace_root.clone())?;
     let steps = parse_script(SCRIPT)?;
-    let core_final = run_steps_with_context_result(&core_root, &workspace_root, &steps)?;
+    let core_final = run_steps_with_context_result(&core_root, &workspace_root, &steps, None, None)?;
     let core_hash = read_dir_hash(&core_resolver, &core_final)?;
     let core_file_hash = read_file_hash(&core_resolver, &core_final)?;
 

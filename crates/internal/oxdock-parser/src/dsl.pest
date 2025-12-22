@@ -65,6 +65,7 @@ command = _{
     copy_git_command | // Must come before copy_command
     copy_command |
     capture_to_file_command |
+    with_io_command |
     hash_sha256_command |
     symlink_command |
     mkdir_command |
@@ -84,6 +85,7 @@ run_command = ${ "RUN" ~ sep ~ run_args }
 run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
 copy_command = ${ "COPY" ~ sep ~ argument ~ sep ~ argument }
 capture_to_file_command = ${ "CAPTURE_TO_FILE" ~ sep ~ argument ~ sep ~ run_args }
+with_io_command = ${ "WITH_IO" ~ sep ~ io_flags ~ sep ~ run_args }
 copy_git_command = ${ "COPY_GIT" ~ sep ~ (include_dirty_flag ~ sep)? ~ argument ~ sep ~ argument ~ sep ~ argument }
 hash_sha256_command = ${ "HASH_SHA256" ~ sep ~ argument }
 symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }
@@ -99,6 +101,8 @@ sep = _{ WHITESPACE+ }
 argument = { quoted_string | unquoted_arg }
 unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 include_dirty_flag = { "--include-dirty" }
+io_flags = { "[" ~ ws? ~ io_flag ~ (ws? ~ "," ~ ws? ~ io_flag)* ~ ws? ~ "]" }
+io_flag = { "stdin" | "stdout" | "stderr" }
 
 workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
 env_pair = { env_key_part ~ ws? ~ "=" ~ ws? ~ env_value_part }

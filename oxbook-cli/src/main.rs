@@ -1,9 +1,13 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use oxdock_fs::{GuardedPath, PathResolver, PolicyPath, discover_workspace_root};
-use oxdock_process::{CommandContext, ProcessManager, default_process_manager};
+use oxdock_core::run_steps_with_context_result;
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path, discover_workspace_root};
+use oxdock_parser::parse_script;
+use oxdock_process::{CommandBuilder, CommandOutput, SharedInput};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const STABLE_READ_RETRIES: usize = 5;
@@ -32,6 +36,30 @@ struct OutputBlock {
     output: String,
 }
 
+struct FenceInfo {
+    language: Option<String>,
+    params: HashMap<String, String>,
+}
+
+struct InterpreterSpec {
+    language: String,
+    command: Vec<String>,
+    oxfile: Option<GuardedPath>,
+    env_hash: Option<String>,
+}
+
+struct InterpreterEnv {
+    root: GuardedPath,
+    cwd: GuardedPath,
+    env_hash: Option<String>,
+    _tempdir: Option<GuardedTempDir>,
+}
+
+#[derive(Default)]
+struct InterpreterCache {
+    envs: HashMap<String, InterpreterEnv>,
+}
+
 fn main() -> Result<()> {
     let target = parse_target_path()?;
     let workspace_root = discover_workspace_root().context("resolve workspace root")?;
@@ -42,11 +70,17 @@ fn main() -> Result<()> {
         .with_context(|| format!("resolve markdown path {}", target))?;
 
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
-    let ctx = build_command_context(&workspace_root, &cwd)?;
-    let mut manager = default_process_manager();
+    let mut cache = InterpreterCache::default();
 
     let initial_contents = read_stable_contents(&resolver, &watched)?;
-    let rendered = render_shell_outputs(&initial_contents, &ctx, &mut manager, true)?;
+    let rendered = render_shell_outputs(
+        &initial_contents,
+        &resolver,
+        &workspace_root,
+        &cwd,
+        &mut cache,
+        true,
+    )?;
     if rendered != initial_contents {
         resolver
             .write_file(&watched, rendered.as_bytes())
@@ -54,7 +88,14 @@ fn main() -> Result<()> {
     }
     let mut last_contents = rendered;
     eprintln!("Watching {}", watched.display());
-    run_watch_loop(&resolver, &watched, &ctx, &mut manager, &mut last_contents)?;
+    run_watch_loop(
+        &resolver,
+        &workspace_root,
+        &watched,
+        &cwd,
+        &mut cache,
+        &mut last_contents,
+    )?;
     Ok(())
 }
 
@@ -92,9 +133,10 @@ fn read_stable_contents(resolver: &PathResolver, path: &GuardedPath) -> Result<S
 
 fn run_watch_loop(
     resolver: &PathResolver,
+    workspace_root: &GuardedPath,
     watched: &GuardedPath,
-    ctx: &CommandContext,
-    manager: &mut impl ProcessManager,
+    source_dir: &GuardedPath,
+    cache: &mut InterpreterCache,
     last_contents: &mut String,
 ) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -150,7 +192,14 @@ fn run_watch_loop(
         if let Ok(new_contents) = read_stable_contents(resolver, watched) {
             if new_contents != *last_contents {
                 report_fence_changes(watched, last_contents, &new_contents);
-                            let rendered = render_shell_outputs(&new_contents, ctx, manager, false)?;
+                let rendered = render_shell_outputs(
+                    &new_contents,
+                    resolver,
+                    workspace_root,
+                    source_dir,
+                    cache,
+                    false,
+                )?;
                 if rendered != new_contents {
                     resolver
                         .write_file(watched, rendered.as_bytes())
@@ -364,26 +413,12 @@ fn split_leading_ws(line: &str) -> (usize, &str) {
     (count, &line[count..])
 }
 
-fn build_command_context(
-    workspace_root: &GuardedPath,
-    cwd: &GuardedPath,
-) -> Result<CommandContext> {
-    let cargo_target_dir = workspace_root.join("target")?;
-    let envs = HashMap::new();
-    let policy = PolicyPath::from(cwd.clone());
-    Ok(CommandContext::new(
-        &policy,
-        &envs,
-        &cargo_target_dir,
-        workspace_root,
-        workspace_root,
-    ))
-}
-
 fn render_shell_outputs(
     contents: &str,
-    ctx: &CommandContext,
-    manager: &mut impl ProcessManager,
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut InterpreterCache,
     only_missing_outputs: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
@@ -416,9 +451,11 @@ fn render_shell_outputs(
                 if !closed {
                     continue;
                 }
-                if matches!(fence_language(&info), Some("sh") | Some("bash")) {
+                if let Some(spec) =
+                    interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
+                {
                     let script = body_lines.join("\n");
-                    let code_hash = sha256_hex(&script);
+                    let code_hash = code_hash(&script, &spec);
                     let existing = parse_output_block(&lines, i);
                     let should_run = match &existing {
                         Some(block) => {
@@ -435,10 +472,14 @@ fn render_shell_outputs(
                         None => true,
                     };
                     if should_run {
-                        let output = match manager.run_capture(ctx, &script) {
-                            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                            Err(err) => format!("error: {err}"),
-                        };
+                        let output = run_interpreter(
+                            resolver,
+                            workspace_root,
+                            source_dir,
+                            cache,
+                            &spec,
+                            &script,
+                        )?;
                         let output_block = format_output_block(&code_hash, &output);
                         if let Some(block) = existing {
                             i = block.end_index;
@@ -465,12 +506,6 @@ fn render_shell_outputs(
         rendered.push('\n');
     }
     Ok(rendered)
-}
-
-fn fence_language(info: &str) -> Option<&str> {
-    info.split_whitespace()
-        .next()
-        .and_then(|token| token.split(',').next())
 }
 
 fn is_fence_close(line: &str, fence_char: char, fence_len: usize) -> bool {
@@ -574,3 +609,341 @@ fn sha256_hex(input: &str) -> String {
 fn normalize_output(output: &str) -> String {
     output.trim_end_matches('\n').to_string()
 }
+
+fn parse_fence_info(info: &str) -> FenceInfo {
+    let mut language = None;
+    let mut params = HashMap::new();
+    for token in info.split_whitespace() {
+        if let Some((key, value)) = token.split_once('=') {
+            params.insert(key.to_string(), value.trim_matches('"').to_string());
+        } else if language.is_none() {
+            language = Some(token.to_string());
+        }
+    }
+    if let Some(lang) = params.get("lang") {
+        language = Some(lang.clone());
+    }
+    FenceInfo { language, params }
+}
+
+fn interpreter_spec(
+    info: &str,
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut InterpreterCache,
+) -> Result<Option<InterpreterSpec>> {
+    let parsed = parse_fence_info(info);
+    let language = match parsed.language {
+        Some(lang) => lang,
+        None => return Ok(None),
+    };
+    let oxfile = resolve_oxfile_path(
+        resolver,
+        workspace_root,
+        source_dir,
+        parsed.params.get("oxfile"),
+        &language,
+    )?;
+    let env_hash = match &oxfile {
+        Some(path) => env_hash_for_oxfile(resolver, path, cache)?,
+        None => None,
+    };
+    let command = match parsed.params.get("cmd") {
+        Some(s) if !s.is_empty() => parse_command_parts(Some(s), &language),
+        _ => {
+            if oxfile.is_some() {
+                Vec::new()
+            } else {
+                vec![language.to_string()]
+            }
+        }
+    };
+    if command.is_empty() && oxfile.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(InterpreterSpec {
+        language,
+        command,
+        oxfile,
+        env_hash,
+    }))
+}
+
+fn parse_command_parts(cmd: Option<&String>, language: &str) -> Vec<String> {
+    match cmd {
+        Some(value) => value
+            .split(',')
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect(),
+        None => vec![language.to_string()],
+    }
+}
+
+fn resolve_oxfile_path(
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    explicit: Option<&String>,
+    language: &str,
+) -> Result<Option<GuardedPath>> {
+    if let Some(path) = explicit {
+        let guarded = resolver
+            .resolve_read(source_dir, path)
+            .with_context(|| format!("resolve oxfile {path}"))?;
+        return Ok(Some(guarded));
+    }
+
+    let filename = format!("oxbook.{language}.oxfile");
+    let local = source_dir.join(&filename)?;
+    if resolver.entry_kind(&local).is_ok() {
+        return Ok(Some(local));
+    }
+
+    let workspace = workspace_root.join(&filename)?;
+    if resolver.entry_kind(&workspace).is_ok() {
+        return Ok(Some(workspace));
+    }
+
+    Ok(None)
+}
+
+fn env_hash_for_oxfile(
+    resolver: &PathResolver,
+    path: &GuardedPath,
+    cache: &mut InterpreterCache,
+) -> Result<Option<String>> {
+    let key = path.display();
+    let script = resolver
+        .read_to_string(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let hash = sha256_hex(&script);
+    let rebuild = match cache.envs.get(&key) {
+        Some(env) => env.env_hash.as_deref() != Some(&hash),
+        None => true,
+    };
+    if rebuild {
+        let env = build_env_from_oxfile(resolver, path, &script, hash.clone())?;
+        cache.envs.insert(key, env);
+    }
+    Ok(Some(hash))
+}
+
+fn build_env_from_oxfile(
+    resolver: &PathResolver,
+    path: &GuardedPath,
+    script: &str,
+    hash: String,
+) -> Result<InterpreterEnv> {
+    let steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
+    let tempdir = GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
+    let temp_root = tempdir.as_guarded_path().clone();
+    let build_context = resolver.root().clone();
+    let mut output_buf = Vec::new();
+    let final_cwd = run_steps_with_context_result(
+        &temp_root,
+        &build_context,
+        &steps,
+        None,
+        Some(&mut output_buf),
+    )
+    .with_context(|| format!("run {}", path.display()))?;
+
+    Ok(InterpreterEnv {
+        root: temp_root,
+        cwd: final_cwd,
+        env_hash: Some(hash),
+        _tempdir: Some(tempdir),
+    })
+}
+
+fn run_interpreter(
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut InterpreterCache,
+    spec: &InterpreterSpec,
+    script: &str,
+) -> Result<String> {
+    let env = match &spec.oxfile {
+        Some(path) => {
+            let key = path.display();
+            cache
+                .envs
+                .get(&key)
+                .with_context(|| format!("missing env for {}", path.display()))?
+        }
+        None => {
+            return run_in_default_env(
+                resolver,
+                workspace_root,
+                source_dir,
+                spec,
+                script,
+            );
+        }
+    };
+    run_in_env(resolver, env, spec, script)
+}
+
+fn run_in_default_env(
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    spec: &InterpreterSpec,
+    script: &str,
+) -> Result<String> {
+    let env = InterpreterEnv {
+        root: workspace_root.clone(),
+        cwd: source_dir.clone(),
+        env_hash: None,
+        _tempdir: None,
+    };
+    run_in_env_with_resolver(resolver, resolver, &env, spec, script)
+}
+
+fn run_in_env(
+    workspace_resolver: &PathResolver,
+    env: &InterpreterEnv,
+    spec: &InterpreterSpec,
+    script: &str,
+) -> Result<String> {
+    let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
+    run_in_env_with_resolver(workspace_resolver, &resolver, env, spec, script)
+}
+
+fn run_in_env_with_resolver(
+    workspace_resolver: &PathResolver,
+    resolver: &PathResolver,
+    env: &InterpreterEnv,
+    spec: &InterpreterSpec,
+    script: &str,
+) -> Result<String> {
+    if let Some(oxfile_path) = &spec.oxfile {
+        let oxfile_content = workspace_resolver
+            .read_to_string(oxfile_path)
+            .with_context(|| format!("read {}", oxfile_path.display()))?;
+        let steps = parse_script(&oxfile_content)
+            .with_context(|| format!("parse {}", oxfile_path.display()))?;
+
+        let input = Arc::new(Mutex::new(Cursor::new(script.to_string())));
+        let mut output_buf = Vec::new();
+
+        run_steps_with_context_result(
+            &env.root,
+            workspace_resolver.root(),
+            &steps,
+            Some(input),
+            Some(&mut output_buf),
+        )
+        .with_context(|| format!("run {}", oxfile_path.display()))?;
+
+        return Ok(String::from_utf8_lossy(&output_buf).to_string());
+    }
+
+    let script_path = write_script_file(resolver, &env.cwd, &spec.language, script)?;
+    let mut cmd_parts = build_command_with_script(&spec.command, &script_path);
+    if cmd_parts.is_empty() {
+        return Ok(String::from("error: missing command"));
+    }
+    let program = cmd_parts.remove(0);
+    let mut cmd = CommandBuilder::new(program);
+    if !cmd_parts.is_empty() {
+        cmd.args(cmd_parts);
+    }
+    cmd.current_dir(command_path(&env.cwd));
+    let cargo_target_dir = env.root.join("target")?;
+    cmd.env(
+        "CARGO_TARGET_DIR",
+        command_path(&cargo_target_dir).into_owned(),
+    );
+    let output = cmd.output().with_context(|| format!("run {}", spec.language))?;
+    Ok(command_output_to_string(&output))
+}
+
+fn write_script_file(
+    resolver: &PathResolver,
+    cwd: &GuardedPath,
+    language: &str,
+    script: &str,
+) -> Result<GuardedPath> {
+    let hash = sha256_hex(script);
+    let ext = script_extension(language);
+    let filename = format!("oxbook-cache/{language}-{hash}.{ext}");
+    let target = resolver.resolve_write(cwd, &filename)?;
+    if let Some(parent) = target.parent() {
+        resolver.create_dir_all(&parent)?;
+    }
+    resolver.write_file(&target, script.as_bytes())?;
+    Ok(target)
+}
+
+fn script_extension(language: &str) -> &'static str {
+    match language {
+        "rust" => "rs",
+        "python" => "py",
+        "bash" | "sh" => "sh",
+        "node" | "js" | "javascript" => "js",
+        _ => "txt",
+    }
+}
+
+fn build_command_with_script(command: &[String], script_path: &GuardedPath) -> Vec<String> {
+    let file_str = command_path(script_path).display().to_string();
+    let mut parts = Vec::new();
+    let mut has_file = false;
+    let mut has_stdin = false;
+    for part in command {
+        if part.contains("{file}") {
+            has_file = true;
+            parts.push(part.replace("{file}", &file_str));
+        } else if part.contains("{stdin}") {
+            has_stdin = true;
+            parts.push(part.replace("{stdin}", &file_str));
+        } else {
+            parts.push(part.clone());
+        }
+    }
+    if !has_file && !has_stdin {
+        parts.push(file_str);
+    }
+    parts
+}
+
+fn command_output_to_string(output: &CommandOutput) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut combined = String::new();
+    if !stdout.is_empty() {
+        combined.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(&stderr);
+    }
+    if output.success() {
+        combined
+    } else if combined.is_empty() {
+        format!("error: command failed")
+    } else {
+        combined
+    }
+}
+
+fn code_hash(script: &str, spec: &InterpreterSpec) -> String {
+    let mut combined = String::new();
+    combined.push_str(script);
+    combined.push('\n');
+    combined.push_str(&spec.language);
+    combined.push('\n');
+    combined.push_str(&spec.command.join("\u{1f}"));
+    if let Some(hash) = &spec.env_hash {
+        combined.push('\n');
+        combined.push_str(hash);
+    }
+    sha256_hex(&combined)
+}
+

@@ -1,12 +1,11 @@
 use anyhow::{Context, Result, bail};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
-use oxdock_process::CommandBuilder;
+use oxdock_process::{CommandBuilder, SharedInput};
 #[cfg(test)]
 use oxdock_process::CommandSnapshot;
 use std::env;
 use std::io::{self, IsTerminal, Read};
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result};
 pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
@@ -108,7 +107,7 @@ pub fn execute_with_result(opts: Options, workspace_root: GuardedPath) -> Result
     let mut final_cwd = temp_root.clone();
     if !script.trim().is_empty() {
         let steps = parse_script(&script)?;
-        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps, None, None)?;
     }
 
     Ok(ExecutionResult { tempdir, final_cwd })
@@ -172,7 +171,25 @@ where
         // Use the caller's workspace as the build context so WORKSPACE LOCAL can hop back and so COPY
         // can source from the original tree if needed. Capture the final working directory so shells
         // inherit whatever WORKDIR the script ended on.
-        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps)?;
+        
+        // If we are running a script from a file, we might have stdin available for the script itself.
+        // If we read the script from stdin, then stdin is consumed.
+        // But if opts.script is ScriptSource::Path, stdin is still available.
+        
+        let mut stdin_handle: Option<SharedInput> = None;
+        if let ScriptSource::Path(_) = opts.script {
+            let stdin = io::stdin();
+            if !stdin.is_terminal() {
+                // Wrap stdin in SharedInput (Arc<Mutex<dyn Read + Send>>)
+                // Note: std::io::Stdin is a handle, but we need an owned Read + Send.
+                // std::io::stdin() returns Stdin, which implements Read + Send.
+                // However, we need to be careful about locking.
+                // We can wrap the Stdin struct directly.
+                stdin_handle = Some(Arc::new(Mutex::new(stdin)));
+            }
+        }
+
+        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps, stdin_handle, None)?;
     }
 
     // If requested, drop into an interactive shell after running the script.

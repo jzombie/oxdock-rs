@@ -843,7 +843,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
         },
     ];
 
-    run_steps_with_fs(Box::new(resolver), &steps).unwrap();
+    run_steps_with_fs(Box::new(resolver), &steps, None).unwrap();
 
     let workspace_resolver =
         PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();

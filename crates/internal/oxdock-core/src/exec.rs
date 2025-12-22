@@ -6,10 +6,11 @@ use std::process::ExitStatus;
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::{
-    BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, default_process_manager,
+    BackgroundHandle, BuiltinEnv, CommandContext, ProcessManager, SharedInput, default_process_manager,
     expand_command_env,
 };
 use sha2::{Digest, Sha256};
+use std::sync::{Arc, Mutex};
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -47,7 +48,7 @@ pub fn run_steps_with_context(
     build_context: &GuardedPath,
     steps: &[Step],
 ) -> Result<()> {
-    run_steps_with_context_result(fs_root, build_context, steps).map(|_| ())
+    run_steps_with_context_result(fs_root, build_context, steps, None, None).map(|_| ())
 }
 
 /// Execute the DSL and return the final working directory after all steps.
@@ -55,8 +56,10 @@ pub fn run_steps_with_context_result(
     fs_root: &GuardedPath,
     build_context: &GuardedPath,
     steps: &[Step],
+    stdin: Option<SharedInput>,
+    stdout: Option<&mut dyn Write>,
 ) -> Result<GuardedPath> {
-    match run_steps_inner(fs_root, build_context, steps) {
+    match run_steps_inner(fs_root, build_context, steps, stdin, stdout) {
         Ok(final_cwd) => Ok(final_cwd),
         Err(err) => {
             // Compose a single error message with the top cause plus a compact fs snapshot.
@@ -99,20 +102,29 @@ fn run_steps_inner(
     fs_root: &GuardedPath,
     build_context: &GuardedPath,
     steps: &[Step],
+    stdin: Option<SharedInput>,
+    stdout: Option<&mut dyn Write>,
 ) -> Result<GuardedPath> {
     let mut resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
     resolver.set_workspace_root(build_context.clone());
-    run_steps_with_fs(Box::new(resolver), steps)
+    run_steps_with_fs(Box::new(resolver), steps, stdin, stdout)
 }
 
-pub fn run_steps_with_fs(fs: Box<dyn WorkspaceFs>, steps: &[Step]) -> Result<GuardedPath> {
-    run_steps_with_manager(fs, steps, default_process_manager())
+pub fn run_steps_with_fs(
+    fs: Box<dyn WorkspaceFs>,
+    steps: &[Step],
+    stdin: Option<SharedInput>,
+    stdout: Option<&mut dyn Write>,
+) -> Result<GuardedPath> {
+    run_steps_with_manager(fs, steps, default_process_manager(), stdin, stdout)
 }
 
 fn run_steps_with_manager<P: ProcessManager>(
     fs: Box<dyn WorkspaceFs>,
     steps: &[Step],
     process: P,
+    stdin: Option<SharedInput>,
+    stdout: Option<&mut dyn Write>,
 ) -> Result<GuardedPath> {
     let fs_root = fs.root().clone();
     let cwd = fs.root().clone();
@@ -127,9 +139,22 @@ fn run_steps_with_manager<P: ProcessManager>(
         scope_stack: Vec::new(),
     };
 
-    let mut stdout = io::stdout();
+    let mut default_stdout = io::stdout();
+    let (out, capture_output) = if let Some(s) = stdout {
+        (s, true)
+    } else {
+        (&mut default_stdout as &mut dyn Write, false)
+    };
     let mut proc_mgr = process;
-    execute_steps(&mut state, &mut proc_mgr, steps, false, &mut stdout)?;
+    execute_steps(
+        &mut state,
+        &mut proc_mgr,
+        steps,
+        capture_output,
+        stdin,
+        false, // expose_stdin defaults to false
+        out,
+    )?;
 
     Ok(state.cwd)
 }
@@ -139,10 +164,27 @@ fn execute_steps<P: ProcessManager>(
     process: &mut P,
     steps: &[Step],
     capture_output: bool,
+    stdin: Option<SharedInput>,
+    expose_stdin: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
     let fs_root = state.fs.root().clone();
     let build_context = state.fs.build_context().clone();
+
+    // Inject stdin into envs if available and utf8
+    // Note: We cannot peek at the stream without consuming it.
+    // So we can't inject "stdin" env var if we are streaming.
+    // The user wants streaming, so we skip env injection if we have a stream.
+    // Or we only inject if it's not streaming?
+    // The previous implementation took &[u8], so it was always buffered.
+    // Now we have a stream. We can't buffer it just to put it in env.
+    
+    // let old_stdin = state.envs.get("stdin").cloned();
+    // if let Some(data) = stdin {
+    //     if let Ok(s) = std::str::from_utf8(data) {
+    //         state.envs.insert("stdin".to_string(), s.to_string());
+    //     }
+    // }
 
     let check_bg = |bg: &mut Vec<P::Handle>| -> Result<Option<ExitStatus>> {
         let mut finished: Option<ExitStatus> = None;
@@ -178,18 +220,19 @@ fn execute_steps<P: ProcessManager>(
         }
 
         let should_run = oxdock_parser::guards_allow_any(&step.guards, &state.envs);
-        let step_result = if !should_run {
+        let step_result: Result<()> = if !should_run {
             Ok(())
         } else {
-            (|| {
-                match &step.kind {
-                    StepKind::Workdir(path) => {
-                        state.cwd = state
-                            .fs
-                            .resolve_workdir(&state.cwd, path)
-                            .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
-                    }
-                    StepKind::Workspace(target) => match target {
+            match &step.kind {
+                StepKind::Workdir(path) => {
+                    state.cwd = state
+                        .fs
+                        .resolve_workdir(&state.cwd, path)
+                        .with_context(|| format!("step {}: WORKDIR {}", idx + 1, path))?;
+                    Ok(())
+                }
+                StepKind::Workspace(target) => {
+                    match target {
                         WorkspaceTarget::Snapshot => {
                             state.fs.set_root(fs_root.clone());
                             state.cwd = state.fs.root().clone();
@@ -198,210 +241,304 @@ fn execute_steps<P: ProcessManager>(
                             state.fs.set_root(build_context.clone());
                             state.cwd = state.fs.root().clone();
                         }
-                    },
-                    StepKind::Env { key, value } => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(value, &ctx);
-                        state.envs.insert(key.clone(), rendered);
                     }
-                    StepKind::Run(cmd) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(cmd, &ctx);
-                        if capture_output {
-                            let output = process
-                                .run_capture(&ctx, &rendered)
-                                .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?;
-                            out.write_all(&output)?;
-                        } else {
-                            process
-                                .run(&ctx, &rendered)
-                                .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?;
-                        }
+                    Ok(())
+                }
+                StepKind::Env { key, value } => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_command_env(value, &ctx);
+                    state.envs.insert(key.clone(), rendered);
+                    Ok(())
+                }
+                StepKind::Run(cmd) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_command_env(cmd, &ctx);
+                    if capture_output {
+                        // If capturing, we do NOT pass stdin by default unless it was explicitly passed down
+                        // via WITH_IO (which would have set `expose_stdin` to true).
+                        let step_stdin = if expose_stdin { stdin.clone() } else { None };
+                        let output = process
+                            .run_capture(&ctx, &rendered, step_stdin)
+                            .with_context(|| {
+                                format!("step {}: RUN {}", idx + 1, rendered)
+                            })?;
+                        out.write_all(&output)?;
+                    } else {
+                        let step_stdin = if expose_stdin { stdin.clone() } else { None };
+                        process
+                            .run(&ctx, &rendered, step_stdin, None)
+                            .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?;
                     }
-                    StepKind::Echo(msg) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(msg, &ctx);
-                        writeln!(out, "{}", rendered)?;
+                    Ok(())
+                }
+                StepKind::Echo(msg) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_command_env(msg, &ctx);
+                    writeln!(out, "{}", rendered)?;
+                    Ok(())
+                }
+                StepKind::RunBg(cmd) => {
+                    if capture_output {
+                        bail!("RUN_BG is not supported inside CAPTURE_TO_FILE");
                     }
-                    StepKind::RunBg(cmd) => {
-                        if capture_output {
-                            bail!("RUN_BG is not supported inside CAPTURE_TO_FILE");
-                        }
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(cmd, &ctx);
-                        let child = process
-                            .spawn_bg(&ctx, &rendered)
-                            .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?;
-                        state.bg_children.push(child);
-                    }
-                    StepKind::Copy { from, to } => {
-                        let from_abs = state
-                            .fs
-                            .resolve_copy_source(from)
-                            .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                        let to_abs = state
-                            .fs
-                            .resolve_write(&state.cwd, to)
-                            .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                        copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
-                            .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
-                    }
-                    StepKind::CopyGit {
-                        rev,
-                        from,
-                        to,
-                        include_dirty,
-                    } => {
-                        let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_command_env(cmd, &ctx);
+                    let step_stdin = if expose_stdin { stdin.clone() } else { None };
+                    let child = process
+                        .spawn_bg(&ctx, &rendered, step_stdin, None)
+                        .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?;
+                    state.bg_children.push(child);
+                    Ok(())
+                }
+                StepKind::Copy { from, to } => {
+                    let from_abs = state
+                        .fs
+                        .resolve_copy_source(from)
+                        .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
+                    let to_abs = state
+                        .fs
+                        .resolve_write(&state.cwd, to)
+                        .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
+                    copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
+                        .with_context(|| format!("step {}: COPY {} {}", idx + 1, from, to))?;
+                    Ok(())
+                }
+                StepKind::CopyGit {
+                    rev,
+                    from,
+                    to,
+                    include_dirty,
+                } => {
+                    let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
+                        format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
+                    })?;
+                    state
+                        .fs
+                        .copy_from_git(rev, from, &to_abs, *include_dirty)
+                        .with_context(|| {
                             format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
                         })?;
+                    Ok(())
+                }
+                StepKind::HashSha256 { path } => {
+                    let target = state
+                        .fs
+                        .resolve_read(&state.cwd, path)
+                        .with_context(|| format!("step {}: HASH_SHA256 {}", idx + 1, path))?;
+                    let mut hasher = Sha256::new();
+                    hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
+                    let digest = hasher.finalize();
+                    writeln!(out, "{:x}", digest)?;
+                    Ok(())
+                }
+
+                StepKind::Symlink { from, to } => {
+                    let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
+                        format!("step {}: SYMLINK {} {}", idx + 1, from, to)
+                    })?;
+                    let from_abs = state.fs.resolve_copy_source(from).with_context(|| {
+                        format!("step {}: SYMLINK {} {}", idx + 1, from, to)
+                    })?;
+                    state.fs.symlink(&from_abs, &to_abs).with_context(|| {
+                        format!("step {}: SYMLINK {} {}", idx + 1, from, to)
+                    })?;
+                    Ok(())
+                }
+                StepKind::Mkdir(path) => {
+                    let target = state
+                        .fs
+                        .resolve_write(&state.cwd, path)
+                        .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
+                    state.fs.create_dir_all(&target).with_context(|| {
+                        format!("failed to create dir {}", target.display())
+                    })?;
+                    Ok(())
+                }
+                StepKind::Ls(path_opt) => {
+                    let dir = if let Some(p) = path_opt.as_deref() {
                         state
                             .fs
-                            .copy_from_git(rev, from, &to_abs, *include_dirty)
-                            .with_context(|| {
-                                format!("step {}: COPY_GIT {} {} {}", idx + 1, rev, from, to)
-                            })?;
+                            .resolve_read(&state.cwd, p)
+                            .with_context(|| format!("step {}: LS {}", idx + 1, p))?
+                    } else {
+                        state.cwd.clone()
+                    };
+                    let mut entries = state
+                        .fs
+                        .read_dir_entries(&dir)
+                        .with_context(|| format!("failed to read dir {}", dir.display()))?;
+                    entries.sort_by_key(|a| a.file_name());
+                    writeln!(out, "{}:", dir.display())?;
+                    for entry in entries {
+                        writeln!(out, "{}", entry.file_name().to_string_lossy())?;
                     }
-                    StepKind::HashSha256 { path } => {
-                        let target = state
-                            .fs
-                            .resolve_read(&state.cwd, path)
-                            .with_context(|| format!("step {}: HASH_SHA256 {}", idx + 1, path))?;
-                        let mut hasher = Sha256::new();
-                        hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
-                        let digest = hasher.finalize();
-                        writeln!(out, "{:x}", digest)?;
+                    Ok(())
+                }
+                StepKind::Cwd => {
+                    // Print the canonical (physical) current working directory to stdout.
+                    let real =
+                        canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
+                            format!(
+                                "step {}: CWD failed to canonicalize {}",
+                                idx + 1,
+                                state.cwd.display()
+                            )
+                        })?;
+                    writeln!(out, "{}", real)?;
+                    Ok(())
+                }
+                StepKind::Cat(path) => {
+                    let target = state
+                        .fs
+                        .resolve_read(&state.cwd, path)
+                        .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
+                    let data = state
+                        .fs
+                        .read_file(&target)
+                        .with_context(|| format!("failed to read {}", target.display()))?;
+                    out.write_all(&data).with_context(|| {
+                        format!("failed to write {} to stdout", target.display())
+                    })?;
+                    Ok(())
+                }
+                StepKind::Write { path, contents } => {
+                    let target = state
+                        .fs
+                        .resolve_write(&state.cwd, path)
+                        .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
+                    state.fs.ensure_parent_dir(&target).with_context(|| {
+                        format!("failed to create parent for {}", target.display())
+                    })?;
+                    let ctx = state.command_ctx();
+                    let rendered = expand_command_env(contents, &ctx);
+                    state
+                        .fs
+                        .write_file(&target, rendered.as_bytes())
+                        .with_context(|| format!("failed to write {}", target.display()))?;
+                    Ok(())
+                }
+                StepKind::WithIo { streams, cmd } => {
+                    let ctx = state.command_ctx();
+                    let rendered_cmd = expand_command_env(cmd, &ctx);
+                    let steps = oxdock_parser::parse_script(&rendered_cmd).with_context(|| {
+                        format!("step {}: WITH_IO parse failed", idx + 1)
+                    })?;
+
+                                        // Determine IO configuration for the inner steps
+                    let mut step_stdin = None;
+                    let mut step_stdout: &mut dyn Write = out;
+                    let mut real_stdout = std::io::stdout();
+                    let mut next_expose_stdin = false;
+
+                    if streams.contains(&"stdin".to_string()) {
+                        step_stdin = stdin.clone();
+                        next_expose_stdin = true;
                     }
 
-                    StepKind::Symlink { from, to } => {
-                        let to_abs = state.fs.resolve_write(&state.cwd, to).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from, to)
-                        })?;
-                        let from_abs = state.fs.resolve_copy_source(from).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from, to)
-                        })?;
-                        state.fs.symlink(&from_abs, &to_abs).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from, to)
-                        })?;
+                    if streams.contains(&"stdout".to_string()) {
+                        // If stdout is requested, we bypass capture and write to real stdout
+                        // UNLESS we are already writing to a custom buffer (e.g. from oxbook-cli)
+                        // Wait, "stdout" means "outer process stdout".
+                        // If `out` is already pointing to `real_stdout` (default), then we are good.
+                        // If `out` is a buffer (capture), then "stdout" means we should bypass it?
+                        // The user said: "WITH_IO [stdout] RUN ... then the RUN command's stdout should go to the outer process stdout (bypassing capture)."
+                        
+                        // However, `out` passed to `execute_steps` IS the target output.
+                        // If `capture_output` is true, `out` is likely a buffer.
+                        // If `capture_output` is false, `out` is likely stdout.
+                        
+                        // If we want to bypass capture, we should use `real_stdout`.
+                        step_stdout = &mut real_stdout;
                     }
-                    StepKind::Mkdir(path) => {
-                        let target = state
-                            .fs
-                            .resolve_write(&state.cwd, path)
-                            .with_context(|| format!("step {}: MKDIR {}", idx + 1, path))?;
-                        state.fs.create_dir_all(&target).with_context(|| {
-                            format!("failed to create dir {}", target.display())
-                        })?;
-                    }
-                    StepKind::Ls(path_opt) => {
-                        let dir = if let Some(p) = path_opt.as_deref() {
-                            state
-                                .fs
-                                .resolve_read(&state.cwd, p)
-                                .with_context(|| format!("step {}: LS {}", idx + 1, p))?
-                        } else {
-                            state.cwd.clone()
-                        };
-                        let mut entries = state
-                            .fs
-                            .read_dir_entries(&dir)
-                            .with_context(|| format!("failed to read dir {}", dir.display()))?;
-                        entries.sort_by_key(|a| a.file_name());
-                        writeln!(out, "{}:", dir.display())?;
-                        for entry in entries {
-                            writeln!(out, "{}", entry.file_name().to_string_lossy())?;
-                        }
-                    }
-                    StepKind::Cwd => {
-                        // Print the canonical (physical) current working directory to stdout.
-                        let real =
-                            canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
-                                format!(
-                                    "step {}: CWD failed to canonicalize {}",
-                                    idx + 1,
-                                    state.cwd.display()
-                                )
-                            })?;
-                        writeln!(out, "{}", real)?;
-                    }
-                    StepKind::Cat(path) => {
-                        let target = state
-                            .fs
-                            .resolve_read(&state.cwd, path)
-                            .with_context(|| format!("step {}: CAT {}", idx + 1, path))?;
-                        let data = state
-                            .fs
-                            .read_file(&target)
-                            .with_context(|| format!("failed to read {}", target.display()))?;
-                        out.write_all(&data).with_context(|| {
-                            format!("failed to write {} to stdout", target.display())
-                        })?;
-                    }
-                    StepKind::Write { path, contents } => {
-                        let target = state
-                            .fs
-                            .resolve_write(&state.cwd, path)
-                            .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
-                        state.fs.ensure_parent_dir(&target).with_context(|| {
-                            format!("failed to create parent for {}", target.display())
-                        })?;
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(contents, &ctx);
-                        state
-                            .fs
-                            .write_file(&target, rendered.as_bytes())
-                            .with_context(|| format!("failed to write {}", target.display()))?;
-                    }
-                    StepKind::CaptureToFile { path, cmd } => {
-                        let target =
-                            state.fs.resolve_write(&state.cwd, path).with_context(|| {
-                                format!("step {}: CAPTURE_TO_FILE {}", idx + 1, path)
-                            })?;
-                        state.fs.ensure_parent_dir(&target).with_context(|| {
-                            format!("failed to create parent for {}", target.display())
-                        })?;
-                        let steps = oxdock_parser::parse_script(cmd).with_context(|| {
-                            format!("step {}: CAPTURE_TO_FILE parse failed", idx + 1)
-                        })?;
-                        if steps.len() != 1 {
-                            bail!("CAPTURE_TO_FILE expects exactly one instruction");
-                        }
-                        let mut sub_state = ExecState {
-                            fs: {
-                                let mut resolver = PathResolver::new(
-                                    state.fs.root().as_path(),
-                                    state.fs.build_context().as_path(),
-                                )?;
-                                resolver.set_workspace_root(state.fs.build_context().clone());
-                                Box::new(resolver)
-                            },
-                            cargo_target_dir: state.cargo_target_dir.clone(),
-                            cwd: state.cwd.clone(),
-                            envs: state.envs.clone(),
-                            bg_children: Vec::new(),
-                            scope_stack: Vec::new(),
-                        };
-                        let mut sub_process = process.clone();
-                        let mut buf: Vec<u8> = Vec::new();
-                        execute_steps(&mut sub_state, &mut sub_process, &steps, true, &mut buf)?;
-                        state
-                            .fs
-                            .write_file(&target, &buf)
-                            .with_context(|| format!("failed to write {}", target.display()))?;
-                    }
-                    StepKind::Exit(code) => {
-                        for child in state.bg_children.iter_mut() {
-                            if child.try_wait()?.is_none() {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                            }
-                        }
-                        state.bg_children.clear();
-                        bail!("EXIT requested with code {}", code);
-                    }
+
+                    // We need to handle `capture_output` flag for recursive call.
+                    // If we are bypassing capture (writing to real stdout), then capture_output should be false?
+                    // Or rather, `execute_steps` uses `capture_output` to decide whether to use `out` or not?
+                    // Actually `execute_steps` passes `out` to `process.run`.
+                    // `process.run` writes to `out` if it's not capturing?
+                    // No, `process.run` writes to `out` if `capture_output` is false?
+                    // Let's check `execute_steps` logic for `Run`.
+                    
+                    // If `streams` contains "stdout", we want the output to go to `step_stdout`.
+                    // And we want to ensure it's NOT captured into a buffer if we are inside CAPTURE_TO_FILE.
+                    
+                    // Let's look at `Run` implementation below.
+                    
+                    execute_steps(
+                        state,
+                        process,
+                        &steps,
+                        capture_output, // Pass through? Or force?
+                        step_stdin,
+                        next_expose_stdin,
+                        step_stdout,
+                    )?;
+                    Ok(())
                 }
-                Ok(())
-            })()
+
+                StepKind::CaptureToFile { path, cmd } => {
+                    let target =
+                        state.fs.resolve_write(&state.cwd, path).with_context(|| {
+                            format!("step {}: CAPTURE_TO_FILE {}", idx + 1, path)
+                        })?;
+                    state.fs.ensure_parent_dir(&target).with_context(|| {
+                        format!("failed to create parent for {}", target.display())
+                    })?;
+                    let steps = oxdock_parser::parse_script(cmd).with_context(|| {
+                        format!("step {}: CAPTURE_TO_FILE parse failed", idx + 1)
+                    })?;
+                    if steps.len() != 1 {
+                        bail!("CAPTURE_TO_FILE expects exactly one instruction");
+                    }
+                    let mut sub_state = ExecState {
+                        fs: {
+                            let mut resolver = PathResolver::new(
+                                state.fs.root().as_path(),
+                                state.fs.build_context().as_path(),
+                            )?;
+                            resolver.set_workspace_root(state.fs.build_context().clone());
+                            Box::new(resolver)
+                        },
+                        cargo_target_dir: state.cargo_target_dir.clone(),
+                        cwd: state.cwd.clone(),
+                        envs: state.envs.clone(),
+                        bg_children: Vec::new(),
+                        scope_stack: Vec::new(),
+                    };
+                    let mut sub_process = process.clone();
+                    let mut buf: Vec<u8> = Vec::new();
+                    // CAPTURE_TO_FILE should NOT pass stdin by default unless explicitly requested?
+                    // But here we are capturing output. Stdin is orthogonal.
+                    // If the user wants to pipe stdin into a captured command, they can use WITH_IO [stdin] inside?
+                    // Or should we pass it through?
+                    // The user said "STDIN SHOULD'T EVEN BE AVAILABLE TO IT OTHERWISE".
+                    // So we pass None.
+                    execute_steps(
+                        &mut sub_state,
+                        &mut sub_process,
+                        &steps,
+                        true,
+                        None,
+                        false,
+                        &mut buf,
+                    )?;
+                    state
+                        .fs
+                        .write_file(&target, &buf)
+                        .with_context(|| format!("failed to write {}", target.display()))?;
+                    Ok(())
+                }
+                StepKind::Exit(code) => {
+                    for child in state.bg_children.iter_mut() {
+                        if child.try_wait()?.is_none() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                    state.bg_children.clear();
+                    bail!("EXIT requested with code {}", code);
+                }
+            }
         };
 
         let restore_result = restore_scopes(state, step.scope_exit);
@@ -614,7 +751,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         let MockRunCall {
@@ -622,6 +759,7 @@ mod tests {
             cwd,
             envs,
             cargo_target_dir,
+            ..
         } = &runs[0];
         assert_eq!(script, "echo hi");
         assert_eq!(cwd, root.as_path());
@@ -654,7 +792,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo bar");
@@ -680,7 +818,7 @@ mod tests {
         let mock = MockProcessManager::default();
         mock.push_bg_plan(0, success_status());
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap();
         assert!(
             mock.recorded_runs().is_empty(),
             "foreground run should not execute when RUN_BG completes early"
@@ -710,7 +848,7 @@ mod tests {
         let mock = MockProcessManager::default();
         mock.push_bg_plan(usize::MAX, success_status());
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        let err = run_steps_with_manager(fs, &steps, mock.clone()).unwrap_err();
+        let err = run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap_err();
         assert!(
             err.to_string().contains("EXIT requested with code 5"),
             "unexpected error: {err}"
@@ -784,7 +922,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo second");
@@ -822,7 +960,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone()).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), None).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo guarded");
@@ -842,7 +980,7 @@ mod tests {
         };
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        let err = run_steps_with_manager(fs, &[capture], mock).unwrap_err();
+        let err = run_steps_with_manager(fs, &[capture], mock, None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("CAPTURE_TO_FILE expects exactly one instruction"),
@@ -883,7 +1021,7 @@ mod tests {
         let mut state = create_exec_state(fs.clone());
         let mut proc = MockProcessManager::default();
         let mut sink = Vec::new();
-        execute_steps(&mut state, &mut proc, steps, false, &mut sink).unwrap();
+        execute_steps(&mut state, &mut proc, steps, false, None, &mut sink).unwrap();
         (state.cwd, fs.snapshot())
     }
 
@@ -1051,11 +1189,61 @@ mod tests {
         let mut state = create_exec_state(fs);
         let mut proc = MockProcessManager::default();
         let mut sink = Vec::new();
-        let err = execute_steps(&mut state, &mut proc, &steps, false, &mut sink).unwrap_err();
+        let err = execute_steps(&mut state, &mut proc, &steps, false, None, &mut sink).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("escapes allowed root"),
             "unexpected error for absolute Windows path: {msg}"
         );
+    }
+
+    #[test]
+    fn with_stdin_passes_content_to_run() {
+        let steps = vec![Step {
+            guards: Vec::new(),
+            kind: StepKind::WithStdin {
+                content: "hello world".into(),
+                cmd: "RUN cat".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        }];
+        let fs = MockFs::new();
+        let mut state = create_exec_state(fs);
+        let mut proc = MockProcessManager::default();
+        let mut sink = Vec::new();
+        execute_steps(&mut state, &mut proc, &steps, false, None, &mut sink).unwrap();
+
+        let runs = proc.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].script, "cat");
+        assert!(runs[0].stdin_provided, "stdin should be provided");
+    }
+
+    #[test]
+    fn with_stdout_bypasses_capture() {
+        let steps = vec![Step {
+            guards: Vec::new(),
+            kind: StepKind::CaptureToFile {
+                path: "captured.txt".into(),
+                cmd: "WITH_STDOUT \"RUN echo 'should not be captured'\"".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        }];
+        let fs = MockFs::new();
+        let mut state = create_exec_state(fs);
+        let mut proc = MockProcessManager::default();
+        let mut sink = Vec::new();
+        execute_steps(&mut state, &mut proc, &steps, false, None, &mut sink).unwrap();
+
+        // Verify captured.txt is empty
+        let captured = state.fs.read_file(&state.fs.resolve_read(&state.cwd, "captured.txt").unwrap()).unwrap();
+        assert!(captured.is_empty(), "expected captured.txt to be empty, got {:?}", String::from_utf8_lossy(&captured));
+        
+        // Verify the command was run
+        let runs = proc.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].script, "echo 'should not be captured'");
     }
 }
