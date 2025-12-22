@@ -15,6 +15,7 @@ oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
 sha2.workspace = true
+once_cell = "1"
 
 [lints]
 workspace = true

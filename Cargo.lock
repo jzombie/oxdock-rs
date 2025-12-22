@@ -455,6 +455,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "notify",
+ "once_cell",
  "oxdock-core",
  "oxdock-fs",
  "oxdock-parser",

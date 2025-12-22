@@ -7,6 +7,7 @@ use oxdock_process::{CommandBuilder, CommandOutput};
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use once_cell::sync::Lazy;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,6 +67,11 @@ fn main() -> Result<()> {
     let workspace_root = discover_workspace_root().context("resolve workspace root")?;
     let resolver = PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
         .context("create workspace path resolver")?;
+
+    // Auto-register interpreters discovered in the workspace (files named
+    // `temp.interpreter.<lang>.oxfile`). This allows users to add interpreter
+    // oxfiles to the repository without recompiling or env vars.
+    scan_and_register_interpreters(&workspace_root);
 
     // Prefer resolving the provided path relative to the process current working
     // directory (the terminal cwd) when that directory can be represented as a
@@ -465,12 +471,12 @@ fn render_shell_outputs(
             if !closed {
                 continue;
             }
+            let script = body_lines.join("\n");
+            let existing = parse_output_block(&lines, i);
             if let Some(spec) =
                 interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
             {
-                let script = body_lines.join("\n");
                 let code_hash = code_hash(&script, &spec);
-                let existing = parse_output_block(&lines, i);
                 let should_run = match &existing {
                     Some(block) => {
                         let matches_code = block.code_hash.as_deref() == Some(&code_hash);
@@ -506,6 +512,23 @@ fn render_shell_outputs(
                             .map(|line| (*line).to_string()),
                     );
                     i = block.end_index;
+                }
+            } else {
+                // No interpreter spec found. If the fence declared a language,
+                // write an informative output block so users see that the
+                // fence was not executed.
+                let parsed = parse_fence_info(&info);
+                if let Some(lang) = parsed.language {
+                    let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
+                    let output = format!(
+                        "error: no interpreter registered for language '{}'",
+                        lang
+                    );
+                    if let Some(block) = existing {
+                        i = block.end_index;
+                    }
+                    let output_block = format_output_block(&code_hash, &output);
+                    out_lines.extend(output_block);
                 }
             }
             continue;
@@ -667,13 +690,7 @@ fn interpreter_spec(
     };
     let command = match parsed.params.get("cmd") {
         Some(s) if !s.is_empty() => parse_command_parts(Some(s), &language),
-        _ => {
-            if oxfile.is_some() {
-                Vec::new()
-            } else {
-                vec![language.to_string()]
-            }
-        }
+        _ => Vec::new(),
     };
     if command.is_empty() && oxfile.is_none() {
         return Ok(None);
@@ -693,7 +710,7 @@ fn parse_command_parts(cmd: Option<&String>, language: &str) -> Vec<String> {
             .map(|part| part.trim().to_string())
             .filter(|part| !part.is_empty())
             .collect(),
-        None => vec![language.to_string()],
+        None => Vec::new(),
     }
 }
 
@@ -722,7 +739,71 @@ fn resolve_oxfile_path(
         return Ok(Some(workspace));
     }
 
+    // Check registry for a language-specific oxfile override.
+    if let Some(registered) = get_registered_oxfile(language) {
+        if let Ok(guarded) = resolver.resolve_read(workspace_root, &registered) {
+            return Ok(Some(guarded));
+        }
+        if let Ok(guarded) = resolver.resolve_read(source_dir, &registered) {
+            return Ok(Some(guarded));
+        }
+    }
+
     Ok(None)
+}
+
+// Simple global registry allowing external code to register a language -> oxfile
+// mapping. The registered path is resolved relative to the workspace or the
+// source directory when used.
+static LANGUAGE_OXFILE_REGISTRY: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn register_language_oxfile(language: &str, path: &str) {
+    let mut reg = LANGUAGE_OXFILE_REGISTRY.lock().unwrap();
+    reg.insert(language.to_string(), path.to_string());
+}
+
+fn get_registered_oxfile(language: &str) -> Option<String> {
+    let reg = LANGUAGE_OXFILE_REGISTRY.lock().unwrap();
+    reg.get(language).cloned()
+}
+
+fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
+    use std::path::Path;
+    let root = workspace_root.root();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            const PREFIX: &str = "temp.interpreter.";
+            const SUFFIX: &str = ".oxfile";
+            if name.starts_with(PREFIX) && name.ends_with(SUFFIX) {
+                let lang = &name[PREFIX.len()..name.len() - SUFFIX.len()];
+                if lang.is_empty() {
+                    continue;
+                }
+                if let Ok(rel) = path.strip_prefix(root) {
+                    if let Some(rel_str) = rel.to_str() {
+                        // Normalize to forward slashes for resolution.
+                        let rel_str = rel_str.replace('\\', "/");
+                        register_language_oxfile(lang, &rel_str);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn env_hash_for_oxfile(
@@ -854,76 +935,14 @@ fn run_in_env_with_resolver(
         return Ok(String::from_utf8_lossy(&data).to_string());
     }
 
-    let script_path = write_script_file(resolver, &env.cwd, &spec.language, script)?;
-    let mut cmd_parts = build_command_with_script(&spec.command, &script_path);
-    if cmd_parts.is_empty() {
-        return Ok(String::from("error: missing command"));
-    }
-    let program = cmd_parts.remove(0);
-    let mut cmd = CommandBuilder::new(program);
-    if !cmd_parts.is_empty() {
-        cmd.args(cmd_parts);
-    }
-    cmd.current_dir(command_path(&env.cwd));
-    let cargo_target_dir = env.root.join("target")?;
-    cmd.env(
-        "CARGO_TARGET_DIR",
-        command_path(&cargo_target_dir).into_owned(),
-    );
-    let output = cmd
-        .output()
-        .with_context(|| format!("run {}", spec.language))?;
-    Ok(command_output_to_string(&output))
+    // At this point we require an oxfile to drive execution. The old behavior
+    // that wrote a temporary script file and executed it directly has been
+    // removed — languages must provide an `oxfile` (either local, workspace
+    // level, or registered via `register_language_oxfile`).
+    anyhow::bail!("no oxfile configured for language {}", spec.language)
 }
 
-fn write_script_file(
-    resolver: &PathResolver,
-    cwd: &GuardedPath,
-    language: &str,
-    script: &str,
-) -> Result<GuardedPath> {
-    let hash = sha256_hex(script);
-    let ext = script_extension(language);
-    let filename = format!("oxbook-cache/{language}-{hash}.{ext}");
-    let target = resolver.resolve_write(cwd, &filename)?;
-    if let Some(parent) = target.parent() {
-        resolver.create_dir_all(&parent)?;
-    }
-    resolver.write_file(&target, script.as_bytes())?;
-    Ok(target)
-}
-
-fn script_extension(language: &str) -> &'static str {
-    match language {
-        "rust" => "rs",
-        "python" => "py",
-        "bash" | "sh" => "sh",
-        "node" | "js" | "javascript" => "js",
-        _ => "txt",
-    }
-}
-
-fn build_command_with_script(command: &[String], script_path: &GuardedPath) -> Vec<String> {
-    let file_str = command_path(script_path).display().to_string();
-    let mut parts = Vec::new();
-    let mut has_file = false;
-    let mut has_stdin = false;
-    for part in command {
-        if part.contains("{file}") {
-            has_file = true;
-            parts.push(part.replace("{file}", &file_str));
-        } else if part.contains("{stdin}") {
-            has_stdin = true;
-            parts.push(part.replace("{stdin}", &file_str));
-        } else {
-            parts.push(part.clone());
-        }
-    }
-    if !has_file && !has_stdin {
-        parts.push(file_str);
-    }
-    parts
-}
+// script file execution removed: languages must delegate to an oxfile.
 
 fn command_output_to_string(output: &CommandOutput) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
