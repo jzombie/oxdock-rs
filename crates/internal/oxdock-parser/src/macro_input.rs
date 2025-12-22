@@ -398,6 +398,31 @@ mod tests {
     }
 
     #[test]
+    fn braced_script_splits_semicolon_commands() {
+        let input: DslMacroInput = parse_str(
+            "name: foo, script: { RUN echo; LS; RUN echo && ls }, out_dir: \"out\"",
+        )
+        .expect("parse braced script");
+        let ScriptSource::Braced(ts) = input.script else {
+            panic!("expected braced script");
+        };
+        let script = script_from_braced_tokens(&ts).expect("render braced script");
+        assert_eq!(script, "RUN echo;\nLS;\nRUN echo && ls");
+    }
+
+    #[test]
+    fn braced_script_allows_run_bg_with_command_like_ident() {
+        let input: DslMacroInput =
+            parse_str("name: foo, script: { RUN_BG LS a }, out_dir: \"out\"")
+                .expect("parse braced script");
+        let ScriptSource::Braced(ts) = input.script else {
+            panic!("expected braced script");
+        };
+        let script = script_from_braced_tokens(&ts).expect("render braced script");
+        assert_eq!(script, "RUN_BG LS a");
+    }
+
+    #[test]
     fn parse_dsl_macro_input_rejects_unknown_label() {
         let err =
             parse_str::<DslMacroInput>("names: foo, script: \"RUN echo hi\", out_dir: \"out\"")
