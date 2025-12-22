@@ -1,2 +1,16 @@
+RUN mkdir -p ws
+COPY_GIT --include-dirty HEAD Cargo.toml ws/Cargo.toml
+COPY_GIT --include-dirty HEAD Cargo.lock ws/Cargo.lock
+COPY_GIT --include-dirty HEAD crates ws/crates
+COPY_GIT --include-dirty HEAD oxbook-cli ws/oxbook-cli
+COPY_GIT --include-dirty HEAD oxdock-cli ws/oxdock-cli
+COPY_GIT --include-dirty HEAD oxdock-buildtime-helpers ws/oxdock-buildtime-helpers
+COPY_GIT --include-dirty HEAD oxdock-buildtime-macros ws/oxdock-buildtime-macros
+
+RUN mkdir -p "ws/snippet/src"
+RUN CARGO_TARGET_DIR="ws/target" cargo run --quiet --bin oxbook_snippet_manifest --manifest-path "ws/oxbook-cli/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 [env:OXBOOK_SNIPPET_PATH]
-WITH_IO [stdin] RUN bash -lc 'set -euo pipefail; rustc "$OXBOOK_SNIPPET_PATH" -o oxbook-snippet-rust-bin; ./oxbook-snippet-rust-bin'
+RUN cp "$OXBOOK_SNIPPET_PATH" "ws/snippet/src/main.rs"
+
+[env:OXBOOK_SNIPPET_PATH]
+WITH_IO [stdin] RUN CARGO_TARGET_DIR="ws/target" cargo run --quiet --manifest-path "ws/snippet/Cargo.toml"

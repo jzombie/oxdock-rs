@@ -174,10 +174,10 @@ pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
         if name == "CARGO_TARGET_DIR" {
             return Some(ctx.cargo_target_dir().display().to_string());
         }
-        ctx.envs()
-            .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
+        if name == "OXBOOK_SNIPPET_PATH" || name == "OXBOOK_SNIPPET_DIR" {
+            return ctx.envs().get(name).cloned();
+        }
+        ctx.envs().get(name).cloned().or_else(|| std::env::var(name).ok())
     })
 }
 
@@ -264,6 +264,9 @@ impl ProcessManager for ShellProcessManager {
         script: &str,
         options: CommandOptions,
     ) -> Result<CommandResult<Self::Handle>> {
+        if std::env::var_os("OXBOOK_DEBUG").is_some() {
+            eprintln!("oxbook run_command: {script}");
+        }
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
         let CommandOptions {

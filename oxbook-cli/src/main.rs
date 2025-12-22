@@ -575,7 +575,15 @@ fn render_shell_outputs(
                             out_lines.extend(output_block);
                         }
                         Err(err) => {
-                            let err_msg = format!("error: {}", err);
+                            let mut chain = Vec::new();
+                            for (idx, cause) in err.chain().enumerate() {
+                                if idx == 0 {
+                                    chain.push(format!("error: {}", cause));
+                                } else {
+                                    chain.push(format!("caused by: {}", cause));
+                                }
+                            }
+                            let err_msg = chain.join("\n");
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
@@ -892,6 +900,18 @@ fn resolve_oxfile_path(
         return Ok(Some(workspace));
     }
 
+    // Fallback: also look for the temp interpreter naming convention to
+    // support in-repo interpreters without requiring the oxbook.<lang> alias.
+    let temp_name = format!("temp.interpreter.{language}.oxfile");
+    let temp_local = source_dir.join(&temp_name)?;
+    if resolver.entry_kind(&temp_local).is_ok() {
+        return Ok(Some(temp_local));
+    }
+    let temp_workspace = workspace_root.join(&temp_name)?;
+    if resolver.entry_kind(&temp_workspace).is_ok() {
+        return Ok(Some(temp_workspace));
+    }
+
     // Check registry for a language-specific oxfile override.
     if let Some(registered) = get_registered_oxfile(language) {
         if let Ok(guarded) = resolver.resolve_read(workspace_root, &registered) {
@@ -1100,6 +1120,8 @@ fn run_in_env_with_resolver(
             .write_file(&snippet_path, script.as_bytes())
             .with_context(|| format!("write {}", snippet_path.display()))?;
 
+        let snippet_dir = snippet_path.parent().unwrap_or_else(|| env.root.clone());
+
         let snippet_env = Step {
             guards: Vec::new(),
             kind: StepKind::Env {
@@ -1109,7 +1131,17 @@ fn run_in_env_with_resolver(
             scope_enter: 0,
             scope_exit: 0,
         };
+        let snippet_dir_env = Step {
+            guards: Vec::new(),
+            kind: StepKind::Env {
+                key: "OXBOOK_SNIPPET_DIR".to_string(),
+                value: snippet_dir.display(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        };
         steps.insert(0, snippet_env);
+        steps.insert(0, snippet_dir_env);
 
         // Use the previous fence's stdout (if any) as stdin; the snippet
         // itself is provided via OXBOOK_SNIPPET_PATH.

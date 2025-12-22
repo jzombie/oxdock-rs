@@ -1,9 +1,5 @@
 ```passthru
-uptime wow
-```
-
-```bash
-echo "hello"
+testing 1 2 3
 ```
 
 ```rust
@@ -14,15 +10,4 @@ fn main() {
 	io::stdin().read_to_string(&mut input).unwrap();
 	println!("rust saw: {}", input.trim());
 }
-```
-
-
-```bash
-cat
-```
-
-
-
-```no-lang
-hmm
 ```
