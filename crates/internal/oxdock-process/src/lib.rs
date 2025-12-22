@@ -197,29 +197,66 @@ use std::sync::{Arc, Mutex};
 pub type SharedInput = Arc<Mutex<dyn std::io::Read + Send>>;
 pub type SharedOutput = Arc<Mutex<dyn std::io::Write + Send>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandMode {
+    Foreground,
+    Background,
+}
+
+impl Default for CommandMode {
+    fn default() -> Self {
+        CommandMode::Foreground
+    }
+}
+
+#[derive(Clone)]
+pub enum CommandStdout {
+    Inherit,
+    Stream(SharedOutput),
+    Capture,
+}
+
+impl Default for CommandStdout {
+    fn default() -> Self {
+        CommandStdout::Inherit
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct CommandOptions {
+    pub mode: CommandMode,
+    pub stdin: Option<SharedInput>,
+    pub stdout: CommandStdout,
+}
+
+impl CommandOptions {
+    pub fn foreground() -> Self {
+        Self::default()
+    }
+
+    pub fn background() -> Self {
+        Self {
+            mode: CommandMode::Background,
+            ..Self::default()
+        }
+    }
+}
+
+pub enum CommandResult<H> {
+    Completed,
+    Captured(Vec<u8>),
+    Background(H),
+}
+
 pub trait ProcessManager: Clone {
     type Handle: BackgroundHandle;
 
-    fn run(
+    fn run_command(
         &mut self,
         ctx: &CommandContext,
         script: &str,
-        stdin: Option<SharedInput>,
-        stdout: Option<SharedOutput>,
-    ) -> Result<()>;
-    fn run_capture(
-        &mut self,
-        ctx: &CommandContext,
-        script: &str,
-        stdin: Option<SharedInput>,
-    ) -> Result<Vec<u8>>;
-    fn spawn_bg(
-        &mut self,
-        ctx: &CommandContext,
-        script: &str,
-        stdin: Option<SharedInput>,
-        stdout: Option<SharedOutput>,
-    ) -> Result<Self::Handle>;
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>>;
 }
 
 /// Default process manager that shells out using the system shell.
@@ -231,76 +268,60 @@ impl ProcessManager for ShellProcessManager {
     type Handle = ChildHandle;
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn run(
+    fn run_command(
         &mut self,
         ctx: &CommandContext,
         script: &str,
-        stdin: Option<SharedInput>,
-        stdout: Option<SharedOutput>,
-    ) -> Result<()> {
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
-        let mut stdin_stream = stdin;
-        if stdin_stream.is_none() {
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+        } = options;
+
+        let (stdout_stream, capture_buf) = match stdout {
+            CommandStdout::Inherit => (None, None),
+            CommandStdout::Stream(stream) => (Some(stream), None),
+            CommandStdout::Capture => {
+                if matches!(mode, CommandMode::Background) {
+                    bail!("cannot capture stdout for background command");
+                }
+                let buf = Arc::new(Mutex::new(Vec::new()));
+                let writer: SharedOutput = buf.clone();
+                (Some(writer), Some(buf))
+            }
+        };
+
+        let need_null_stdin = stdin.is_none();
+        if need_null_stdin {
             // Do not inherit stdin by default; ensure isolation unless WITH_STDIN is used.
             command.stdin(Stdio::null());
         }
         let desc = format!("{:?}", command);
-        let mut handle = spawn_child_with_streams(&mut command, stdin_stream, stdout)?;
-        let status = handle
-            .wait()
-            .with_context(|| format!("failed to run {desc}"))?;
-        if !status.success() {
-            bail!("command {desc} failed with status {}", status);
-        }
-        Ok(())
-    }
 
-    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn run_capture(
-        &mut self,
-        ctx: &CommandContext,
-        script: &str,
-        stdin: Option<SharedInput>,
-    ) -> Result<Vec<u8>> {
-        let mut command = shell_cmd(script);
-        apply_ctx(&mut command, ctx);
-        let mut stdin_stream = stdin;
-        if stdin_stream.is_none() {
-            command.stdin(Stdio::null());
+        match mode {
+            CommandMode::Foreground => {
+                let mut handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                let status = handle
+                    .wait()
+                    .with_context(|| format!("failed to run {desc}"))?;
+                if !status.success() {
+                    bail!("command {desc} failed with status {}", status);
+                }
+                if let Some(buf) = capture_buf {
+                    let mut guard = buf.lock().map_err(|_| anyhow!("capture stdout poisoned"))?;
+                    return Ok(CommandResult::Captured(mem::take(&mut *guard)));
+                }
+                Ok(CommandResult::Completed)
+            }
+            CommandMode::Background => {
+                let handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                Ok(CommandResult::Background(handle))
+            }
         }
-        let capture_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let stdout: SharedOutput = capture_buf.clone();
-        let desc = format!("{:?}", command);
-        let mut handle = spawn_child_with_streams(&mut command, stdin_stream, Some(stdout))?;
-        let status = handle
-            .wait()
-            .with_context(|| format!("failed to run {desc}"))?;
-        if !status.success() {
-            bail!("command {desc} failed with status {}", status);
-        }
-        let mut guard = capture_buf
-            .lock()
-            .map_err(|_| anyhow!("capture stdout poisoned"))?;
-        Ok(mem::take(&mut *guard))
-    }
-
-    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn spawn_bg(
-        &mut self,
-        ctx: &CommandContext,
-        script: &str,
-        stdin: Option<SharedInput>,
-        stdout: Option<SharedOutput>,
-    ) -> Result<Self::Handle> {
-        let mut command = shell_cmd(script);
-        apply_ctx(&mut command, ctx);
-        let mut stdin_stream = stdin;
-        if stdin_stream.is_none() {
-            // Do not inherit stdin by default.
-            command.stdin(Stdio::null());
-        }
-        spawn_child_with_streams(&mut command, stdin_stream, stdout)
     }
 }
 
@@ -429,47 +450,60 @@ impl BackgroundHandle for SyntheticBgHandle {
 impl ProcessManager for SyntheticProcessManager {
     type Handle = SyntheticBgHandle;
 
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
-        let (_out, status) = execute_sync(ctx, script, false)?;
-        if !status.success() {
-            bail!("command {:?} failed with status {}", script, status);
-        }
-        Ok(())
-    }
-
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
-        let (out, status) = execute_sync(ctx, script, true)?;
-        if !status.success() {
-            bail!("command {:?} failed with status {}", script, status);
-        }
-        Ok(out)
-    }
-
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
-        let plan = plan_background(ctx, script)?;
-        Ok(plan)
-    }
-
-    fn run_with_stdin(&mut self, ctx: &CommandContext, script: &str, _stdin: &[u8]) -> Result<()> {
-        self.run(ctx, script)
-    }
-
-    fn run_capture_with_stdin(
+    fn run_command(
         &mut self,
         ctx: &CommandContext,
         script: &str,
-        _stdin: &[u8],
-    ) -> Result<Vec<u8>> {
-        self.run_capture(ctx, script)
-    }
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+        } = options;
 
-    fn spawn_bg_with_stdin(
-        &mut self,
-        ctx: &CommandContext,
-        script: &str,
-        _stdin: &[u8],
-    ) -> Result<Self::Handle> {
-        self.spawn_bg(ctx, script)
+        if let Some(reader) = stdin {
+            if let Ok(mut guard) = reader.lock() {
+                let mut sink = std::io::sink();
+                let _ = std::io::copy(&mut *guard, &mut sink);
+            }
+        }
+
+        match mode {
+            CommandMode::Foreground => {
+                let needs_bytes = matches!(stdout, CommandStdout::Capture)
+                    || matches!(stdout, CommandStdout::Stream(_));
+                let (mut out, status) = execute_sync(ctx, script, needs_bytes)?;
+                if !status.success() {
+                    bail!("command {:?} failed with status {}", script, status);
+                }
+                match stdout {
+                    CommandStdout::Inherit => Ok(CommandResult::Completed),
+                    CommandStdout::Stream(writer) => {
+                        if needs_bytes {
+                            if let Ok(mut guard) = writer.lock() {
+                                let _ = std::io::Write::write_all(&mut *guard, &out);
+                                let _ = std::io::Write::flush(&mut *guard);
+                            }
+                        }
+                        Ok(CommandResult::Completed)
+                    }
+                    CommandStdout::Capture => Ok(CommandResult::Captured(out)),
+                }
+            }
+            CommandMode::Background => match stdout {
+                CommandStdout::Capture => {
+                    bail!("cannot capture stdout for background command under miri")
+                }
+                CommandStdout::Stream(_) => {
+                    bail!("stdout streaming not supported for background command under miri")
+                }
+                CommandStdout::Inherit => {
+                    let plan = plan_background(ctx, script)?;
+                    Ok(CommandResult::Background(plan))
+                }
+            },
+        }
     }
 }
 
