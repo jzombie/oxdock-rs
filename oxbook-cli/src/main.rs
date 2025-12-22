@@ -2,8 +2,9 @@ use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use oxdock_core::run_steps_with_context_result;
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, command_path, discover_workspace_root};
-use oxdock_parser::parse_script;
-use oxdock_process::{CommandBuilder, CommandOutput};
+use oxdock_parser::{parse_script, Step, StepKind};
+use oxdock_process::{CommandBuilder, CommandOutput, SharedInput, SharedOutput};
+use os_pipe::pipe;
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -445,6 +446,7 @@ fn render_shell_outputs(
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     let mut out_lines: Vec<String> = Vec::new();
+    let mut prev_reader: Option<SharedInput> = None;
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -475,6 +477,8 @@ fn render_shell_outputs(
                 continue;
             }
             let script = body_lines.join("\n");
+            // Parse fence info params (currently used for language/oxfile/cmd only).
+            let fence_info = parse_fence_info(&info);
             let existing = parse_output_block(&lines, i);
             if let Some(spec) =
                 interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
@@ -497,6 +501,56 @@ fn render_shell_outputs(
                     None => true,
                 };
                 if should_run {
+                    // Always stream the previous fence's stdout into this fence's stdin.
+                    let stdin_stream = prev_reader.take();
+
+                    // Create a cross-platform anonymous pipe (reader, writer)
+                    // to stream this fence's stdout to the next fence while
+                    // also capturing it for embedding.
+                    let (reader, writer) = pipe().with_context(|| "create pipe for piping stdout to next fence")?;
+                    let reader_shared: SharedInput = Arc::new(Mutex::new(reader));
+                    let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> = Arc::new(Mutex::new(writer));
+
+                    // Capture buffer to embed output in the markdown.
+                    let capture_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+                    // Tee writer writes to both the capture buffer and the
+                    // pipe writer so we both embed and stream the output.
+                    struct TeeWriter {
+                        cap: Arc<Mutex<Vec<u8>>>,
+                        pipe: Arc<Mutex<dyn std::io::Write + Send>>,
+                    }
+                    impl std::io::Write for TeeWriter {
+                        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::write_all(&mut *g, buf);
+                            }
+                            if let Ok(mut p) = self.pipe.lock() {
+                                let _ = std::io::Write::write_all(&mut *p, buf);
+                            }
+                            Ok(buf.len())
+                        }
+
+                        fn flush(&mut self) -> std::io::Result<()> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::flush(&mut *g);
+                            }
+                            if let Ok(mut p) = self.pipe.lock() {
+                                let _ = std::io::Write::flush(&mut *p);
+                            }
+                            Ok(())
+                        }
+                    }
+
+                    let tee = TeeWriter {
+                        cap: capture_buf.clone(),
+                        pipe: writer_shared.clone(),
+                    };
+                    let shared_out: SharedOutput = Arc::new(Mutex::new(tee));
+
+                    // Run interpreter with stdin_stream and the tee writer
+                    // as stdout. Provide the capture buffer so the caller
+                    // can inspect the captured bytes after execution.
                     let run_res = run_interpreter(
                         resolver,
                         workspace_root,
@@ -504,22 +558,28 @@ fn render_shell_outputs(
                         cache,
                         &spec,
                         &script,
+                        stdin_stream,
+                        Some(shared_out.clone()),
+                        Some(capture_buf.clone()),
                     );
                     match run_res {
-                        Ok(output) => {
-                                let output_block = format_output_block(&code_hash, &output, "");
+                        Ok(_) => {
+                            let data = capture_buf.lock().unwrap();
+                            let output = String::from_utf8_lossy(&data).to_string();
+                            // Make the reader available to the next fence.
+                            prev_reader = Some(reader_shared);
+                            let output_block = format_output_block(&code_hash, &output, "");
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
                             out_lines.extend(output_block);
                         }
                         Err(err) => {
-                            // Don't crash — write the error into the output block (stderr).
                             let err_msg = format!("error: {}", err);
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
-                                let output_block = format_output_block(&code_hash, "", &err_msg);
+                            let output_block = format_output_block(&code_hash, "", &err_msg);
                             out_lines.extend(output_block);
                         }
                     }
@@ -529,6 +589,11 @@ fn render_shell_outputs(
                             .iter()
                             .map(|line| (*line).to_string()),
                     );
+                    // When reusing an existing block, restore prev_reader from
+                    // the saved stdout so subsequent fences can consume it.
+                    let prev_buf = block.stdout.clone();
+                    let cursor = Cursor::new(prev_buf.into_bytes());
+                    prev_reader = Some(Arc::new(Mutex::new(cursor)));
                     i = block.end_index;
                 }
             } else {
@@ -951,6 +1016,9 @@ fn run_interpreter(
     cache: &mut InterpreterCache,
     spec: &InterpreterSpec,
     script: &str,
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
     let env = match &spec.oxfile {
         Some(path) => {
@@ -961,10 +1029,10 @@ fn run_interpreter(
                 .with_context(|| format!("missing env for {}", path.display()))?
         }
         None => {
-            return run_in_default_env(resolver, workspace_root, source_dir, spec, script);
+            return run_in_default_env(resolver, workspace_root, source_dir, spec, script, stdin, stdout, capture_buf);
         }
     };
-    run_in_env(resolver, env, spec, script)
+    run_in_env(resolver, env, spec, script, stdin, stdout, capture_buf)
 }
 
 fn run_in_default_env(
@@ -973,6 +1041,9 @@ fn run_in_default_env(
     source_dir: &GuardedPath,
     spec: &InterpreterSpec,
     script: &str,
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
     let env = InterpreterEnv {
         root: workspace_root.clone(),
@@ -980,7 +1051,7 @@ fn run_in_default_env(
         env_hash: None,
         _tempdir: None,
     };
-    run_in_env_with_resolver(resolver, resolver, &env, spec, script)
+    run_in_env_with_resolver(resolver, resolver, &env, spec, script, stdin, stdout, capture_buf)
 }
 
 fn run_in_env(
@@ -988,9 +1059,12 @@ fn run_in_env(
     env: &InterpreterEnv,
     spec: &InterpreterSpec,
     script: &str,
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
     let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
-    run_in_env_with_resolver(workspace_resolver, &resolver, env, spec, script)
+    run_in_env_with_resolver(workspace_resolver, &resolver, env, spec, script, stdin, stdout, capture_buf)
 }
 
 fn run_in_env_with_resolver(
@@ -999,28 +1073,82 @@ fn run_in_env_with_resolver(
     env: &InterpreterEnv,
     spec: &InterpreterSpec,
     script: &str,
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
     if let Some(oxfile_path) = &spec.oxfile {
         let oxfile_content = workspace_resolver
             .read_to_string(oxfile_path)
             .with_context(|| format!("read {}", oxfile_path.display()))?;
-        let steps = parse_script(&oxfile_content)
+        let mut steps = parse_script(&oxfile_content)
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
 
-        let input = Arc::new(Mutex::new(Cursor::new(script.to_string())));
-        let output_buf = Arc::new(Mutex::new(Vec::new()));
+        // Persist the snippet so interpreters can execute the file while
+        // receiving the previous fence's stdout via stdin.
+        let lang_safe: String = spec
+            .language
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let snippet_name = format!("oxbook-snippet.{lang_safe}");
+        let snippet_path = env
+            .root
+            .join(&snippet_name)
+            .with_context(|| format!("snippet path for {}", spec.language))?;
+        resolver
+            .write_file(&snippet_path, script.as_bytes())
+            .with_context(|| format!("write {}", snippet_path.display()))?;
+
+        let snippet_env = Step {
+            guards: Vec::new(),
+            kind: StepKind::Env {
+                key: "OXBOOK_SNIPPET_PATH".to_string(),
+                value: snippet_path.display(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        };
+        steps.insert(0, snippet_env);
+
+        // Use the previous fence's stdout (if any) as stdin; the snippet
+        // itself is provided via OXBOOK_SNIPPET_PATH.
+        let input_stream = stdin;
+
+        // Prepare stdout: if provided, use it; otherwise create a capture
+        // buffer and use that for stdout so we can return captured output.
+        let (use_stdout, internal_capture): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) = match stdout {
+            Some(s) => (s, None),
+            None => {
+                let buf = Arc::new(Mutex::new(Vec::new()));
+                let out: SharedOutput = buf.clone();
+                (out, Some(buf))
+            }
+        };
 
         run_steps_with_context_result(
             &env.root,
             workspace_resolver.root(),
             &steps,
-            Some(input),
-            Some(output_buf.clone()),
+            input_stream,
+            Some(use_stdout),
         )
         .with_context(|| format!("run {}", oxfile_path.display()))?;
 
-        let data = output_buf.lock().unwrap();
-        return Ok(String::from_utf8_lossy(&data).to_string());
+        // Determine which capture buffer to read from: prefer explicit
+        // capture_buf passed by caller, otherwise use internal_capture.
+        if let Some(cb) = capture_buf {
+            let data = cb.lock().unwrap();
+            return Ok(String::from_utf8_lossy(&data).to_string());
+        }
+        if let Some(cb) = internal_capture {
+            let data = cb.lock().unwrap();
+            return Ok(String::from_utf8_lossy(&data).to_string());
+        }
+
+        // If stdout was provided and no capture buffer passed, we cannot
+        // reliably return the captured text here — return empty string.
+        return Ok(String::new());
     }
 
     // At this point we require an oxfile to drive execution. The old behavior

@@ -1,1 +1,1 @@
-WITH_IO [stdin] RUN bash -s
+WITH_IO [stdin] RUN bash "$OXBOOK_SNIPPET_PATH"
