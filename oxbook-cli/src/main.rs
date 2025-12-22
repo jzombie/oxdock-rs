@@ -66,8 +66,18 @@ fn main() -> Result<()> {
     let workspace_root = discover_workspace_root().context("resolve workspace root")?;
     let resolver = PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
         .context("create workspace path resolver")?;
+
+    // Prefer resolving the provided path relative to the process current working
+    // directory (the terminal cwd) when that directory can be represented as a
+    // `GuardedPath` under the workspace root. Fall back to resolving relative
+    // to the workspace root if the current directory lies outside the root.
+    let process_cwd = std::env::current_dir().context("determine current directory")?;
+    let cwd_base = match GuardedPath::new(workspace_root.root(), &process_cwd) {
+        Ok(g) => g,
+        Err(_) => workspace_root.clone(),
+    };
     let watched = resolver
-        .resolve_read(&workspace_root, &target)
+        .resolve_read(&cwd_base, &target)
         .with_context(|| format!("resolve markdown path {}", target))?;
 
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
