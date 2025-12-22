@@ -1,7 +1,7 @@
 name = "with_io_bg"
 stdin = "hello background"
 
-[expect]
+[expect.platform.unix]
 stdout = "foreground\nhello background"
 
 [expect.platform.windows]

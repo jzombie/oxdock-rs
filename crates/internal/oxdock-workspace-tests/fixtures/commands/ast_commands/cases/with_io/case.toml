@@ -8,4 +8,4 @@ files = { "empty.txt" = "" }
 files = { "out.txt" = "hello from stdin" }
 
 [expect.platform.windows]
-files = { "out.txt" = "hello from stdin\r\n" }
+files = { "out.txt" = "hello from stdin" }

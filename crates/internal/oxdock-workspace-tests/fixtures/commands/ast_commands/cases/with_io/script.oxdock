@@ -1,4 +1,4 @@
-[unix] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN "cat"
-[windows] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN "sort"
+[unix] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN cat
+[windows] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN sort
 [unix] RUN "cat > empty.txt"
 [windows] RUN "sort > empty.txt"
