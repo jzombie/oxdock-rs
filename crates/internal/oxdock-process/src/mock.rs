@@ -4,9 +4,12 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 
-use crate::{BackgroundHandle, CommandContext, ProcessManager};
+use crate::{
+    BackgroundHandle, CommandContext, CommandMode, CommandOptions, CommandResult, CommandStdout,
+    ProcessManager, SharedInput,
+};
 
 /// Captured invocation for a foreground run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +19,8 @@ pub struct MockRunCall {
     pub cwd: PathBuf,
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
+    pub stdin_provided: bool,
+    pub stdin: Option<Vec<u8>>,
 }
 
 /// Captured invocation for a background spawn.
@@ -26,6 +31,8 @@ pub struct MockSpawnCall {
     pub cwd: PathBuf,
     pub envs: HashMap<String, String>,
     pub cargo_target_dir: PathBuf,
+    pub stdin_provided: bool,
+    pub stdin: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Default)]
@@ -60,39 +67,62 @@ impl MockProcessManager {
 impl ProcessManager for MockProcessManager {
     type Handle = MockHandle;
 
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
-        self.runs.borrow_mut().push(MockRunCall {
-            script: script.to_string(),
-            cwd: ctx.cwd().to_path_buf(),
-            envs: ctx.envs().clone(),
-            cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
-        });
-        Ok(())
-    }
+    fn run_command(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+        } = options;
+        let stdin_provided = stdin.is_some();
+        let captured_stdin = capture_stdin(stdin)?;
 
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
-        self.run(ctx, script)?;
-        Ok(Vec::new())
-    }
-
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
-        self.spawns.borrow_mut().push(MockSpawnCall {
-            script: script.to_string(),
-            cwd: ctx.cwd().to_path_buf(),
-            envs: ctx.envs().clone(),
-            cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
-        });
-        let plan = self
-            .plans
-            .borrow_mut()
-            .pop_front()
-            .unwrap_or(BgPlan::success());
-        Ok(MockHandle {
-            script: script.to_string(),
-            remaining: plan.ready_after,
-            status: plan.status,
-            killed: self.killed.clone(),
-        })
+        match mode {
+            CommandMode::Foreground => {
+                self.runs.borrow_mut().push(MockRunCall {
+                    script: script.to_string(),
+                    cwd: ctx.cwd().to_path_buf(),
+                    envs: ctx.envs().clone(),
+                    cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+                    stdin_provided,
+                    stdin: captured_stdin.clone(),
+                });
+                match stdout {
+                    CommandStdout::Capture => Ok(CommandResult::Captured(Vec::new())),
+                    CommandStdout::Stream(_) | CommandStdout::Inherit => {
+                        Ok(CommandResult::Completed)
+                    }
+                }
+            }
+            CommandMode::Background => {
+                if matches!(stdout, CommandStdout::Capture) {
+                    bail!("cannot capture stdout for background command");
+                }
+                self.spawns.borrow_mut().push(MockSpawnCall {
+                    script: script.to_string(),
+                    cwd: ctx.cwd().to_path_buf(),
+                    envs: ctx.envs().clone(),
+                    cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+                    stdin_provided,
+                    stdin: captured_stdin.clone(),
+                });
+                let plan = self
+                    .plans
+                    .borrow_mut()
+                    .pop_front()
+                    .unwrap_or(BgPlan::success());
+                Ok(CommandResult::Background(MockHandle {
+                    script: script.to_string(),
+                    remaining: plan.ready_after,
+                    status: plan.status,
+                    killed: self.killed.clone(),
+                }))
+            }
+        }
     }
 }
 
@@ -135,6 +165,17 @@ impl BackgroundHandle for MockHandle {
 
     fn wait(&mut self) -> Result<std::process::ExitStatus> {
         Ok(self.status)
+    }
+}
+
+fn capture_stdin(stdin: Option<SharedInput>) -> Result<Option<Vec<u8>>> {
+    if let Some(reader) = stdin {
+        let mut guard = reader.lock().map_err(|_| anyhow!("failed to lock stdin"))?;
+        let mut buf = Vec::new();
+        std::io::copy(&mut *guard, &mut buf)?;
+        Ok(Some(buf))
+    } else {
+        Ok(None)
     }
 }
 

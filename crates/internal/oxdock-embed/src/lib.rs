@@ -139,7 +139,7 @@ fn collect_assets_recursive(
             )
         })?;
         let rel_forward = oxdock_fs::to_forward_slashes(rel_str);
-        let include_path = oxdock_fs::embed_path(&entry_guard);
+        let include_path = oxdock_fs::normalized_path(&entry_guard);
 
         let bytes = resolver
             .read_file(&entry_guard)

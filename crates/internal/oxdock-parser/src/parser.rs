@@ -259,9 +259,40 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             }
         }
         Rule::capture_to_file_command => {
-            let path = parse_single_arg_from_pair(pair.clone())?;
-            let cmd = parse_run_args_from_pair(pair)?;
-            StepKind::CaptureToFile { path, cmd }
+            let mut path = None;
+            let mut cmd = None;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::argument => path = Some(parse_argument(inner)?),
+                    _ => cmd = Some(Box::new(parse_command(inner)?)),
+                }
+            }
+            StepKind::CaptureToFile {
+                path: path.ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?,
+                cmd: cmd.ok_or_else(|| anyhow!("missing command in CAPTURE_TO_FILE"))?,
+            }
+        }
+        Rule::with_io_command => {
+            let mut streams = Vec::new();
+            let mut cmd = None;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::io_flags => {
+                        for flag in inner.into_inner() {
+                            if flag.as_rule() == Rule::io_flag {
+                                streams.push(flag.as_str().to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        cmd = Some(Box::new(parse_command(inner)?));
+                    }
+                }
+            }
+            StepKind::WithIo {
+                streams,
+                cmd: cmd.ok_or_else(|| anyhow!("missing command in WITH_IO"))?,
+            }
         }
         Rule::copy_git_command => {
             let mut args = Vec::new();
@@ -429,55 +460,22 @@ fn parse_message(pair: Pair<Rule>) -> Result<String> {
 fn parse_run_args(pair: Pair<Rule>) -> Result<String> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::run_args {
-            return parse_raw_concatenated_string(inner);
+            return parse_smart_concatenated_string(inner);
         }
     }
     bail!("missing run args")
 }
 
-fn parse_run_args_from_pair(pair: Pair<Rule>) -> Result<String> {
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::run_args {
-            return parse_raw_concatenated_string(inner);
-        }
-    }
-    bail!("missing run args")
-}
-
-fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
-    let mut body = String::new();
-    let mut last_end = None;
-    for part in pair.into_inner() {
-        let span = part.as_span();
-        if let Some(end) = last_end
-            && span.start() > end
-        {
-            body.push(' ');
-        }
-        match part.as_rule() {
-            Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
-            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
-            _ => {}
-        }
-        last_end = Some(span.end());
-    }
-    Ok(body)
-}
-
-fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+fn parse_smart_concatenated_string(pair: Pair<Rule>) -> Result<String> {
     let parts: Vec<_> = pair.into_inner().collect();
+
+    // Special case: If there is only one token and it is quoted, we assume the user
+    // quoted it to satisfy the DSL (e.g. to include semicolons) but intends for the
+    // content to be the raw command string. We unquote it unconditionally.
     if parts.len() == 1 && parts[0].as_rule() == Rule::quoted_string {
-        let raw = parts[0].as_str();
-        let unquoted = parse_quoted_string(parts[0].clone())?;
-        let needs_quotes = unquoted.is_empty()
-            || unquoted.chars().any(|c| c == ';' || c == '\n' || c == '\r')
-            || unquoted.contains("//")
-            || unquoted.contains("/*");
-        if needs_quotes {
-            return Ok(raw.to_string());
-        }
-        return Ok(unquoted);
+        return parse_quoted_string(parts[0].clone());
     }
+
     let mut body = String::new();
     let mut last_end = None;
     for part in parts {
@@ -492,7 +490,7 @@ fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
                 let raw = part.as_str();
                 let unquoted = parse_quoted_string(part.clone())?;
                 // Preserve quotes if the content needs them to be parsed correctly
-                // or to preserve argument grouping (spaces).
+                // by the shell (e.g. contains spaces, semicolons, etc).
                 let needs_quotes = unquoted.is_empty()
                     || unquoted
                         .chars()
@@ -506,6 +504,26 @@ fn parse_raw_concatenated_string(pair: Pair<Rule>) -> Result<String> {
                     body.push_str(&unquoted);
                 }
             }
+            Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
+            _ => {}
+        }
+        last_end = Some(span.end());
+    }
+    Ok(body)
+}
+
+fn parse_concatenated_string(pair: Pair<Rule>) -> Result<String> {
+    let mut body = String::new();
+    let mut last_end = None;
+    for part in pair.into_inner() {
+        let span = part.as_span();
+        if let Some(end) = last_end
+            && span.start() > end
+        {
+            body.push(' ');
+        }
+        match part.as_rule() {
+            Rule::quoted_string => body.push_str(&parse_quoted_string(part)?),
             Rule::unquoted_msg_content | Rule::unquoted_run_content => body.push_str(part.as_str()),
             _ => {}
         }

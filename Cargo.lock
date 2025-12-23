@@ -396,8 +396,10 @@ name = "oxdock-fs"
 version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
+ "libc",
  "tempfile",
  "tracing",
+ "windows-sys",
 ]
 
 [[package]]

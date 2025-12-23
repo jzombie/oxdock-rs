@@ -4,7 +4,7 @@ mod mock;
 pub mod serial_cargo_env;
 mod shell;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 pub use builtin_env::BuiltinEnv;
 use oxdock_fs::{GuardedPath, PolicyPath};
 use shell::shell_cmd;
@@ -19,6 +19,7 @@ use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOu
 use std::{
     ffi::{OsStr, OsString},
     iter::IntoIterator,
+    mem,
 };
 
 #[cfg(miri)]
@@ -173,6 +174,9 @@ pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
         if name == "CARGO_TARGET_DIR" {
             return Some(ctx.cargo_target_dir().display().to_string());
         }
+        if name == "OXBOOK_SNIPPET_PATH" || name == "OXBOOK_SNIPPET_DIR" {
+            return ctx.envs().get(name).cloned();
+        }
         ctx.envs()
             .get(name)
             .cloned()
@@ -191,12 +195,61 @@ pub trait BackgroundHandle {
 /// background. `oxdock-core` relies on this trait to decouple the executor
 /// from `std::process::Command`, which in turn enables Miri-friendly test
 /// doubles.
+use std::sync::{Arc, Mutex};
+
+pub type SharedInput = Arc<Mutex<dyn std::io::Read + Send>>;
+pub type SharedOutput = Arc<Mutex<dyn std::io::Write + Send>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CommandMode {
+    #[default]
+    Foreground,
+    Background,
+}
+
+#[derive(Clone, Default)]
+pub enum CommandStdout {
+    #[default]
+    Inherit,
+    Stream(SharedOutput),
+    Capture,
+}
+
+#[derive(Clone, Default)]
+pub struct CommandOptions {
+    pub mode: CommandMode,
+    pub stdin: Option<SharedInput>,
+    pub stdout: CommandStdout,
+}
+
+impl CommandOptions {
+    pub fn foreground() -> Self {
+        Self::default()
+    }
+
+    pub fn background() -> Self {
+        Self {
+            mode: CommandMode::Background,
+            ..Self::default()
+        }
+    }
+}
+
+pub enum CommandResult<H> {
+    Completed,
+    Captured(Vec<u8>),
+    Background(H),
+}
+
 pub trait ProcessManager: Clone {
     type Handle: BackgroundHandle;
 
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()>;
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>>;
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle>;
+    fn run_command(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>>;
 }
 
 /// Default process manager that shells out using the system shell.
@@ -208,34 +261,63 @@ impl ProcessManager for ShellProcessManager {
     type Handle = ChildHandle;
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
-        let mut command = shell_cmd(script);
-        apply_ctx(&mut command, ctx);
-        run_cmd(&mut command)
-    }
-
-    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
-        let mut command = shell_cmd(script);
-        apply_ctx(&mut command, ctx);
-        command.stdout(Stdio::piped());
-        let output = command
-            .output()
-            .with_context(|| format!("failed to run {:?}", command))?;
-        if !output.status.success() {
-            bail!("command {:?} failed with status {}", command, output.status);
+    fn run_command(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
+        if std::env::var_os("OXBOOK_DEBUG").is_some() {
+            eprintln!("oxbook run_command: {script}");
         }
-        Ok(output.stdout)
-    }
-
-    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
-        let child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn {:?}", command))?;
-        Ok(ChildHandle { child })
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+        } = options;
+
+        let (stdout_stream, capture_buf) = match stdout {
+            CommandStdout::Inherit => (None, None),
+            CommandStdout::Stream(stream) => (Some(stream), None),
+            CommandStdout::Capture => {
+                if matches!(mode, CommandMode::Background) {
+                    bail!("cannot capture stdout for background command");
+                }
+                let buf = Arc::new(Mutex::new(Vec::new()));
+                let writer: SharedOutput = buf.clone();
+                (Some(writer), Some(buf))
+            }
+        };
+
+        let need_null_stdin = stdin.is_none();
+        if need_null_stdin {
+            // Do not inherit stdin by default; ensure isolation unless WITH_STDIN is used.
+            command.stdin(Stdio::null());
+        }
+        let desc = format!("{:?}", command);
+
+        match mode {
+            CommandMode::Foreground => {
+                let mut handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                let status = handle
+                    .wait()
+                    .with_context(|| format!("failed to run {desc}"))?;
+                if !status.success() {
+                    bail!("command {desc} failed with status {}", status);
+                }
+                if let Some(buf) = capture_buf {
+                    let mut guard = buf.lock().map_err(|_| anyhow!("capture stdout poisoned"))?;
+                    return Ok(CommandResult::Captured(mem::take(&mut *guard)));
+                }
+                Ok(CommandResult::Completed)
+            }
+            CommandMode::Background => {
+                let handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                Ok(CommandResult::Background(handle))
+            }
+        }
     }
 }
 
@@ -262,6 +344,7 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub struct ChildHandle {
     child: Child,
+    io_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl BackgroundHandle for ChildHandle {
@@ -269,15 +352,20 @@ impl BackgroundHandle for ChildHandle {
         Ok(self.child.try_wait()?)
     }
 
+    fn wait(&mut self) -> Result<ExitStatus> {
+        let status = self.child.wait()?;
+        // Wait for IO threads to finish to ensure all output is captured
+        for thread in self.io_threads.drain(..) {
+            let _ = thread.join();
+        }
+        Ok(status)
+    }
+
     fn kill(&mut self) -> Result<()> {
         if self.child.try_wait()?.is_none() {
             let _ = self.child.kill();
         }
         Ok(())
-    }
-
-    fn wait(&mut self) -> Result<ExitStatus> {
-        Ok(self.child.wait()?)
     }
 }
 
@@ -358,25 +446,58 @@ impl BackgroundHandle for SyntheticBgHandle {
 impl ProcessManager for SyntheticProcessManager {
     type Handle = SyntheticBgHandle;
 
-    fn run(&mut self, ctx: &CommandContext, script: &str) -> Result<()> {
-        let (_out, status) = execute_sync(ctx, script, false)?;
-        if !status.success() {
-            bail!("command {:?} failed with status {}", script, status);
-        }
-        Ok(())
-    }
+    fn run_command(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+        } = options;
 
-    fn run_capture(&mut self, ctx: &CommandContext, script: &str) -> Result<Vec<u8>> {
-        let (out, status) = execute_sync(ctx, script, true)?;
-        if !status.success() {
-            bail!("command {:?} failed with status {}", script, status);
+        if let Some(reader) = stdin
+            && let Ok(mut guard) = reader.lock()
+        {
+            let mut sink = std::io::sink();
+            let _ = std::io::copy(&mut *guard, &mut sink);
         }
-        Ok(out)
-    }
 
-    fn spawn_bg(&mut self, ctx: &CommandContext, script: &str) -> Result<Self::Handle> {
-        let plan = plan_background(ctx, script)?;
-        Ok(plan)
+        match mode {
+            CommandMode::Foreground => {
+                let needs_bytes = matches!(stdout, CommandStdout::Capture)
+                    || matches!(stdout, CommandStdout::Stream(_));
+                let (out, status) = execute_sync(ctx, script, needs_bytes)?;
+                if !status.success() {
+                    bail!("command {:?} failed with status {}", script, status);
+                }
+                match stdout {
+                    CommandStdout::Inherit => Ok(CommandResult::Completed),
+                    CommandStdout::Stream(writer) => {
+                        if needs_bytes && let Ok(mut guard) = writer.lock() {
+                            let _ = std::io::Write::write_all(&mut *guard, &out);
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                        Ok(CommandResult::Completed)
+                    }
+                    CommandStdout::Capture => Ok(CommandResult::Captured(out)),
+                }
+            }
+            CommandMode::Background => match stdout {
+                CommandStdout::Capture => {
+                    bail!("cannot capture stdout for background command under miri")
+                }
+                CommandStdout::Stream(_) => {
+                    bail!("stdout streaming not supported for background command under miri")
+                }
+                CommandStdout::Inherit => {
+                    let plan = plan_background(ctx, script)?;
+                    Ok(CommandResult::Background(plan))
+                }
+            },
+        }
     }
 }
 
@@ -655,14 +776,58 @@ pub fn default_process_manager() -> DefaultProcessManager {
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run {:?}", cmd))?;
-    if !status.success() {
-        bail!("command {:?} failed with status {}", cmd, status);
+fn spawn_child_with_streams(
+    cmd: &mut ProcessCommand,
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+) -> Result<ChildHandle> {
+    if stdin.is_some() {
+        cmd.stdin(Stdio::piped());
     }
-    Ok(())
+    if stdout.is_some() {
+        cmd.stdout(Stdio::piped());
+    }
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {:?}", cmd))?;
+    let mut io_threads = Vec::new();
+
+    if let Some(stdin_stream) = stdin
+        && let Some(mut child_stdin) = child.stdin.take()
+    {
+        let thread = std::thread::spawn(move || {
+            if let Ok(mut guard) = stdin_stream.lock() {
+                let _ = std::io::copy(&mut *guard, &mut child_stdin);
+            }
+        });
+        io_threads.push(thread);
+    }
+
+    if let Some(stdout_stream) = stdout
+        && let Some(mut child_stdout) = child.stdout.take()
+    {
+        let thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut child_stdout, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stdout_stream.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = std::io::Write::flush(&mut *guard);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        io_threads.push(thread);
+    }
+
+    Ok(ChildHandle { child, io_threads })
 }
 
 /// Builder wrapper that centralizes direct usages of `std::process::Command`.
@@ -775,7 +940,10 @@ impl CommandBuilder {
                 .inner
                 .spawn()
                 .with_context(|| format!("failed to spawn {desc}"))?;
-            Ok(ChildHandle { child })
+            Ok(ChildHandle {
+                child,
+                io_threads: Vec::new(),
+            })
         }
     }
 
@@ -884,4 +1052,52 @@ fn simulate_cargo(args: &[String]) -> Result<CommandOutput> {
         stdout: Vec::new(),
         stderr: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn expand_script_env_prefers_script_values() {
+        let mut script_envs = HashMap::new();
+        script_envs.insert("FOO".into(), "from-script".into());
+        script_envs.insert("ONLY".into(), "only".into());
+        // SAFETY: environment mutation is treated as unsafe in this workspace; tests serialize
+        // their own changes.
+        unsafe {
+            std::env::set_var("FOO", "from-env");
+        }
+        let rendered = expand_script_env("${FOO}:{ONLY}:${MISSING}", &script_envs);
+        assert_eq!(rendered, "from-script:only:");
+        unsafe {
+            std::env::remove_var("FOO");
+        }
+    }
+
+    #[test]
+    fn expand_command_env_handles_var_forms() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let cwd: PolicyPath = guard.clone().into();
+        let mut envs = HashMap::new();
+        envs.insert("FOO".into(), "bar".into());
+        envs.insert("PCT".into(), "percent".into());
+        unsafe {
+            std::env::set_var("HOST_ONLY", "host");
+        }
+
+        let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
+        let rendered =
+            expand_command_env("${FOO}-{PCT}-{HOST_ONLY}-%FOO%-{CARGO_TARGET_DIR}-$$", &ctx);
+
+        let target_dir = guard.display();
+        let expected = format!("bar-percent-host-bar-{target_dir}-$$");
+        assert_eq!(rendered, expected);
+
+        unsafe {
+            std::env::remove_var("HOST_ONLY");
+        }
+    }
 }

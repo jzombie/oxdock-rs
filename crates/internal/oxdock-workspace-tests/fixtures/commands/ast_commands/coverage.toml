@@ -18,6 +18,7 @@ Ls = ["ls"]
 Cwd = ["cwd"]
 Cat = ["cat"]
 Write = ["write"]
+WithIo = ["with_io"]
 CaptureToFile = ["capture_to_file"]
 CopyGit = ["copy_git"]
 HashSha256 = ["hash_sha256"]
@@ -36,4 +37,5 @@ cases = [
   "semicolon",
   "cat_stdout",
   "cwd_stdout",
+  "with_io_bg",
 ]
