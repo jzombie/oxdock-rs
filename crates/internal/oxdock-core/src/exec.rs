@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
@@ -220,189 +220,177 @@ fn execute_steps<P: ProcessManager>(
         }
 
         let should_run = oxdock_parser::guards_allow_any(&step.guards, &state.envs);
-        let step_result: Result<()> =
-            if !should_run {
-                Ok(())
-            } else {
-                match &step.kind {
-                    StepKind::Workdir(path) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(path, &ctx);
-                        state.cwd = state
-                            .fs
-                            .resolve_workdir(&state.cwd, &rendered)
-                            .with_context(|| {
-                                format!("step {}: WORKDIR {}", idx + 1, rendered)
-                            })?;
-                        Ok(())
-                    }
-                    StepKind::Workspace(target) => {
-                        match target {
-                            WorkspaceTarget::Snapshot => {
-                                state.fs.set_root(fs_root.clone());
-                                state.cwd = state.fs.root().clone();
-                            }
-                            WorkspaceTarget::Local => {
-                                state.fs.set_root(build_context.clone());
-                                state.cwd = state.fs.root().clone();
-                            }
+        let step_result: Result<()> = if !should_run {
+            Ok(())
+        } else {
+            match &step.kind {
+                StepKind::Workdir(path) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(path, &ctx);
+                    state.cwd = state
+                        .fs
+                        .resolve_workdir(&state.cwd, &rendered)
+                        .with_context(|| format!("step {}: WORKDIR {}", idx + 1, rendered))?;
+                    Ok(())
+                }
+                StepKind::Workspace(target) => {
+                    match target {
+                        WorkspaceTarget::Snapshot => {
+                            state.fs.set_root(fs_root.clone());
+                            state.cwd = state.fs.root().clone();
                         }
-                        Ok(())
-                    }
-                    StepKind::Env { key, value } => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(value, &ctx);
-                        state.envs.insert(key.clone(), rendered);
-                        Ok(())
-                    }
-                    StepKind::Run(cmd) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(cmd, &ctx);
-                        let step_stdin = if expose_stdin { stdin.clone() } else { None };
-
-                        // Check for an environment variable that forces stdout inheritance.
-                        // This is useful when we want to bypass output capturing (e.g. for build steps)
-                        // and stream directly to the terminal, even if a capture stream was provided.
-                        let inherit_override = state
-                            .envs
-                            .get("OXDOCK_INHERIT_STDOUT")
-                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                            .unwrap_or(false);
-
-                        if std::env::var("OXBOOK_DEBUG").is_ok() {
-                            eprintln!("DEBUG: step RUN {} inherit_override={}", rendered, inherit_override);
-                        }
-
-                        let stdout_mode = if inherit_override {
-                            CommandStdout::Inherit
-                        } else {
-                            out.clone()
-                                .map(CommandStdout::Stream)
-                                .unwrap_or(CommandStdout::Inherit)
-                        };
-
-                        let mut options = CommandOptions::foreground();
-                        options.stdin = step_stdin;
-                        options.stdout = stdout_mode;
-                        match process
-                            .run_command(&ctx, &rendered, options)
-                            .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?
-                        {
-                            CommandResult::Completed => Ok(()),
-                            CommandResult::Captured(_) => {
-                                bail!(
-                                    "step {}: RUN {} unexpectedly captured output",
-                                    idx + 1,
-                                    rendered
-                                )
-                            }
-                            CommandResult::Background(_) => {
-                                bail!(
-                                    "step {}: RUN {} returned background handle",
-                                    idx + 1,
-                                    rendered
-                                )
-                            }
+                        WorkspaceTarget::Local => {
+                            state.fs.set_root(build_context.clone());
+                            state.cwd = state.fs.root().clone();
                         }
                     }
-                    StepKind::Echo(msg) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(msg, &ctx);
-                        if let Some(output_stream) = out.clone() {
-                            if let Ok(mut guard) = output_stream.lock() {
-                                writeln!(guard, "{}", rendered)?;
-                            }
-                        } else {
-                            // Fallback to stdout if no output stream provided?
-                            // Or just ignore?
-                            // Echo usually goes to stdout.
-                            println!("{}", rendered);
-                        }
-                        Ok(())
+                    Ok(())
+                }
+                StepKind::Env { key, value } => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(value, &ctx);
+                    state.envs.insert(key.clone(), rendered);
+                    Ok(())
+                }
+                StepKind::Run(cmd) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(cmd, &ctx);
+                    let step_stdin = if expose_stdin { stdin.clone() } else { None };
+
+                    // Check for an environment variable that forces stdout inheritance.
+                    // This is useful when we want to bypass output capturing (e.g. for build steps)
+                    // and stream directly to the terminal, even if a capture stream was provided.
+                    let inherit_override = state
+                        .envs
+                        .get("OXDOCK_INHERIT_STDOUT")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+
+                    if std::env::var("OXBOOK_DEBUG").is_ok() {
+                        eprintln!(
+                            "DEBUG: step RUN {} inherit_override={}",
+                            rendered, inherit_override
+                        );
                     }
-                    StepKind::RunBg(cmd) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(cmd, &ctx);
-                        let step_stdin = if expose_stdin { stdin.clone() } else { None };
-                        let stdout_mode = out
-                            .clone()
+
+                    let stdout_mode = if inherit_override {
+                        CommandStdout::Inherit
+                    } else {
+                        out.clone()
                             .map(CommandStdout::Stream)
-                            .unwrap_or(CommandStdout::Inherit);
-                        let mut options = CommandOptions::background();
-                        options.stdin = step_stdin;
-                        options.stdout = stdout_mode;
-                        match process
-                            .run_command(&ctx, &rendered, options)
-                            .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?
-                        {
-                            CommandResult::Background(handle) => {
-                                state.bg_children.push(handle);
-                                Ok(())
-                            }
-                            CommandResult::Completed => {
-                                bail!(
-                                    "step {}: RUN_BG {} finished synchronously",
-                                    idx + 1,
-                                    rendered
-                                )
-                            }
-                            CommandResult::Captured(_) => {
-                                bail!(
-                                    "step {}: RUN_BG {} attempted to capture output",
-                                    idx + 1,
-                                    rendered
-                                )
-                            }
+                            .unwrap_or(CommandStdout::Inherit)
+                    };
+
+                    let mut options = CommandOptions::foreground();
+                    options.stdin = step_stdin;
+                    options.stdout = stdout_mode;
+                    match process
+                        .run_command(&ctx, &rendered, options)
+                        .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?
+                    {
+                        CommandResult::Completed => Ok(()),
+                        CommandResult::Captured(_) => {
+                            bail!(
+                                "step {}: RUN {} unexpectedly captured output",
+                                idx + 1,
+                                rendered
+                            )
+                        }
+                        CommandResult::Background(_) => {
+                            bail!(
+                                "step {}: RUN {} returned background handle",
+                                idx + 1,
+                                rendered
+                            )
                         }
                     }
-                    StepKind::Copy { from, to } => {
-                        let ctx = state.command_ctx();
-                        let from_rendered = expand_template(from, &ctx);
-                        let to_rendered = expand_template(to, &ctx);
-                        let from_abs = state
+                }
+                StepKind::Echo(msg) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(msg, &ctx);
+                    if let Some(output_stream) = out.clone() {
+                        if let Ok(mut guard) = output_stream.lock() {
+                            writeln!(guard, "{}", rendered)?;
+                        }
+                    } else {
+                        // Fallback to stdout if no output stream provided?
+                        // Or just ignore?
+                        // Echo usually goes to stdout.
+                        println!("{}", rendered);
+                    }
+                    Ok(())
+                }
+                StepKind::RunBg(cmd) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(cmd, &ctx);
+                    let step_stdin = if expose_stdin { stdin.clone() } else { None };
+                    let stdout_mode = out
+                        .clone()
+                        .map(CommandStdout::Stream)
+                        .unwrap_or(CommandStdout::Inherit);
+                    let mut options = CommandOptions::background();
+                    options.stdin = step_stdin;
+                    options.stdout = stdout_mode;
+                    match process
+                        .run_command(&ctx, &rendered, options)
+                        .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?
+                    {
+                        CommandResult::Background(handle) => {
+                            state.bg_children.push(handle);
+                            Ok(())
+                        }
+                        CommandResult::Completed => {
+                            bail!(
+                                "step {}: RUN_BG {} finished synchronously",
+                                idx + 1,
+                                rendered
+                            )
+                        }
+                        CommandResult::Captured(_) => {
+                            bail!(
+                                "step {}: RUN_BG {} attempted to capture output",
+                                idx + 1,
+                                rendered
+                            )
+                        }
+                    }
+                }
+                StepKind::Copy { from, to } => {
+                    let ctx = state.command_ctx();
+                    let from_rendered = expand_template(from, &ctx);
+                    let to_rendered = expand_template(to, &ctx);
+                    let from_abs =
+                        state
                             .fs
                             .resolve_copy_source(&from_rendered)
                             .with_context(|| {
-                                format!(
-                                    "step {}: COPY {} {}",
-                                    idx + 1,
-                                    from_rendered,
-                                    to_rendered
-                                )
+                                format!("step {}: COPY {} {}", idx + 1, from_rendered, to_rendered)
                             })?;
-                        let to_abs = state
-                            .fs
-                            .resolve_write(&state.cwd, &to_rendered)
-                            .with_context(|| {
-                                format!(
-                                    "step {}: COPY {} {}",
-                                    idx + 1,
-                                    from_rendered,
-                                    to_rendered
-                                )
-                            })?;
-                        copy_entry(state.fs.as_ref(), &from_abs, &to_abs)
-                            .with_context(|| {
-                                format!(
-                                    "step {}: COPY {} {}",
-                                    idx + 1,
-                                    from_rendered,
-                                    to_rendered
-                                )
-                            })?;
-                        Ok(())
-                    }
-                    StepKind::CopyGit {
-                        rev,
-                        from,
-                        to,
-                        include_dirty,
-                    } => {
-                        let ctx = state.command_ctx();
-                        let rev_rendered = expand_template(rev, &ctx);
-                        let from_rendered = expand_template(from, &ctx);
-                        let to_rendered = expand_template(to, &ctx);
-                        let to_abs = state.fs.resolve_write(&state.cwd, &to_rendered).with_context(|| {
+                    let to_abs = state
+                        .fs
+                        .resolve_write(&state.cwd, &to_rendered)
+                        .with_context(|| {
+                            format!("step {}: COPY {} {}", idx + 1, from_rendered, to_rendered)
+                        })?;
+                    copy_entry(state.fs.as_ref(), &from_abs, &to_abs).with_context(|| {
+                        format!("step {}: COPY {} {}", idx + 1, from_rendered, to_rendered)
+                    })?;
+                    Ok(())
+                }
+                StepKind::CopyGit {
+                    rev,
+                    from,
+                    to,
+                    include_dirty,
+                } => {
+                    let ctx = state.command_ctx();
+                    let rev_rendered = expand_template(rev, &ctx);
+                    let from_rendered = expand_template(from, &ctx);
+                    let to_rendered = expand_template(to, &ctx);
+                    let to_abs = state
+                        .fs
+                        .resolve_write(&state.cwd, &to_rendered)
+                        .with_context(|| {
                             format!(
                                 "step {}: COPY_GIT {} {} {}",
                                 idx + 1,
@@ -411,292 +399,310 @@ fn execute_steps<P: ProcessManager>(
                                 to_rendered
                             )
                         })?;
+                    state
+                        .fs
+                        .copy_from_git(&rev_rendered, &from_rendered, &to_abs, *include_dirty)
+                        .with_context(|| {
+                            format!(
+                                "step {}: COPY_GIT {} {} {}",
+                                idx + 1,
+                                rev_rendered,
+                                from_rendered,
+                                to_rendered
+                            )
+                        })?;
+                    Ok(())
+                }
+                StepKind::HashSha256 { path } => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(path, &ctx);
+                    let target = state
+                        .fs
+                        .resolve_read(&state.cwd, &rendered)
+                        .with_context(|| format!("step {}: HASH_SHA256 {}", idx + 1, rendered))?;
+                    let mut hasher = Sha256::new();
+                    hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
+                    let digest = hasher.finalize();
+                    if let Some(output_stream) = out.clone() {
+                        if let Ok(mut guard) = output_stream.lock() {
+                            writeln!(guard, "{:x}", digest)?;
+                        }
+                    } else {
+                        println!("{:x}", digest);
+                    }
+                    Ok(())
+                }
+
+                StepKind::Symlink { from, to } => {
+                    let ctx = state.command_ctx();
+                    let from_rendered = expand_template(from, &ctx);
+                    let to_rendered = expand_template(to, &ctx);
+                    let to_abs = state
+                        .fs
+                        .resolve_write(&state.cwd, &to_rendered)
+                        .with_context(|| {
+                            format!(
+                                "step {}: SYMLINK {} {}",
+                                idx + 1,
+                                from_rendered,
+                                to_rendered
+                            )
+                        })?;
+                    let from_abs =
                         state
                             .fs
-                            .copy_from_git(&rev_rendered, &from_rendered, &to_abs, *include_dirty)
+                            .resolve_copy_source(&from_rendered)
                             .with_context(|| {
                                 format!(
-                                    "step {}: COPY_GIT {} {} {}",
+                                    "step {}: SYMLINK {} {}",
                                     idx + 1,
-                                    rev_rendered,
                                     from_rendered,
                                     to_rendered
                                 )
                             })?;
-                        Ok(())
+                    state.fs.symlink(&from_abs, &to_abs).with_context(|| {
+                        format!(
+                            "step {}: SYMLINK {} {}",
+                            idx + 1,
+                            from_rendered,
+                            to_rendered
+                        )
+                    })?;
+                    Ok(())
+                }
+                StepKind::Mkdir(path) => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(path, &ctx);
+                    let target = state
+                        .fs
+                        .resolve_write(&state.cwd, &rendered)
+                        .with_context(|| format!("step {}: MKDIR {}", idx + 1, rendered))?;
+                    state
+                        .fs
+                        .create_dir_all(&target)
+                        .with_context(|| format!("failed to create dir {}", target.display()))?;
+                    Ok(())
+                }
+                StepKind::Ls(arg) => {
+                    let ctx = state.command_ctx();
+                    let target_dir = if let Some(p) = arg {
+                        let rendered = expand_template(p, &ctx);
+                        state
+                            .fs
+                            .resolve_read(&state.cwd, &rendered)
+                            .with_context(|| format!("step {}: LS {}", idx + 1, rendered))?
+                    } else {
+                        state.cwd.clone()
+                    };
+                    let mut entries =
+                        state.fs.read_dir_entries(&target_dir).with_context(|| {
+                            format!("step {}: LS {}", idx + 1, target_dir.display())
+                        })?;
+                    entries.sort_by_key(|e| e.file_name());
+                    if let Some(output_stream) = out.clone() {
+                        if let Ok(mut guard) = output_stream.lock() {
+                            writeln!(guard, "{}:", target_dir.display())?;
+                            for entry in entries {
+                                writeln!(guard, "{}", entry.file_name().to_string_lossy())?;
+                            }
+                        }
+                    } else {
+                        println!("{}:", target_dir.display());
+                        for entry in entries {
+                            println!("{}", entry.file_name().to_string_lossy());
+                        }
                     }
-                    StepKind::HashSha256 { path } => {
+                    Ok(())
+                }
+                StepKind::Cwd => {
+                    // Print the canonical (physical) current working directory to stdout.
+                    let real = canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
+                        format!(
+                            "step {}: CWD failed to canonicalize {}",
+                            idx + 1,
+                            state.cwd.display()
+                        )
+                    })?;
+                    if let Some(output_stream) = out.clone() {
+                        if let Ok(mut guard) = output_stream.lock() {
+                            writeln!(guard, "{}", real)?;
+                        }
+                    } else {
+                        println!("{}", real);
+                    }
+                    Ok(())
+                }
+                StepKind::Cat(path_opt) => {
+                    let data = if let Some(path) = path_opt {
                         let ctx = state.command_ctx();
                         let rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
                             .resolve_read(&state.cwd, &rendered)
-                            .with_context(|| {
-                                format!("step {}: HASH_SHA256 {}", idx + 1, rendered)
-                            })?;
-                        let mut hasher = Sha256::new();
-                        hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
-                        let digest = hasher.finalize();
-                        if let Some(output_stream) = out.clone() {
-                            if let Ok(mut guard) = output_stream.lock() {
-                                writeln!(guard, "{:x}", digest)?;
-                            }
-                        } else {
-                            println!("{:x}", digest);
+                            .with_context(|| format!("step {}: CAT {}", idx + 1, rendered))?;
+                        state
+                            .fs
+                            .read_file(&target)
+                            .with_context(|| format!("failed to read {}", target.display()))?
+                    } else {
+                        let mut buf = Vec::new();
+                        if let Some(input_stream) = stdin.clone()
+                            && let Ok(mut guard) = input_stream.lock()
+                        {
+                            guard
+                                .read_to_end(&mut buf)
+                                .context("failed to read from stdin")?;
                         }
-                        Ok(())
+
+                        buf
+                    };
+                    if let Some(output_stream) = out.clone() {
+                        if let Ok(mut guard) = output_stream.lock() {
+                            guard
+                                .write_all(&data)
+                                .context("failed to write to output")?;
+                        }
+                    } else {
+                        io::stdout()
+                            .write_all(&data)
+                            .context("failed to write to stdout")?;
+                    }
+                    Ok(())
+                }
+                StepKind::Write { path, contents } => {
+                    let ctx = state.command_ctx();
+                    let path_rendered = expand_template(path, &ctx);
+                    let target = state
+                        .fs
+                        .resolve_write(&state.cwd, &path_rendered)
+                        .with_context(|| format!("step {}: WRITE {}", idx + 1, path_rendered))?;
+                    state.fs.ensure_parent_dir(&target).with_context(|| {
+                        format!("failed to create parent for {}", target.display())
+                    })?;
+                    let rendered = expand_template(contents, &ctx);
+                    state
+                        .fs
+                        .write_file(&target, rendered.as_bytes())
+                        .with_context(|| format!("failed to write {}", target.display()))?;
+                    Ok(())
+                }
+                StepKind::WithIo { streams, cmd } => {
+                    let inner_step = Step {
+                        guards: Vec::new(),
+                        kind: *cmd.clone(),
+                        scope_enter: 0,
+                        scope_exit: 0,
+                    };
+                    let steps = vec![inner_step];
+
+                    // Determine IO configuration for the inner steps
+                    let mut step_stdin = None;
+                    let step_stdout = out.clone();
+                    let mut next_expose_stdin = false;
+
+                    if streams.contains(&"stdin".to_string()) {
+                        step_stdin = stdin.clone();
+                        next_expose_stdin = true;
                     }
 
-                    StepKind::Symlink { from, to } => {
-                        let ctx = state.command_ctx();
-                        let from_rendered = expand_template(from, &ctx);
-                        let to_rendered = expand_template(to, &ctx);
-                        let to_abs = state.fs.resolve_write(&state.cwd, &to_rendered).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from_rendered, to_rendered)
-                        })?;
-                        let from_abs = state.fs.resolve_copy_source(&from_rendered).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from_rendered, to_rendered)
-                        })?;
-                        state.fs.symlink(&from_abs, &to_abs).with_context(|| {
-                            format!("step {}: SYMLINK {} {}", idx + 1, from_rendered, to_rendered)
-                        })?;
-                        Ok(())
+                    if streams.contains(&"stdout".to_string()) {
+                        // If stdout is requested, we ensure it's passed down.
+                        // If out is None (no capture), we might want to default to stdout?
+                        // But out is Option<SharedOutput>.
+                        // If out is None, Run/RunBg will use stdout/inherit.
+                        // So we just pass out through.
                     }
-                    StepKind::Mkdir(path) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(path, &ctx);
-                        let target = state
+
+                    execute_steps(
+                        state,
+                        process,
+                        &steps,
+                        step_stdin,
+                        next_expose_stdin,
+                        step_stdout,
+                        false,
+                    )?;
+                    Ok(())
+                }
+
+                StepKind::CaptureToFile { path, cmd } => {
+                    let ctx = state.command_ctx();
+                    let rendered = expand_template(path, &ctx);
+                    let target =
+                        state
                             .fs
                             .resolve_write(&state.cwd, &rendered)
                             .with_context(|| {
-                                format!("step {}: MKDIR {}", idx + 1, rendered)
+                                format!("step {}: CAPTURE_TO_FILE {}", idx + 1, rendered)
                             })?;
-                        state.fs.create_dir_all(&target).with_context(|| {
-                            format!("failed to create dir {}", target.display())
-                        })?;
-                        Ok(())
-                    }
-                    StepKind::Ls(arg) => {
-                        let ctx = state.command_ctx();
-                        let target_dir = if let Some(p) = arg {
-                            let rendered = expand_template(p, &ctx);
-                            state
-                                .fs
-                                .resolve_read(&state.cwd, &rendered)
-                                .with_context(|| {
-                                    format!("step {}: LS {}", idx + 1, rendered)
-                                })?
-                        } else {
-                            state.cwd.clone()
-                        };
-                        let mut entries =
-                            state.fs.read_dir_entries(&target_dir).with_context(|| {
-                                format!("step {}: LS {}", idx + 1, target_dir.display())
-                            })?;
-                        entries.sort_by_key(|e| e.file_name());
-                        if let Some(output_stream) = out.clone() {
-                            if let Ok(mut guard) = output_stream.lock() {
-                                writeln!(guard, "{}:", target_dir.display())?;
-                                for entry in entries {
-                                    writeln!(guard, "{}", entry.file_name().to_string_lossy())?;
-                                }
-                            }
-                        } else {
-                            println!("{}:", target_dir.display());
-                            for entry in entries {
-                                println!("{}", entry.file_name().to_string_lossy());
-                            }
-                        }
-                        Ok(())
-                    }
-                    StepKind::Cwd => {
-                        // Print the canonical (physical) current working directory to stdout.
-                        let real =
-                            canonical_cwd(state.fs.as_ref(), &state.cwd).with_context(|| {
-                                format!(
-                                    "step {}: CWD failed to canonicalize {}",
-                                    idx + 1,
-                                    state.cwd.display()
-                                )
-                            })?;
-                        if let Some(output_stream) = out.clone() {
-                            if let Ok(mut guard) = output_stream.lock() {
-                                writeln!(guard, "{}", real)?;
-                            }
-                        } else {
-                            println!("{}", real);
-                        }
-                        Ok(())
-                    }
-                    StepKind::Cat(path_opt) => {
-                        let data = if let Some(path) = path_opt {
-                            let ctx = state.command_ctx();
-                            let rendered = expand_template(path, &ctx);
-                            let target = state
-                                .fs
-                                .resolve_read(&state.cwd, &rendered)
-                                .with_context(|| {
-                                    format!("step {}: CAT {}", idx + 1, rendered)
-                                })?;
-                            state
-                                .fs
-                                .read_file(&target)
-                                .with_context(|| format!("failed to read {}", target.display()))?
-                        } else {
-                            let mut buf = Vec::new();
-                            if let Some(input_stream) = stdin.clone() {
-                                if let Ok(mut guard) = input_stream.lock() {
-                                    guard
-                                        .read_to_end(&mut buf)
-                                        .context("failed to read from stdin")?;
-                                }
-                            }
-                            buf
-                        };
-                        if let Some(output_stream) = out.clone() {
-                            if let Ok(mut guard) = output_stream.lock() {
-                                guard.write_all(&data).context("failed to write to output")?;
-                            }
-                        } else {
-                            io::stdout().write_all(&data).context("failed to write to stdout")?;
-                        }
-                        Ok(())
-                    }
-                    StepKind::Write { path, contents } => {
-                        let ctx = state.command_ctx();
-                        let path_rendered = expand_template(path, &ctx);
-                        let target = state
-                            .fs
-                            .resolve_write(&state.cwd, &path_rendered)
-                            .with_context(|| format!("step {}: WRITE {}", idx + 1, path_rendered))?;
-                        state.fs.ensure_parent_dir(&target).with_context(|| {
-                            format!("failed to create parent for {}", target.display())
-                        })?;
-                        let rendered = expand_template(contents, &ctx);
-                        state
-                            .fs
-                            .write_file(&target, rendered.as_bytes())
-                            .with_context(|| format!("failed to write {}", target.display()))?;
-                        Ok(())
-                    }
-                    StepKind::WithIo { streams, cmd } => {
-                        let inner_step = Step {
-                            guards: Vec::new(),
-                            kind: *cmd.clone(),
-                            scope_enter: 0,
-                            scope_exit: 0,
-                        };
-                        let steps = vec![inner_step];
+                    state.fs.ensure_parent_dir(&target).with_context(|| {
+                        format!("failed to create parent for {}", target.display())
+                    })?;
+                    let inner_step = Step {
+                        guards: Vec::new(),
+                        kind: *cmd.clone(),
+                        scope_enter: 0,
+                        scope_exit: 0,
+                    };
+                    let steps = vec![inner_step];
+                    let mut sub_state = ExecState {
+                        fs: {
+                            let mut resolver = PathResolver::new(
+                                state.fs.root().as_path(),
+                                state.fs.build_context().as_path(),
+                            )?;
+                            resolver.set_workspace_root(state.fs.build_context().clone());
+                            Box::new(resolver)
+                        },
+                        cargo_target_dir: state.cargo_target_dir.clone(),
+                        cwd: state.cwd.clone(),
+                        envs: state.envs.clone(),
+                        bg_children: Vec::new(),
+                        scope_stack: Vec::new(),
+                    };
+                    let mut sub_process = process.clone();
 
-                        // Determine IO configuration for the inner steps
-                        let mut step_stdin = None;
-                        let step_stdout = out.clone();
-                        let mut next_expose_stdin = false;
+                    // We need to capture output to a file.
+                    // We can't easily stream to a file via SharedOutput (which is Arc<Mutex<dyn Write>>).
+                    // But we can create a file writer and wrap it.
+                    // Wait, `state.fs.write_file` is atomic (takes &[u8]).
+                    // If we want to stream to file, we need `state.fs.open_write`?
+                    // `oxdock-fs` doesn't expose open_write directly on WorkspaceFs trait easily?
+                    // It has `write_file`.
+                    // So we must buffer in memory for CAPTURE_TO_FILE unless we change WorkspaceFs.
+                    // For now, we buffer in memory (Vec<u8>).
 
-                        if streams.contains(&"stdin".to_string()) {
-                            step_stdin = stdin.clone();
-                            next_expose_stdin = true;
-                        }
+                    let buf = Arc::new(Mutex::new(Vec::new()));
 
-                        if streams.contains(&"stdout".to_string()) {
-                            // If stdout is requested, we ensure it's passed down.
-                            // If out is None (no capture), we might want to default to stdout?
-                            // But out is Option<SharedOutput>.
-                            // If out is None, Run/RunBg will use stdout/inherit.
-                            // So we just pass out through.
-                        }
+                    execute_steps(
+                        &mut sub_state,
+                        &mut sub_process,
+                        &steps,
+                        stdin.clone(),
+                        expose_stdin,
+                        Some(buf.clone()),
+                        true,
+                    )?;
 
-                        execute_steps(
-                            state,
-                            process,
-                            &steps,
-                            step_stdin,
-                            next_expose_stdin,
-                            step_stdout,
-                            false,
-                        )?;
-                        Ok(())
-                    }
-
-                    StepKind::CaptureToFile { path, cmd } => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_template(path, &ctx);
-                        let target =
-                            state.fs.resolve_write(&state.cwd, &rendered).with_context(|| {
-                                format!(
-                                    "step {}: CAPTURE_TO_FILE {}",
-                                    idx + 1,
-                                    rendered
-                                )
-                            })?;
-                        state.fs.ensure_parent_dir(&target).with_context(|| {
-                            format!("failed to create parent for {}", target.display())
-                        })?;
-                        let inner_step = Step {
-                            guards: Vec::new(),
-                            kind: *cmd.clone(),
-                            scope_enter: 0,
-                            scope_exit: 0,
-                        };
-                        let steps = vec![inner_step];
-                        let mut sub_state = ExecState {
-                            fs: {
-                                let mut resolver = PathResolver::new(
-                                    state.fs.root().as_path(),
-                                    state.fs.build_context().as_path(),
-                                )?;
-                                resolver.set_workspace_root(state.fs.build_context().clone());
-                                Box::new(resolver)
-                            },
-                            cargo_target_dir: state.cargo_target_dir.clone(),
-                            cwd: state.cwd.clone(),
-                            envs: state.envs.clone(),
-                            bg_children: Vec::new(),
-                            scope_stack: Vec::new(),
-                        };
-                        let mut sub_process = process.clone();
-
-                        // We need to capture output to a file.
-                        // We can't easily stream to a file via SharedOutput (which is Arc<Mutex<dyn Write>>).
-                        // But we can create a file writer and wrap it.
-                        // Wait, `state.fs.write_file` is atomic (takes &[u8]).
-                        // If we want to stream to file, we need `state.fs.open_write`?
-                        // `oxdock-fs` doesn't expose open_write directly on WorkspaceFs trait easily?
-                        // It has `write_file`.
-                        // So we must buffer in memory for CAPTURE_TO_FILE unless we change WorkspaceFs.
-                        // For now, we buffer in memory (Vec<u8>).
-
-                        let buf = Arc::new(Mutex::new(Vec::new()));
-
-                        execute_steps(
-                            &mut sub_state,
-                            &mut sub_process,
-                            &steps,
-                            stdin.clone(),
-                            expose_stdin,
-                            Some(buf.clone()),
-                            true,
-                        )?;
-
-                        let data = buf.lock().unwrap();
-                        state
-                            .fs
-                            .write_file(&target, &data)
-                            .with_context(|| format!("failed to write {}", target.display()))?;
-                        Ok(())
-                    }
-                    StepKind::Exit(code) => {
-                        for child in state.bg_children.iter_mut() {
-                            if child.try_wait()?.is_none() {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                            }
-                        }
-                        state.bg_children.clear();
-                        bail!("EXIT requested with code {}", code);
-                    }
+                    let data = buf.lock().unwrap();
+                    state
+                        .fs
+                        .write_file(&target, &data)
+                        .with_context(|| format!("failed to write {}", target.display()))?;
+                    Ok(())
                 }
-            };
+                StepKind::Exit(code) => {
+                    for child in state.bg_children.iter_mut() {
+                        if child.try_wait()?.is_none() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                    state.bg_children.clear();
+                    bail!("EXIT requested with code {}", code);
+                }
+            }
+        };
 
         let restore_result = restore_scopes(state, step.scope_exit);
         step_result?;

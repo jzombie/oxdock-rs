@@ -122,17 +122,29 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
             Just(WorkspaceTarget::Local)
         ]
         .prop_map(StepKind::Workspace),
-        (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env { key, value: value.into() }),
+        (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env {
+            key,
+            value: value.into()
+        }),
         safe_msg().prop_map(|s| StepKind::Run(s.into())),
         safe_msg().prop_map(|s| StepKind::Echo(s.into())),
         safe_msg().prop_map(|s| StepKind::RunBg(s.into())),
-        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy { from: from.into(), to: to.into() }),
-        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Symlink { from: from.into(), to: to.into() }),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy {
+            from: from.into(),
+            to: to.into()
+        }),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Symlink {
+            from: from.into(),
+            to: to.into()
+        }),
         safe_string().prop_map(|s| StepKind::Mkdir(s.into())),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
-        (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path: path.into(), contents: contents.into() }),
+        (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
+            path: path.into(),
+            contents: contents.into()
+        }),
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
             path: path.into(),
             cmd: Box::new(StepKind::Run(cmd.into())),

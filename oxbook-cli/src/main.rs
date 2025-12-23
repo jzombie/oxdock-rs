@@ -502,20 +502,19 @@ fn render_shell_outputs(
                             let expected_combined_hash =
                                 combined_output_hash(&stdout_norm, &stderr_norm);
                             let expected_combined_short = short_hash(&expected_combined_hash);
-                            let matches_output = if let Some(meta_hash) =
-                                block.combined_hash.as_deref()
-                            {
-                                meta_hash == expected_combined_hash
-                                    || meta_hash == expected_combined_short
-                            } else {
-                                let expected_stdout_hash = sha256_hex(&stdout_norm);
-                                let expected_stderr_hash = sha256_hex(&stderr_norm);
-                                let matches_stdout = block.stdout_hash.as_deref()
-                                    == Some(&expected_stdout_hash);
-                                let matches_stderr = block.stderr_hash.as_deref()
-                                    == Some(&expected_stderr_hash);
-                                matches_stdout && matches_stderr
-                            };
+                            let matches_output =
+                                if let Some(meta_hash) = block.combined_hash.as_deref() {
+                                    meta_hash == expected_combined_hash
+                                        || meta_hash == expected_combined_short
+                                } else {
+                                    let expected_stdout_hash = sha256_hex(&stdout_norm);
+                                    let expected_stderr_hash = sha256_hex(&stderr_norm);
+                                    let matches_stdout =
+                                        block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
+                                    let matches_stderr =
+                                        block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
+                                    matches_stdout && matches_stderr
+                                };
                             !(matches_code && matches_output)
                         }
                     }
@@ -746,12 +745,13 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
             end_index = next_idx;
             idx = next_idx;
         }
-    } else if peek_idx < lines.len() && lines[peek_idx].trim_start().starts_with("```") {
-        if let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, peek_idx) {
-            stderr = parsed_stderr;
-            end_index = next_idx;
-            idx = next_idx;
-        }
+    } else if peek_idx < lines.len()
+        && lines[peek_idx].trim_start().starts_with("```")
+        && let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, peek_idx)
+    {
+        stderr = parsed_stderr;
+        end_index = next_idx;
+        idx = next_idx;
     }
 
     if has_begin_marker {
@@ -823,12 +823,16 @@ fn parse_output_meta(
     }
 }
 
-fn parse_inline_meta(line: &str, code_hash: &mut Option<String>, combined_hash: &mut Option<String>) {
+fn parse_inline_meta(
+    line: &str,
+    code_hash: &mut Option<String>,
+    combined_hash: &mut Option<String>,
+) {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
         return;
     }
-    let mut tokens = trimmed.trim_start_matches('`').trim().split_whitespace();
+    let mut tokens = trimmed.trim_start_matches('`').split_whitespace();
     // Skip the fence language token if present.
     let _ = tokens.next();
     for token in tokens {
@@ -851,7 +855,9 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
     let code_hash_short = short_hash(code_hash);
     let combined_hash_short = short_hash(&combined_hash);
     // First fenced block: stdout (may be empty). Keep it minimal for humans.
-    lines.push(format!("```text oxbook code={code_hash_short} hash={combined_hash_short}"));
+    lines.push(format!(
+        "```text oxbook code={code_hash_short} hash={combined_hash_short}"
+    ));
     if !stdout_norm.is_empty() {
         for line in stdout_norm.lines() {
             lines.push(line.to_string());
@@ -1153,14 +1159,9 @@ fn build_env_from_oxfile(
         output_buf.clone()
     };
 
-    let final_cwd = run_steps_with_context_result(
-        &temp_root,
-        &build_context,
-        &steps,
-        None,
-        Some(build_stdout),
-    )
-    .with_context(|| format!("run {}", path.display()))?;
+    let final_cwd =
+        run_steps_with_context_result(&temp_root, &build_context, &steps, None, Some(build_stdout))
+            .with_context(|| format!("run {}", path.display()))?;
 
     Ok(InterpreterEnv {
         root: temp_root,

@@ -64,18 +64,15 @@ impl PathResolver {
     pub fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         let from_path = Path::new(from);
         if Self::is_absolute_or_rooted(from_path) {
-            if let Some(workspace_root) = &self.workspace_root {
-                if let Ok(guarded) =
+            if let Some(workspace_root) = &self.workspace_root
+                && let Ok(guarded) =
                     self.check_access_with_root(workspace_root, from_path, AccessMode::Read)
-                {
-                    return self.backend.resolve_copy_source(guarded);
-                }
+            {
+                return self.backend.resolve_copy_source(guarded);
             }
-            if let Ok(guarded) = self.check_access_with_root(
-                &self.build_context,
-                from_path,
-                AccessMode::Read,
-            ) {
+            if let Ok(guarded) =
+                self.check_access_with_root(&self.build_context, from_path, AccessMode::Read)
+            {
                 return self.backend.resolve_copy_source(guarded);
             }
 

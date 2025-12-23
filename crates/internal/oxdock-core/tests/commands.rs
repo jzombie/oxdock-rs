@@ -1,9 +1,11 @@
-use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result, run_steps_with_fs};
+use oxdock_core::{
+    run_steps, run_steps_with_context, run_steps_with_context_result, run_steps_with_fs,
+};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::CommandBuilder;
-use std::sync::{Arc, Mutex};
 use std::io::Cursor;
+use std::sync::{Arc, Mutex};
 
 fn parse_one(cmd: &str) -> Box<StepKind> {
     let steps = oxdock_parser::parse_script(cmd).unwrap();
@@ -968,14 +970,7 @@ fn cat_reads_stdin_with_io() {
         scope_exit: 0,
     }];
 
-    run_steps_with_context_result(
-        &root,
-        &root,
-        &steps,
-        Some(input),
-        Some(output.clone()),
-    )
-    .unwrap();
+    run_steps_with_context_result(&root, &root, &steps, Some(input), Some(output.clone())).unwrap();
 
     let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert_eq!(result, "hello from stdin");
