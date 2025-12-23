@@ -5,5 +5,5 @@ ENV FOO=bar
   WRITE inner.txt inner
   ENV SCOPE=inner
 }
-CAPTURE_TO_FILE env.txt ECHO scope={{ oxdock.env.SCOPE }}
+CAPTURE_TO_FILE env.txt ECHO scope={{ env.SCOPE }}
 WRITE outer.txt outer

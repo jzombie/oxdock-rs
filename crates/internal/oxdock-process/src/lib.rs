@@ -131,7 +131,7 @@ where
 
 pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> String {
     expand_with_lookup(input, |name| {
-        if let Some(key) = name.strip_prefix("oxdock.env.") {
+        if let Some(key) = name.strip_prefix("env.") {
             script_envs
                 .get(key)
                 .cloned()
@@ -144,7 +144,7 @@ pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> 
 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
-        if let Some(key) = name.strip_prefix("oxdock.env.") {
+        if let Some(key) = name.strip_prefix("env.") {
             if key == "CARGO_TARGET_DIR" {
                 return Some(ctx.cargo_target_dir().display().to_string());
             }
@@ -1140,7 +1140,7 @@ mod tests {
             std::env::set_var("FOO", "from-env");
         }
         let rendered = expand_script_env(
-            "{{ oxdock.env.FOO }}:{{ oxdock.env.ONLY }}:{{ oxdock.env.MISSING }}",
+            "{{ env.FOO }}:{{ env.ONLY }}:{{ env.MISSING }}",
             &script_envs,
         );
         assert_eq!(rendered, "from-script:only:");
@@ -1163,9 +1163,9 @@ mod tests {
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
 
-        // Valid syntax: {{ oxdock.env.VAR }}
+        // Valid syntax: {{ env.VAR }}
         let rendered = expand_command_env(
-            "{{ oxdock.env.FOO }}-{{ oxdock.env.PCT }}-{{ oxdock.env.HOST_ONLY }}-{{ oxdock.env.CARGO_TARGET_DIR }}",
+            "{{ env.FOO }}-{{ env.PCT }}-{{ env.HOST_ONLY }}-{{ env.CARGO_TARGET_DIR }}",
             &ctx,
         );
         let target_dir = guard.display();

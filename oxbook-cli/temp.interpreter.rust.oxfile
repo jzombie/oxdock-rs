@@ -21,7 +21,7 @@
     # 3. Build the Snippet
     #    Stream build output to terminal
     ENV OXDOCK_INHERIT_STDOUT=1
-    RUN cp "{{ oxdock.env.OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
+    RUN cp "{{ env.OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
     RUN CARGO_TARGET_DIR="ws/target" cargo build --manifest-path "ws/snippet/Cargo.toml"
 
     # 4. Run the Snippet
