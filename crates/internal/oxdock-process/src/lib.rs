@@ -681,7 +681,76 @@ fn extract_body(cmd: &str, prefix: &str) -> String {
 
 #[cfg(miri)]
 fn expand_env(input: &str, ctx: &CommandContext) -> String {
-    expand_with_lookup(input, |name| Some(env_lookup(name, ctx)))
+    // First expand any double-brace names ({{ ... }}), then expand simple
+    // shell-style `$VAR` and `${VAR}` occurrences so the synthetic Miri
+    // process emulation behaves like a real shell with respect to env vars.
+    let first = expand_with_lookup(input, |name| Some(env_lookup(name, ctx)));
+
+    let mut out = String::with_capacity(first.len());
+    let mut chars = first.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            match chars.peek() {
+                Some('$') => {
+                    // preserve literal $$
+                    out.push('$');
+                    chars.next();
+                }
+                Some('{') => {
+                    // ${VAR}
+                    chars.next(); // consume '{'
+                    let mut name = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '}' {
+                            break;
+                        }
+                        name.push(ch);
+                    }
+                    let val = if name == "CARGO_TARGET_DIR" {
+                        ctx.cargo_target_dir().display().to_string()
+                    } else {
+                        ctx.envs()
+                            .get(&name)
+                            .cloned()
+                            .or_else(|| std::env::var(&name).ok())
+                            .unwrap_or_default()
+                    };
+                    out.push_str(&val);
+                }
+                Some(next) if next.is_alphanumeric() || *next == '_' => {
+                    // $VAR
+                    let mut name = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            name.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let val = if name == "CARGO_TARGET_DIR" {
+                        ctx.cargo_target_dir().display().to_string()
+                    } else {
+                        ctx.envs()
+                            .get(&name)
+                            .cloned()
+                            .or_else(|| std::env::var(&name).ok())
+                            .unwrap_or_default()
+                    };
+                    out.push_str(&val);
+                }
+                _ => {
+                    // Not a recognized var form; keep literal '$'
+                    out.push('$');
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    out
 }
 
 #[cfg(miri)]
