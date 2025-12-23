@@ -38,6 +38,7 @@ fn incremental_execution_persists_filesystem_state() {
     // This simulates a second command running against the same environment (filesystem)
     let steps2 = vec![Step {
         guards: Vec::new(),
+        #[allow(clippy::disallowed_macros)]
         kind: StepKind::Run(if cfg!(windows) {
             "echo updated> state.txt".into()
         } else {
@@ -82,6 +83,7 @@ fn incremental_execution_persists_cwd() {
     // But here we just want to verify the file exists.
     let steps2 = vec![Step {
         guards: Vec::new(),
+        #[allow(clippy::disallowed_macros)]
         kind: StepKind::Run(if cfg!(windows) {
             "type subdir\\marker.txt".into()
         } else {

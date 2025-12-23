@@ -670,10 +670,9 @@ fn env_exposes_git_commit_hash() {
         .expect("git rev-parse failed");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
-    let steps = oxdock_parser::parse_script(
-        "CAPTURE_TO_FILE out.txt ECHO {{ env:WORKSPACE_GIT_COMMIT }}",
-    )
-    .unwrap();
+    let steps =
+        oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO {{ env:WORKSPACE_GIT_COMMIT }}")
+            .unwrap();
     run_steps(&repo, &steps).unwrap();
 
     assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
