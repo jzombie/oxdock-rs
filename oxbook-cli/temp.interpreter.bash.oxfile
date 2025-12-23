@@ -1,2 +1,2 @@
 [env:OXBOOK_SNIPPET_PATH]
-WITH_IO [stdin] RUN bash "{{ env.OXBOOK_SNIPPET_PATH }}"
+WITH_IO [stdin] RUN bash "{{ env:OXBOOK_SNIPPET_PATH }}"

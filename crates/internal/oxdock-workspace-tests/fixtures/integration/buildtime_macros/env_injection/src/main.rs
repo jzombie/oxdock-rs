@@ -5,7 +5,7 @@ mod demo_assets {
 
     embed! {
         name: DemoAssets,
-        script: "CAPTURE_TO_FILE env.txt ECHO {{ env.CARGO_FEATURE_OXDOCK_TEST }}:{{ env.CARGO_CFG_TARGET_OS }}",
+        script: "CAPTURE_TO_FILE env.txt ECHO {{ env:CARGO_FEATURE_OXDOCK_TEST }}:{{ env:CARGO_CFG_TARGET_OS }}",
         out_dir: "prebuilt",
     }
 }

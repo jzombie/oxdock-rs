@@ -86,6 +86,14 @@ mod tests {
     }
 
     #[test]
+    fn guard_supports_colon_separator() {
+        let script = "[env:FOO] RUN echo hi";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].guards.len(), 1);
+    }
+
+    #[test]
     fn guard_lines_chain_before_block() {
         let script = indoc! {r#"
             [env:A]
@@ -103,7 +111,7 @@ mod tests {
     #[test]
     fn guard_block_must_contain_command() {
         let script = indoc! {r#"
-            [env:A] {
+            [env.A] {
             }
         "#};
         parse_script(script).expect_err("empty block should fail");

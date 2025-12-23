@@ -1,2 +1,2 @@
 ENV FOO=bar
-CAPTURE_TO_FILE env.txt ECHO value={{ env.FOO }}
+CAPTURE_TO_FILE env.txt ECHO value={{ env:FOO }}
