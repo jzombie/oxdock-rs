@@ -36,6 +36,7 @@ cases = [
   "workspace_symlink",
   "semicolon",
   "cat_stdout",
+  "cat_stdin",
   "cwd_stdout",
   "with_io_bg",
 ]

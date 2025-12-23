@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
@@ -524,29 +524,37 @@ fn execute_steps<P: ProcessManager>(
                         }
                         Ok(())
                     }
-                    StepKind::Cat(path) => {
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(path, &ctx);
-                        let target = state
-                            .fs
-                            .resolve_read(&state.cwd, &rendered)
-                            .with_context(|| {
-                                format!("step {}: CAT {}", idx + 1, rendered)
-                            })?;
-                        let data = state
-                            .fs
-                            .read_file(&target)
-                            .with_context(|| format!("failed to read {}", target.display()))?;
+                    StepKind::Cat(path_opt) => {
+                        let data = if let Some(path) = path_opt {
+                            let ctx = state.command_ctx();
+                            let rendered = expand_command_env(path, &ctx);
+                            let target = state
+                                .fs
+                                .resolve_read(&state.cwd, &rendered)
+                                .with_context(|| {
+                                    format!("step {}: CAT {}", idx + 1, rendered)
+                                })?;
+                            state
+                                .fs
+                                .read_file(&target)
+                                .with_context(|| format!("failed to read {}", target.display()))?
+                        } else {
+                            let mut buf = Vec::new();
+                            if let Some(input_stream) = stdin.clone() {
+                                if let Ok(mut guard) = input_stream.lock() {
+                                    guard
+                                        .read_to_end(&mut buf)
+                                        .context("failed to read from stdin")?;
+                                }
+                            }
+                            buf
+                        };
                         if let Some(output_stream) = out.clone() {
                             if let Ok(mut guard) = output_stream.lock() {
-                                guard.write_all(&data).with_context(|| {
-                                    format!("failed to write {} to stdout", target.display())
-                                })?;
+                                guard.write_all(&data).context("failed to write to output")?;
                             }
                         } else {
-                            io::stdout().write_all(&data).with_context(|| {
-                                format!("failed to write {} to stdout", target.display())
-                            })?;
+                            io::stdout().write_all(&data).context("failed to write to stdout")?;
                         }
                         Ok(())
                     }
@@ -1172,7 +1180,7 @@ mod tests {
             },
             Step {
                 guards: Vec::new(),
-                kind: StepKind::Cat("out.txt".into()),
+                kind: StepKind::Cat(Some("out.txt".into())),
                 scope_enter: 0,
                 scope_exit: 0,
             },
@@ -1264,7 +1272,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::CaptureToFile {
                     path: "${OUT_FILE}".into(),
-                    cmd: Box::new(StepKind::Cat("${SNIPPET}".into())),
+                    cmd: Box::new(StepKind::Cat(Some("${SNIPPET}".into()))),
                 },
                 scope_enter: 0,
                 scope_exit: 0,

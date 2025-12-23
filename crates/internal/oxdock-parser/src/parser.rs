@@ -335,8 +335,8 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
         }
         Rule::cwd_command => StepKind::Cwd,
         Rule::cat_command => {
-            let arg = parse_single_arg(pair)?;
-            StepKind::Cat(arg)
+            let args = parse_args(pair)?;
+            StepKind::Cat(args.into_iter().next())
         }
         Rule::write_command => {
             let path = parse_single_arg_from_pair(pair.clone())?;

@@ -131,7 +131,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(StepKind::Mkdir),
         prop::option::of(safe_string()).prop_map(StepKind::Ls),
         Just(StepKind::Cwd),
-        safe_string().prop_map(StepKind::Cat),
+        prop::option::of(safe_string()).prop_map(StepKind::Cat),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
             path,
