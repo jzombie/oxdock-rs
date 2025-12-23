@@ -9,6 +9,7 @@ use std::fs::{File, OpenOptions};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 #[cfg(miri)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[allow(clippy::disallowed_types)]
@@ -246,6 +247,42 @@ impl std::ops::Deref for GuardedTempDir {
 
 impl Drop for GuardedTempDir {
     fn drop(&mut self) {
+        // Ensure the lock file is closed before the TempDir is dropped so
+        // platform-specific file-handle semantics (Windows) don't prevent
+        // directory removal. Taking the `lock` here moves the `File` into a
+        // temporary which is dropped at the end of this function (before
+        // the fields are automatically dropped), ensuring the handle is
+        // released prior to `tempdir`'s removal.
+        let _ = self.lock.take();
+
+        // Best-effort explicit cleanup: some platforms may leave the tempdir
+        // behind if `tempfile::TempDir` cannot delete while a handle lingers.
+        // By taking ownership and dropping the TempDir early we can retry a
+        // removal if it somehow survives.
+        #[cfg(not(miri))]
+        if let Some(tempdir) = self.tempdir.take() {
+            let path = tempdir.path().to_path_buf();
+            drop(tempdir);
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(&path);
+                // Windows can defer directory teardown if a scanner briefly
+                // holds a handle; retry a few times to avoid leaving debris
+                // that breaks parent-process assertions.
+                if path.exists() {
+                    for _ in 0..5 {
+                        std::thread::sleep(Duration::from_millis(10));
+                        if !path.exists() {
+                            break;
+                        }
+                        let _ = std::fs::remove_dir_all(&path);
+                        if !path.exists() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         #[cfg(miri)]
         {
             if let Some(guard) = &self.guard {
@@ -533,13 +570,15 @@ fn is_pid_alive(pid: u32) -> bool {
 
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle == 0 {
-            return true;
+        if handle.is_null() {
+            // If the process cannot be opened, assume it is gone so we can
+            // reclaim stale tempdirs rather than leaking them.
+            return false;
         }
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
         CloseHandle(handle);
-        if ok == 0 { true } else { code == STILL_ACTIVE }
+        if ok == 0 { true } else { code == (STILL_ACTIVE as u32) }
     }
 }
 

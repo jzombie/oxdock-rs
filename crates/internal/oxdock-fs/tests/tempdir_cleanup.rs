@@ -1,4 +1,4 @@
-use oxdock_fs::GuardedPath;
+use oxdock_fs::{embed_path, GuardedPath};
 use std::env;
 use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -15,8 +15,7 @@ fn maybe_run_as_child() {
 
 fn run_child_main(mode: &str) -> ! {
     let tempdir = GuardedPath::tempdir().expect("tempdir");
-    let root = tempdir.as_guarded_path().to_path_buf();
-    println!("{}", root.display());
+    println!("PATH:{}", embed_path(tempdir.as_guarded_path()));
     let _ = std::io::stdout().flush();
     drop(tempdir);
 
@@ -39,10 +38,8 @@ fn spawn_child(mode: &str) -> (ExitStatus, Vec<PathBuf>) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let paths: Vec<PathBuf> = stdout
         .lines()
-        .flat_map(|line| line.split_whitespace())
-        .map(str::trim)
+        .filter_map(|line| line.split_once("PATH:").map(|(_, rest)| rest.trim()))
         .filter(|token| !token.is_empty())
-        .filter(|token| std::path::Path::new(token).is_absolute())
         .map(PathBuf::from)
         .collect();
 
