@@ -1053,3 +1053,51 @@ fn simulate_cargo(args: &[String]) -> Result<CommandOutput> {
         stderr: Vec::new(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn expand_script_env_prefers_script_values() {
+        let mut script_envs = HashMap::new();
+        script_envs.insert("FOO".into(), "from-script".into());
+        script_envs.insert("ONLY".into(), "only".into());
+        // SAFETY: environment mutation is treated as unsafe in this workspace; tests serialize
+        // their own changes.
+        unsafe {
+            std::env::set_var("FOO", "from-env");
+        }
+        let rendered = expand_script_env("${FOO}:{ONLY}:${MISSING}", &script_envs);
+        assert_eq!(rendered, "from-script:only:");
+        unsafe {
+            std::env::remove_var("FOO");
+        }
+    }
+
+    #[test]
+    fn expand_command_env_handles_var_forms() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let cwd: PolicyPath = guard.clone().into();
+        let mut envs = HashMap::new();
+        envs.insert("FOO".into(), "bar".into());
+        envs.insert("PCT".into(), "percent".into());
+        unsafe {
+            std::env::set_var("HOST_ONLY", "host");
+        }
+
+        let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
+        let rendered =
+            expand_command_env("${FOO}-{PCT}-{HOST_ONLY}-%FOO%-{CARGO_TARGET_DIR}-$$", &ctx);
+
+        let target_dir = guard.display();
+        let expected = format!("bar-percent-host-bar-{target_dir}-$$");
+        assert_eq!(rendered, expected);
+
+        unsafe {
+            std::env::remove_var("HOST_ONLY");
+        }
+    }
+}
