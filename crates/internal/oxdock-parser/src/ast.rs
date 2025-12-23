@@ -143,7 +143,7 @@ pub enum StepKind {
     Mkdir(String),
     Ls(Option<String>),
     Cwd,
-    Cat(String),
+    Cat(Option<String>),
     Write {
         path: String,
         contents: String,
@@ -360,7 +360,13 @@ impl fmt::Display for StepKind {
                 Ok(())
             }
             StepKind::Cwd => write!(f, "CWD"),
-            StepKind::Cat(arg) => write!(f, "CAT {}", quote_arg(arg)),
+            StepKind::Cat(arg) => {
+                write!(f, "CAT")?;
+                if let Some(a) = arg {
+                    write!(f, " {}", quote_arg(a))?;
+                }
+                Ok(())
+            }
             StepKind::Write { path, contents } => {
                 write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
             }

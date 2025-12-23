@@ -1,7 +1,9 @@
-use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_fs};
+use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result, run_steps_with_fs};
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
 use oxdock_parser::{Step, StepKind, WorkspaceTarget};
 use oxdock_process::CommandBuilder;
+use std::sync::{Arc, Mutex};
+use std::io::Cursor;
 
 fn parse_one(cmd: &str) -> Box<StepKind> {
     let steps = oxdock_parser::parse_script(cmd).unwrap();
@@ -738,7 +740,7 @@ fn read_cannot_escape_root() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat("../secret.txt".into()),
+        kind: StepKind::Cat(Some("../secret.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -787,7 +789,7 @@ fn read_symlink_escape_is_blocked() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat("leak.txt".into()),
+        kind: StepKind::Cat(Some("leak.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -916,7 +918,7 @@ fn cat_reads_file_contents_without_error() {
     write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat("file.txt".into()),
+        kind: StepKind::Cat(Some("file.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -945,4 +947,36 @@ fn cwd_prints_to_stdout() {
     ];
     // Should succeed and print the canonical cwd; we only assert it doesn't error.
     run_steps(&root, &steps).unwrap();
+}
+
+#[test]
+fn cat_reads_stdin_with_io() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input_data = "hello from stdin";
+    let input = Arc::new(Mutex::new(Cursor::new(input_data.as_bytes().to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::WithIo {
+            streams: vec!["stdin".to_string()],
+            cmd: Box::new(StepKind::Cat(None)),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    run_steps_with_context_result(
+        &root,
+        &root,
+        &steps,
+        Some(input),
+        Some(output.clone()),
+    )
+    .unwrap();
+
+    let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(result, "hello from stdin");
 }
