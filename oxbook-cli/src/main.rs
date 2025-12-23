@@ -20,6 +20,7 @@ const OUTPUT_BEGIN: &str = "<!-- oxbook-output:begin -->";
 const OUTPUT_END: &str = "<!-- oxbook-output:end -->";
 const OUTPUT_META_PREFIX: &str = "<!-- oxbook-output:meta";
 const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
+const SHORT_HASH_LEN: usize = 32;
 
 #[derive(Debug)]
 struct FenceBlock {
@@ -37,6 +38,7 @@ struct OutputBlock {
     code_hash: Option<String>,
     stdout_hash: Option<String>,
     stderr_hash: Option<String>,
+    combined_hash: Option<String>,
     stdout: String,
     stderr: String,
 }
@@ -487,17 +489,31 @@ fn render_shell_outputs(
                 let code_hash = code_hash(&script, &spec);
                 let should_run = match &existing {
                     Some(block) => {
-                        let matches_code = block.code_hash.as_deref() == Some(&code_hash);
+                        let code_hash_short = short_hash(&code_hash);
+                        let matches_code = block.code_hash.as_deref() == Some(&code_hash)
+                            || block.code_hash.as_deref() == Some(&code_hash_short);
                         if only_missing_outputs {
                             !matches_code
                         } else {
-                            let expected_stdout_hash = sha256_hex(&block.stdout);
-                            let expected_stderr_hash = sha256_hex(&block.stderr);
-                            let matches_stdout =
-                                block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
-                            let matches_stderr =
-                                block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
-                            let matches_output = matches_stdout && matches_stderr;
+                            let stdout_norm = normalize_output(&block.stdout);
+                            let stderr_norm = normalize_output(&block.stderr);
+                            let expected_combined_hash =
+                                combined_output_hash(&stdout_norm, &stderr_norm);
+                            let expected_combined_short = short_hash(&expected_combined_hash);
+                            let matches_output = if let Some(meta_hash) =
+                                block.combined_hash.as_deref()
+                            {
+                                meta_hash == expected_combined_hash
+                                    || meta_hash == expected_combined_short
+                            } else {
+                                let expected_stdout_hash = sha256_hex(&stdout_norm);
+                                let expected_stderr_hash = sha256_hex(&stderr_norm);
+                                let matches_stdout = block.stdout_hash.as_deref()
+                                    == Some(&expected_stdout_hash);
+                                let matches_stderr = block.stderr_hash.as_deref()
+                                    == Some(&expected_stderr_hash);
+                                matches_stdout && matches_stderr
+                            };
                             !(matches_code && matches_output)
                         }
                     }
@@ -657,91 +673,123 @@ fn is_fence_close(line: &str, fence_char: char, fence_len: usize) -> bool {
 #[allow(unused_assignments)]
 fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     let mut idx = start;
-    if idx < lines.len() && lines[idx].trim().is_empty() {
+    while idx < lines.len() && lines[idx].trim().is_empty() {
         idx += 1;
     }
-    if idx >= lines.len() || lines[idx].trim_end() != OUTPUT_BEGIN {
+    if idx >= lines.len() {
         return None;
     }
-    let start_index = idx;
-    idx += 1;
+
+    let mut has_begin_marker = false;
+    let mut start_index = idx;
+    if lines[idx].trim_end() == OUTPUT_BEGIN {
+        has_begin_marker = true;
+        start_index = idx;
+        idx += 1;
+        while idx < lines.len() && lines[idx].trim().is_empty() {
+            idx += 1;
+        }
+    }
 
     let mut code_hash = None;
     let mut stdout_hash = None;
     let mut stderr_hash = None;
+    let mut combined_hash = None;
     if idx < lines.len() && lines[idx].trim_start().starts_with(OUTPUT_META_PREFIX) {
-        let meta_line = lines[idx].trim();
         parse_output_meta(
-            meta_line,
+            lines[idx].trim(),
             &mut code_hash,
             &mut stdout_hash,
             &mut stderr_hash,
+            &mut combined_hash,
         );
         idx += 1;
     }
-
-    if idx >= lines.len() || lines[idx].trim_end() != "```text" {
-        return None;
-    }
-    idx += 1;
-
-    let mut output_lines = Vec::new();
-    let _stdout = String::new();
-    let _stderr = String::new();
-    while idx < lines.len() {
-        if lines[idx].trim_end() == "```" {
-            idx += 1;
-            break;
-        }
-        output_lines.push(lines[idx]);
+    while idx < lines.len() && lines[idx].trim().is_empty() {
         idx += 1;
     }
-    if idx >= lines.len() || lines[idx].trim_end() != OUTPUT_END {
+
+    if idx >= lines.len() || !lines[idx].trim_start().starts_with("```") {
         return None;
     }
-    let end_index = idx + 1;
-    let stdout = output_lines.join("\n");
-    // After the first code block we may have an explicit stderr marker and
-    // a second fenced block containing stderr. Detect that by peeking at the
-    // following lines (they follow after the closing ``` we consumed above).
+    parse_inline_meta(lines[idx], &mut code_hash, &mut combined_hash);
+
+    if !has_begin_marker
+        && code_hash.is_none()
+        && combined_hash.is_none()
+        && stdout_hash.is_none()
+        && stderr_hash.is_none()
+    {
+        return None;
+    }
+
+    let (stdout, mut idx) = parse_fenced_block(lines, idx)?;
     let mut stderr = String::new();
-    let mut peek_idx = idx + 1; // after the closing ``` we advanced to idx already
+    let mut end_index = idx;
+
+    // Look for an optional stderr block. In the legacy format this was
+    // prefixed with a comment marker; the compact format omits the marker.
+    let mut peek_idx = idx;
     while peek_idx < lines.len() && lines[peek_idx].trim().is_empty() {
         peek_idx += 1;
     }
+
     if peek_idx < lines.len() && lines[peek_idx].trim_start() == STDERR_MARKER {
-        // skip the marker
-        peek_idx += 1;
-        // skip empty lines
-        while peek_idx < lines.len() && lines[peek_idx].trim().is_empty() {
-            peek_idx += 1;
+        let mut stderr_start = peek_idx + 1;
+        while stderr_start < lines.len() && lines[stderr_start].trim().is_empty() {
+            stderr_start += 1;
         }
-        // next should be a fenced code block start like ```text
-        if peek_idx < lines.len() && lines[peek_idx].trim_start().starts_with("```") {
-            // consume the opening fence
-            peek_idx += 1;
-            let mut stderr_lines: Vec<&str> = Vec::new();
-            while peek_idx < lines.len() {
-                if lines[peek_idx].trim_end() == "```" {
-                    peek_idx += 1;
-                    break;
-                }
-                stderr_lines.push(lines[peek_idx]);
-                peek_idx += 1;
-            }
-            stderr = stderr_lines.join("\n");
-            // advance idx so the caller sees the whole output block consumed
+        if let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, stderr_start) {
+            stderr = parsed_stderr;
+            end_index = next_idx;
+            idx = next_idx;
+        }
+    } else if peek_idx < lines.len() && lines[peek_idx].trim_start().starts_with("```") {
+        if let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, peek_idx) {
+            stderr = parsed_stderr;
+            end_index = next_idx;
+            idx = next_idx;
         }
     }
+
+    if has_begin_marker {
+        let mut end_seek = idx;
+        while end_seek < lines.len() && lines[end_seek].trim().is_empty() {
+            end_seek += 1;
+        }
+        if end_seek >= lines.len() || lines[end_seek].trim_end() != OUTPUT_END {
+            return None;
+        }
+        end_index = end_seek + 1;
+    }
+
     Some(OutputBlock {
         start_index,
         end_index,
         code_hash,
         stdout_hash,
         stderr_hash,
+        combined_hash,
         stdout,
         stderr,
     })
+}
+
+fn parse_fenced_block(lines: &[&str], fence_idx: usize) -> Option<(String, usize)> {
+    if fence_idx >= lines.len() || !lines[fence_idx].trim_start().starts_with("```") {
+        return None;
+    }
+
+    let mut idx = fence_idx + 1;
+    let mut body: Vec<&str> = Vec::new();
+    while idx < lines.len() {
+        if lines[idx].trim_end() == "```" {
+            return Some((body.join("\n"), idx + 1));
+        }
+        body.push(lines[idx]);
+        idx += 1;
+    }
+    None
 }
 
 fn parse_output_meta(
@@ -749,6 +797,7 @@ fn parse_output_meta(
     code_hash: &mut Option<String>,
     stdout_hash: &mut Option<String>,
     stderr_hash: &mut Option<String>,
+    combined_hash: &mut Option<String>,
 ) {
     let trimmed = line
         .trim_start_matches("<!--")
@@ -762,38 +811,59 @@ fn parse_output_meta(
             *stdout_hash = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("stderr=") {
             *stderr_hash = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("hash=") {
+            *combined_hash = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("output=") {
-            // Backwards-compatible: single output hash stored as stdout.
+            // Backwards-compatible: single output hash stored as stdout and combined.
             *stdout_hash = Some(value.to_string());
+            combined_hash.get_or_insert_with(|| value.to_string());
+        }
+    }
+}
+
+fn parse_inline_meta(line: &str, code_hash: &mut Option<String>, combined_hash: &mut Option<String>) {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("```") {
+        return;
+    }
+    let mut tokens = trimmed.trim_start_matches('`').trim().split_whitespace();
+    // Skip the fence language token if present.
+    let _ = tokens.next();
+    for token in tokens {
+        if token == "oxbook" {
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("code=") {
+            code_hash.get_or_insert_with(|| value.to_string());
+        } else if let Some(value) = token.strip_prefix("hash=") {
+            combined_hash.get_or_insert_with(|| value.to_string());
         }
     }
 }
 
 fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<String> {
     let mut lines = Vec::new();
-    lines.push(OUTPUT_BEGIN.to_string());
-    let stdout_hash = sha256_hex(&normalize_output(stdout));
-    let stderr_hash = sha256_hex(&normalize_output(stderr));
-    lines.push(format!(
-        "{OUTPUT_META_PREFIX} code={code_hash} stdout={stdout_hash} stderr={stderr_hash} -->"
-    ));
+    let stdout_norm = normalize_output(stdout);
+    let stderr_norm = normalize_output(stderr);
+    let combined_hash = combined_output_hash(&stdout_norm, &stderr_norm);
+    let code_hash_short = short_hash(code_hash);
+    let combined_hash_short = short_hash(&combined_hash);
     // First fenced block: stdout (may be empty). Keep it minimal for humans.
-    lines.push("```text".to_string());
-    if !stdout.is_empty() {
-        for line in normalize_output(stdout).lines() {
+    lines.push(format!("```text oxbook code={code_hash_short} hash={combined_hash_short}"));
+    if !stdout_norm.is_empty() {
+        for line in stdout_norm.lines() {
             lines.push(line.to_string());
         }
     }
     lines.push("```".to_string());
 
-    // If stderr is present, emit a separate fenced block with a clear ERROR
-    // prefix so it's obvious to a human that this block represents an error.
-    if !stderr.is_empty() {
-        lines.push("".to_string());
-        lines.push(STDERR_MARKER.to_string());
-        lines.push("```text".to_string());
-        // Make the error obvious: prefix with `ERROR:` on the first line.
-        let stderr_norm = normalize_output(stderr);
+    // If stderr is present, emit a second fenced block that is visibly marked
+    // as an error for humans reading the Markdown in a terminal.
+    if !stderr_norm.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "```text oxbook code={code_hash_short} hash={combined_hash_short}"
+        ));
         let mut s_lines = stderr_norm.lines();
         if let Some(first) = s_lines.next() {
             lines.push(format!("ERROR: {first}"));
@@ -803,8 +873,17 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
         }
         lines.push("```".to_string());
     }
-    lines.push(OUTPUT_END.to_string());
     lines
+}
+
+fn combined_output_hash(stdout_norm: &str, stderr_norm: &str) -> String {
+    // Hash stdout and stderr together so we can track changes with a single token.
+    let mut hasher = Sha256::new();
+    hasher.update(stdout_norm.as_bytes());
+    hasher.update(b"\n--stderr--\n");
+    hasher.update(stderr_norm.as_bytes());
+    let digest = hasher.finalize();
+    format!("{digest:x}")
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -812,6 +891,10 @@ fn sha256_hex(input: &str) -> String {
     hasher.update(input.as_bytes());
     let digest = hasher.finalize();
     format!("{digest:x}")
+}
+
+fn short_hash(full_hex: &str) -> String {
+    full_hex.chars().take(SHORT_HASH_LEN).collect()
 }
 
 fn normalize_output(output: &str) -> String {
