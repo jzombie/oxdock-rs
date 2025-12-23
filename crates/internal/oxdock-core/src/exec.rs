@@ -1265,4 +1265,30 @@ mod tests {
         assert_eq!(runs[0].script, "cat");
         assert_eq!(runs[0].stdin, Some(b"hello world".to_vec()));
     }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn capture_to_file_writes_inner_output() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let steps = vec![Step {
+            guards: Vec::new(),
+            kind: StepKind::CaptureToFile {
+                path: "log.txt".into(),
+                cmd: Box::new(StepKind::Echo("captured".into())),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        }];
+
+        run_steps(&root, &steps).expect("capture_to_file should succeed");
+
+        let resolver = PathResolver::new(root.as_path(), root.as_path()).expect("resolver");
+        let log_path = root.join("log.txt").expect("log path");
+        let contents = resolver.read_to_string(&log_path).expect("read log");
+        assert_eq!(contents, "captured\n");
+    }
 }
