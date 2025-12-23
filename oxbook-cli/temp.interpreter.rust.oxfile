@@ -2,15 +2,16 @@
 # Rust Interpreter Setup
 # ==========================================
 
-# 1. Prepare the workspace
-RUN mkdir -p ws
-COPY_GIT HEAD . ws
+[!env:OXBOOK_SNIPPET_PATH] {
+    # 1. Prepare the workspace
+    RUN mkdir -p ws
+    COPY_GIT HEAD . ws
 
-# 2. Generate the snippet manifest
-RUN mkdir -p "ws/snippet/src"
-ENV OXDOCK_INHERIT_STDOUT=1
-RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
-
+    # 2. Generate the snippet manifest
+    RUN mkdir -p "ws/snippet/src"
+    ENV OXDOCK_INHERIT_STDOUT=1
+    RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+}
 
 # ==========================================
 # Snippet Execution Loop
@@ -26,5 +27,6 @@ RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manif
     # 4. Run the Snippet
     #    Capture output for markdown
     ENV OXDOCK_INHERIT_STDOUT=0
+    ENV OXBOOK_CAPTURE_STDERR=1
     WITH_IO [stdin] RUN CARGO_TARGET_DIR="ws/target" ws/target/debug/oxbook-snippet
 }
