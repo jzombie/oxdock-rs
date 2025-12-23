@@ -94,11 +94,11 @@ where
                 // Look ahead for closing }}
                 let mut inner_chars = chars.clone();
                 while let Some(ch) = inner_chars.next() {
-                    if ch == '}' {
-                        if let Some(&'}') = inner_chars.peek() {
-                            closed = true;
-                            break;
-                        }
+                    if ch == '}'
+                        && let Some(&'}') = inner_chars.peek()
+                    {
+                        closed = true;
+                        break;
                     }
                     content.push(ch);
                 }
@@ -110,10 +110,10 @@ where
                     }
                     chars.next(); // first }
                     chars.next(); // second }
-                    
+
                     let key = content.trim();
                     if !key.is_empty() {
-                         out.push_str(&lookup(key).unwrap_or_default());
+                        out.push_str(&lookup(key).unwrap_or_default());
                     }
                 } else {
                     out.push('{');
@@ -1070,7 +1070,10 @@ mod tests {
         unsafe {
             std::env::set_var("FOO", "from-env");
         }
-        let rendered = expand_script_env("{{ oxdock.env.FOO }}:{{ oxdock.env.ONLY }}:{{ oxdock.env.MISSING }}", &script_envs);
+        let rendered = expand_script_env(
+            "{{ oxdock.env.FOO }}:{{ oxdock.env.ONLY }}:{{ oxdock.env.MISSING }}",
+            &script_envs,
+        );
         assert_eq!(rendered, "from-script:only:");
         unsafe {
             std::env::remove_var("FOO");
