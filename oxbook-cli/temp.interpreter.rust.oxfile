@@ -4,11 +4,11 @@
 
 [!env:OXBOOK_SNIPPET_PATH] {
     # 1. Prepare the workspace
-    RUN mkdir -p ws
+    MKDIR ws
     COPY_GIT HEAD . ws
 
     # 2. Generate the snippet manifest
-    RUN mkdir -p "ws/snippet/src"
+    MKDIR ws/snippet/src
     ENV OXDOCK_INHERIT_STDOUT=1
     RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 }
@@ -21,7 +21,7 @@
     # 3. Build the Snippet
     #    Stream build output to terminal
     ENV OXDOCK_INHERIT_STDOUT=1
-    RUN cp "$OXBOOK_SNIPPET_PATH" "ws/snippet/src/main.rs"
+    RUN cp "{{ oxdock.env.OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
     RUN CARGO_TARGET_DIR="ws/target" cargo build --manifest-path "ws/snippet/Cargo.toml"
 
     # 4. Run the Snippet
