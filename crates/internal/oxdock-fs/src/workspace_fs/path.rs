@@ -706,17 +706,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     #[cfg(not(miri))]
     #[test]
     fn cleanup_skips_live_pid_marked_dir() {
-        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
         let base = std::env::temp_dir().join("oxdock-cleanup-live-test");
-        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
         std::fs::create_dir_all(&base).expect("create base");
 
         let mut builder = Builder::new();
         builder.prefix(OXDOCK_TEMP_PREFIX);
-        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
         let tempdir = builder.tempdir_in(&base).expect("tempdir_in");
         let guard = GuardedPath::new_root(tempdir.path()).expect("guard");
         write_temp_marker(&guard).expect("marker");
