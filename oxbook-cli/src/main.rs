@@ -1303,7 +1303,7 @@ fn run_in_env_with_resolver(
             guards: Vec::new(),
             kind: StepKind::Env {
                 key: "OXBOOK_SNIPPET_PATH".to_string(),
-                value: snippet_path.display(),
+                value: snippet_path.display().to_string().into(),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -1312,7 +1312,7 @@ fn run_in_env_with_resolver(
             guards: Vec::new(),
             kind: StepKind::Env {
                 key: "OXBOOK_SNIPPET_DIR".to_string(),
-                value: snippet_dir.display(),
+                value: snippet_dir.display().to_string().into(),
             },
             scope_enter: 0,
             scope_exit: 0,

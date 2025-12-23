@@ -229,7 +229,7 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
     let kind = match pair.as_rule() {
         Rule::workdir_command => {
             let arg = parse_single_arg(pair)?;
-            StepKind::Workdir(arg)
+            StepKind::Workdir(arg.into())
         }
         Rule::workspace_command => {
             let target = parse_workspace_target(pair)?;
@@ -237,25 +237,28 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
         }
         Rule::env_command => {
             let (key, value) = parse_env_pair(pair)?;
-            StepKind::Env { key, value }
+            StepKind::Env {
+                key,
+                value: value.into(),
+            }
         }
         Rule::echo_command => {
             let msg = parse_message(pair)?;
-            StepKind::Echo(msg)
+            StepKind::Echo(msg.into())
         }
         Rule::run_command => {
             let cmd = parse_run_args(pair)?;
-            StepKind::Run(cmd)
+            StepKind::Run(cmd.into())
         }
         Rule::run_bg_command => {
             let cmd = parse_run_args(pair)?;
-            StepKind::RunBg(cmd)
+            StepKind::RunBg(cmd.into())
         }
         Rule::copy_command => {
             let mut args = parse_args(pair)?;
             StepKind::Copy {
-                from: args.remove(0),
-                to: args.remove(0),
+                from: args.remove(0).into(),
+                to: args.remove(0).into(),
             }
         }
         Rule::capture_to_file_command => {
@@ -268,7 +271,9 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 }
             }
             StepKind::CaptureToFile {
-                path: path.ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?,
+                path: path
+                    .ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?
+                    .into(),
                 cmd: cmd.ok_or_else(|| anyhow!("missing command in CAPTURE_TO_FILE"))?,
             }
         }
@@ -308,40 +313,43 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 bail!("COPY_GIT expects 3 arguments (rev, from, to)");
             }
             StepKind::CopyGit {
-                rev: args.remove(0),
-                from: args.remove(0),
-                to: args.remove(0),
+                rev: args.remove(0).into(),
+                from: args.remove(0).into(),
+                to: args.remove(0).into(),
                 include_dirty,
             }
         }
         Rule::hash_sha256_command => {
             let arg = parse_single_arg(pair)?;
-            StepKind::HashSha256 { path: arg }
+            StepKind::HashSha256 { path: arg.into() }
         }
         Rule::symlink_command => {
             let mut args = parse_args(pair)?;
             StepKind::Symlink {
-                from: args.remove(0),
-                to: args.remove(0),
+                from: args.remove(0).into(),
+                to: args.remove(0).into(),
             }
         }
         Rule::mkdir_command => {
             let arg = parse_single_arg(pair)?;
-            StepKind::Mkdir(arg)
+            StepKind::Mkdir(arg.into())
         }
         Rule::ls_command => {
             let args = parse_args(pair)?;
-            StepKind::Ls(args.into_iter().next())
+            StepKind::Ls(args.into_iter().next().map(Into::into))
         }
         Rule::cwd_command => StepKind::Cwd,
         Rule::cat_command => {
             let args = parse_args(pair)?;
-            StepKind::Cat(args.into_iter().next())
+            StepKind::Cat(args.into_iter().next().map(Into::into))
         }
         Rule::write_command => {
             let path = parse_single_arg_from_pair(pair.clone())?;
             let contents = parse_message(pair)?;
-            StepKind::Write { path, contents }
+            StepKind::Write {
+                path: path.into(),
+                contents: contents.into(),
+            }
         }
         Rule::exit_command => {
             let code = parse_exit_code(pair)?;

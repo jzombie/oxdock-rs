@@ -5,7 +5,7 @@ use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
-use oxdock_parser::{Step, StepKind, WorkspaceTarget};
+use oxdock_parser::{Step, StepKind, TemplateString, WorkspaceTarget};
 use oxdock_process::{
     BackgroundHandle, BuiltinEnv, CommandContext, CommandOptions, CommandResult, CommandStdout,
     ProcessManager, SharedInput, SharedOutput, default_process_manager, expand_command_env,
@@ -37,6 +37,10 @@ impl<P: ProcessManager> ExecState<P> {
             self.fs.build_context(),
         )
     }
+}
+
+fn expand_template(t: &TemplateString, ctx: &CommandContext) -> String {
+    expand_command_env(&t.0, ctx)
 }
 
 pub fn run_steps(fs_root: &GuardedPath, steps: &[Step]) -> Result<()> {
@@ -223,7 +227,7 @@ fn execute_steps<P: ProcessManager>(
                 match &step.kind {
                     StepKind::Workdir(path) => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(path, &ctx);
+                        let rendered = expand_template(path, &ctx);
                         state.cwd = state
                             .fs
                             .resolve_workdir(&state.cwd, &rendered)
@@ -247,13 +251,13 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::Env { key, value } => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(value, &ctx);
+                        let rendered = expand_template(value, &ctx);
                         state.envs.insert(key.clone(), rendered);
                         Ok(())
                     }
                     StepKind::Run(cmd) => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(cmd, &ctx);
+                        let rendered = expand_template(cmd, &ctx);
                         let step_stdin = if expose_stdin { stdin.clone() } else { None };
 
                         // Check for an environment variable that forces stdout inheritance.
@@ -303,7 +307,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::Echo(msg) => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(msg, &ctx);
+                        let rendered = expand_template(msg, &ctx);
                         if let Some(output_stream) = out.clone() {
                             if let Ok(mut guard) = output_stream.lock() {
                                 writeln!(guard, "{}", rendered)?;
@@ -318,7 +322,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::RunBg(cmd) => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(cmd, &ctx);
+                        let rendered = expand_template(cmd, &ctx);
                         let step_stdin = if expose_stdin { stdin.clone() } else { None };
                         let stdout_mode = out
                             .clone()
@@ -353,8 +357,8 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::Copy { from, to } => {
                         let ctx = state.command_ctx();
-                        let from_rendered = expand_command_env(from, &ctx);
-                        let to_rendered = expand_command_env(to, &ctx);
+                        let from_rendered = expand_template(from, &ctx);
+                        let to_rendered = expand_template(to, &ctx);
                         let from_abs = state
                             .fs
                             .resolve_copy_source(&from_rendered)
@@ -395,9 +399,9 @@ fn execute_steps<P: ProcessManager>(
                         include_dirty,
                     } => {
                         let ctx = state.command_ctx();
-                        let rev_rendered = expand_command_env(rev, &ctx);
-                        let from_rendered = expand_command_env(from, &ctx);
-                        let to_rendered = expand_command_env(to, &ctx);
+                        let rev_rendered = expand_template(rev, &ctx);
+                        let from_rendered = expand_template(from, &ctx);
+                        let to_rendered = expand_template(to, &ctx);
                         let to_abs = state.fs.resolve_write(&state.cwd, &to_rendered).with_context(|| {
                             format!(
                                 "step {}: COPY_GIT {} {} {}",
@@ -423,7 +427,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::HashSha256 { path } => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(path, &ctx);
+                        let rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
                             .resolve_read(&state.cwd, &rendered)
@@ -445,8 +449,8 @@ fn execute_steps<P: ProcessManager>(
 
                     StepKind::Symlink { from, to } => {
                         let ctx = state.command_ctx();
-                        let from_rendered = expand_command_env(from, &ctx);
-                        let to_rendered = expand_command_env(to, &ctx);
+                        let from_rendered = expand_template(from, &ctx);
+                        let to_rendered = expand_template(to, &ctx);
                         let to_abs = state.fs.resolve_write(&state.cwd, &to_rendered).with_context(|| {
                             format!("step {}: SYMLINK {} {}", idx + 1, from_rendered, to_rendered)
                         })?;
@@ -460,7 +464,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                     StepKind::Mkdir(path) => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(path, &ctx);
+                        let rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
                             .resolve_write(&state.cwd, &rendered)
@@ -475,7 +479,7 @@ fn execute_steps<P: ProcessManager>(
                     StepKind::Ls(arg) => {
                         let ctx = state.command_ctx();
                         let target_dir = if let Some(p) = arg {
-                            let rendered = expand_command_env(p, &ctx);
+                            let rendered = expand_template(p, &ctx);
                             state
                                 .fs
                                 .resolve_read(&state.cwd, &rendered)
@@ -527,7 +531,7 @@ fn execute_steps<P: ProcessManager>(
                     StepKind::Cat(path_opt) => {
                         let data = if let Some(path) = path_opt {
                             let ctx = state.command_ctx();
-                            let rendered = expand_command_env(path, &ctx);
+                            let rendered = expand_template(path, &ctx);
                             let target = state
                                 .fs
                                 .resolve_read(&state.cwd, &rendered)
@@ -559,15 +563,16 @@ fn execute_steps<P: ProcessManager>(
                         Ok(())
                     }
                     StepKind::Write { path, contents } => {
+                        let ctx = state.command_ctx();
+                        let path_rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
-                            .resolve_write(&state.cwd, path)
-                            .with_context(|| format!("step {}: WRITE {}", idx + 1, path))?;
+                            .resolve_write(&state.cwd, &path_rendered)
+                            .with_context(|| format!("step {}: WRITE {}", idx + 1, path_rendered))?;
                         state.fs.ensure_parent_dir(&target).with_context(|| {
                             format!("failed to create parent for {}", target.display())
                         })?;
-                        let ctx = state.command_ctx();
-                        let rendered = expand_command_env(contents, &ctx);
+                        let rendered = expand_template(contents, &ctx);
                         state
                             .fs
                             .write_file(&target, rendered.as_bytes())
@@ -615,7 +620,7 @@ fn execute_steps<P: ProcessManager>(
 
                     StepKind::CaptureToFile { path, cmd } => {
                         let ctx = state.command_ctx();
-                        let rendered = expand_command_env(path, &ctx);
+                        let rendered = expand_template(path, &ctx);
                         let target =
                             state.fs.resolve_write(&state.cwd, &rendered).with_context(|| {
                                 format!(

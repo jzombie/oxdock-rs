@@ -122,34 +122,81 @@ pub enum Guard {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct TemplateString(pub String);
+
+impl From<String> for TemplateString {
+    fn from(s: String) -> Self {
+        TemplateString(s)
+    }
+}
+
+impl From<&str> for TemplateString {
+    fn from(s: &str) -> Self {
+        TemplateString(s.to_string())
+    }
+}
+
+impl std::fmt::Display for TemplateString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for TemplateString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for TemplateString {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for TemplateString {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl std::ops::Deref for TemplateString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StepKind {
-    Workdir(String),
+    Workdir(TemplateString),
     Workspace(WorkspaceTarget),
     Env {
         key: String,
-        value: String,
+        value: TemplateString,
     },
-    Run(String),
-    Echo(String),
-    RunBg(String),
+    Run(TemplateString),
+    Echo(TemplateString),
+    RunBg(TemplateString),
     Copy {
-        from: String,
-        to: String,
+        from: TemplateString,
+        to: TemplateString,
     },
     Symlink {
-        from: String,
-        to: String,
+        from: TemplateString,
+        to: TemplateString,
     },
-    Mkdir(String),
-    Ls(Option<String>),
+    Mkdir(TemplateString),
+    Ls(Option<TemplateString>),
     Cwd,
-    Cat(Option<String>),
+    Cat(Option<TemplateString>),
     Write {
-        path: String,
-        contents: String,
+        path: TemplateString,
+        contents: TemplateString,
     },
     CaptureToFile {
-        path: String,
+        path: TemplateString,
         cmd: Box<StepKind>,
     },
     WithIo {
@@ -157,13 +204,13 @@ pub enum StepKind {
         cmd: Box<StepKind>,
     },
     CopyGit {
-        rev: String,
-        from: String,
-        to: String,
+        rev: TemplateString,
+        from: TemplateString,
+        to: TemplateString,
         include_dirty: bool,
     },
     HashSha256 {
-        path: String,
+        path: TemplateString,
     },
     Exit(i32),
 }
