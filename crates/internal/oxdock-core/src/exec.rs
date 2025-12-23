@@ -251,10 +251,28 @@ fn execute_steps<P: ProcessManager>(
                         let ctx = state.command_ctx();
                         let rendered = expand_command_env(cmd, &ctx);
                         let step_stdin = if expose_stdin { stdin.clone() } else { None };
-                        let stdout_mode = out
-                            .clone()
-                            .map(CommandStdout::Stream)
-                            .unwrap_or(CommandStdout::Inherit);
+
+                        // Check for an environment variable that forces stdout inheritance.
+                        // This is useful when we want to bypass output capturing (e.g. for build steps)
+                        // and stream directly to the terminal, even if a capture stream was provided.
+                        let inherit_override = state
+                            .envs
+                            .get("OXDOCK_INHERIT_STDOUT")
+                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+
+                        if std::env::var("OXBOOK_DEBUG").is_ok() {
+                            eprintln!("DEBUG: step RUN {} inherit_override={}", rendered, inherit_override);
+                        }
+
+                        let stdout_mode = if inherit_override {
+                            CommandStdout::Inherit
+                        } else {
+                            out.clone()
+                                .map(CommandStdout::Stream)
+                                .unwrap_or(CommandStdout::Inherit)
+                        };
+
                         let mut options = CommandOptions::foreground();
                         options.stdin = step_stdin;
                         options.stdout = stdout_mode;

@@ -9,7 +9,7 @@ use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::{Cursor, IsTerminal, Stdout};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,6 +21,8 @@ const OUTPUT_END: &str = "<!-- oxbook-output:end -->";
 const OUTPUT_META_PREFIX: &str = "<!-- oxbook-output:meta";
 const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
 const SHORT_HASH_LEN: usize = 32;
+// If set to "0" disables terminal streaming; otherwise auto-on when stdout is a TTY.
+const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
 
 #[derive(Debug)]
 struct FenceBlock {
@@ -1074,6 +1076,33 @@ fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
     }
 }
 
+struct EnvTee {
+    buf: Arc<Mutex<Vec<u8>>>,
+    term: Option<Stdout>,
+}
+
+impl std::io::Write for EnvTee {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut b) = self.buf.lock() {
+            let _ = std::io::Write::write_all(&mut *b, buf);
+        }
+        if let Some(term) = &mut self.term {
+            let _ = std::io::Write::write_all(term, buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Ok(mut b) = self.buf.lock() {
+            let _ = std::io::Write::flush(&mut *b);
+        }
+        if let Some(term) = &mut self.term {
+            let _ = std::io::Write::flush(term);
+        }
+        Ok(())
+    }
+}
+
 fn env_hash_for_oxfile(
     resolver: &PathResolver,
     path: &GuardedPath,
@@ -1107,12 +1136,29 @@ fn build_env_from_oxfile(
     let temp_root = tempdir.as_guarded_path().clone();
     let build_context = resolver.root().clone();
     let output_buf = Arc::new(Mutex::new(Vec::new()));
+
+    // Stream build/compile chatter to the user's terminal when available, while still
+    // capturing for diagnostics. Allow opt-out via OXBOOK_STREAM_STDOUT=0.
+    let stream_build_to_terminal = match std::env::var_os(STREAM_STDOUT_ENV) {
+        Some(val) => val != "0",
+        None => std::io::stdout().is_terminal(),
+    };
+
+    let build_stdout: SharedOutput = if stream_build_to_terminal {
+        Arc::new(Mutex::new(EnvTee {
+            buf: output_buf.clone(),
+            term: Some(std::io::stdout()),
+        }))
+    } else {
+        output_buf.clone()
+    };
+
     let final_cwd = run_steps_with_context_result(
         &temp_root,
         &build_context,
         &steps,
         None,
-        Some(output_buf.clone()),
+        Some(build_stdout),
     )
     .with_context(|| format!("run {}", path.display()))?;
 
@@ -1285,7 +1331,21 @@ fn run_in_env_with_resolver(
                 Some(s) => (s, None),
                 None => {
                     let buf = Arc::new(Mutex::new(Vec::new()));
-                    let out: SharedOutput = buf.clone();
+
+                    // Check if we should stream to terminal
+                    let stream_to_terminal = match std::env::var_os(STREAM_STDOUT_ENV) {
+                        Some(val) => val != "0",
+                        None => std::io::stdout().is_terminal(),
+                    };
+
+                    let out: SharedOutput = if stream_to_terminal {
+                        Arc::new(Mutex::new(EnvTee {
+                            buf: buf.clone(),
+                            term: Some(std::io::stdout()),
+                        }))
+                    } else {
+                        buf.clone()
+                    };
                     (out, Some(buf))
                 }
             };
