@@ -799,7 +799,7 @@ mod tests {
         );
         assert_eq!(
             include_paths[0],
-            oxdock_fs::embed_path(&sample_file),
+            oxdock_fs::normalized_path(&sample_file),
             "embed should reference files under out_dir"
         );
     }
@@ -886,7 +886,7 @@ mod tests {
         assert!(
             include_paths
                 .iter()
-                .any(|p| p == &oxdock_fs::embed_path(&copied_guard)),
+                .any(|p| p == &oxdock_fs::normalized_path(&copied_guard)),
             "embed should include copied.txt under out_dir"
         );
         let contents = resolver

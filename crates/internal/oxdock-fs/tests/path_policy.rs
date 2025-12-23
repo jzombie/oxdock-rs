@@ -1,7 +1,7 @@
 #[allow(clippy::disallowed_types)]
 use oxdock_fs::UnguardedPath;
 use oxdock_fs::{
-    GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, embed_path,
+    GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, normalized_path,
     to_forward_slashes,
 };
 use std::env;
@@ -76,7 +76,7 @@ fn forward_slash_helpers_normalize_paths() {
     let tempdir = GuardedPath::tempdir().expect("tempdir");
     let root = tempdir.as_guarded_path().clone();
     let child = root.join("a/b").expect("join");
-    let embedded = embed_path(&child);
+    let embedded = normalized_path(&child);
     assert!(!embedded.contains('\\'));
     assert_eq!(to_forward_slashes("a\\b"), "a/b");
 }

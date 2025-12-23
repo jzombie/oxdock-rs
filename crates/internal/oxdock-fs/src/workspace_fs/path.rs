@@ -425,14 +425,21 @@ pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
 
-/// Convert a guarded path into a string with forward slashes, suitable for
-/// use with embedded-asset tooling or other helpers that require normalized paths.
-/// This strips Windows verbatim prefixes and ensures separators are `/`.
+/// Convert a guarded path into a stable, forward-slash string suitable for
+/// serialization, embedding, logging, or CLI output. This strips Windows
+/// verbatim prefixes and ensures separators are `/`.
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-pub fn embed_path(path: &GuardedPath) -> String {
+pub fn normalized_path(path: &GuardedPath) -> String {
     let cmd = command_path(path);
     let s = cmd.to_string_lossy();
     to_forward_slashes(&s)
+}
+
+/// Backward-compatible alias for `normalized_path`. Prefer `normalized_path`
+/// in new code to make intent clearer.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+pub fn embed_path(path: &GuardedPath) -> String {
+    normalized_path(path)
 }
 
 #[cfg(not(miri))]
@@ -619,10 +626,10 @@ mod tests {
     }
 
     #[test]
-    fn embed_path_normalizes_backslashes() {
+    fn normalized_path_normalizes_backslashes() {
         let guard = GuardedPath::new_from_str("C:\\sandbox", "C:\\sandbox\\foo\\bar")
             .expect("guarded path");
-        let normalized = embed_path(&guard);
+        let normalized = normalized_path(&guard);
         assert!(!normalized.contains('\\'));
         assert!(normalized.contains("sandbox"));
         assert!(normalized.contains("foo"));

@@ -1,4 +1,4 @@
-use oxdock_fs::{GuardedPath, embed_path};
+use oxdock_fs::{GuardedPath, normalized_path};
 use std::env;
 use std::io::Write;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -15,7 +15,7 @@ fn maybe_run_as_child() {
 
 fn run_child_main(mode: &str) -> ! {
     let tempdir = GuardedPath::tempdir().expect("tempdir");
-    println!("PATH:{}", embed_path(tempdir.as_guarded_path()));
+    println!("PATH:{}", normalized_path(tempdir.as_guarded_path()));
     let _ = std::io::stdout().flush();
     drop(tempdir);
 

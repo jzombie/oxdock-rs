@@ -99,7 +99,7 @@ pub enum EntryKind {
 
 pub mod path;
 pub use path::{GuardedPath, GuardedTempDir};
-pub use path::{command_path, embed_path, to_forward_slashes};
+pub use path::{command_path, embed_path, normalized_path, to_forward_slashes};
 
 #[allow(clippy::disallowed_types)]
 pub use path::UnguardedPath;
