@@ -754,7 +754,10 @@ fn read_cannot_escape_root() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    miri,
+    ignore = "creates host symlinks; unsupported under Miri isolation"
+)]
 fn read_symlink_escape_is_blocked() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
@@ -800,7 +803,10 @@ fn read_symlink_escape_is_blocked() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    miri,
+    ignore = "creates host symlinks and tempdirs; blocked under Miri isolation"
+)]
 fn workdir_accepts_symlink_into_workspace_root() {
     let temp_workspace = GuardedPath::tempdir().unwrap();
     let workspace_root = guard_root(&temp_workspace);

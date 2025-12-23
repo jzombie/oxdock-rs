@@ -250,6 +250,29 @@ mod tests {
     }
 
     #[test]
+    fn run_args_single_quoted_unwraps() {
+        let script = "RUN \"echo hi\"";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1, "expected single step");
+        match &steps[0].kind {
+            StepKind::Run(cmd) => assert_eq!(cmd, "echo hi"),
+            other => panic!("expected RUN command, saw {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_args_preserve_quotes_for_problematic_tokens() {
+        let script = "RUN echo \"a; b\"";
+        let steps = parse_script(script).expect("parse ok");
+        match &steps[0].kind {
+            StepKind::Run(cmd) => {
+                assert_eq!(cmd, "echo \"a; b\"");
+            }
+            other => panic!("expected RUN command, saw {:?}", other),
+        }
+    }
+
+    #[test]
     #[cfg(feature = "proc-macro-api")]
     fn string_and_braced_scripts_produce_identical_ast() {
         let mut cases = Vec::new();

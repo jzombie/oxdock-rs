@@ -705,4 +705,29 @@ mod tests {
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(base);
     }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn cleanup_skips_live_pid_marked_dir() {
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let base = std::env::temp_dir().join("oxdock-cleanup-live-test");
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        std::fs::create_dir_all(&base).expect("create base");
+
+        let mut builder = Builder::new();
+        builder.prefix(OXDOCK_TEMP_PREFIX);
+        #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+        let tempdir = builder.tempdir_in(&base).expect("tempdir_in");
+        let guard = GuardedPath::new_root(tempdir.path()).expect("guard");
+        write_temp_marker(&guard).expect("marker");
+        let _lock = write_temp_lock(&guard).expect("lock");
+        #[allow(deprecated)]
+        let leaked = tempdir.into_path();
+
+        cleanup_marked_tempdirs_in(base.clone()).expect("cleanup");
+        assert!(leaked.exists(), "live pid should prevent removal");
+
+        let _ = std::fs::remove_dir_all(&leaked);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
