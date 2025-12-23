@@ -707,7 +707,10 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
-    #[cfg(not(miri))]
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
     #[test]
     fn cleanup_skips_live_pid_marked_dir() {
         let base = std::env::temp_dir().join("oxdock-cleanup-live-test");

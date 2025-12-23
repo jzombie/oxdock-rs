@@ -116,36 +116,48 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
-        safe_string().prop_map(StepKind::Workdir),
+        safe_string().prop_map(|s| StepKind::Workdir(s.into())),
         prop_oneof![
             Just(WorkspaceTarget::Snapshot),
             Just(WorkspaceTarget::Local)
         ]
         .prop_map(StepKind::Workspace),
-        (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env { key, value }),
-        safe_msg().prop_map(StepKind::Run),
-        safe_msg().prop_map(StepKind::Echo),
-        safe_msg().prop_map(StepKind::RunBg),
-        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy { from, to }),
-        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Symlink { from, to }),
-        safe_string().prop_map(StepKind::Mkdir),
-        prop::option::of(safe_string()).prop_map(StepKind::Ls),
+        (safe_string(), safe_string()).prop_map(|(key, value)| StepKind::Env {
+            key,
+            value: value.into()
+        }),
+        safe_msg().prop_map(|s| StepKind::Run(s.into())),
+        safe_msg().prop_map(|s| StepKind::Echo(s.into())),
+        safe_msg().prop_map(|s| StepKind::RunBg(s.into())),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy {
+            from: from.into(),
+            to: to.into()
+        }),
+        (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Symlink {
+            from: from.into(),
+            to: to.into()
+        }),
+        safe_string().prop_map(|s| StepKind::Mkdir(s.into())),
+        prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
-        safe_string().prop_map(StepKind::Cat),
-        (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write { path, contents }),
+        prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
+        (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
+            path: path.into(),
+            contents: contents.into()
+        }),
         (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
-            path,
-            cmd: Box::new(StepKind::Run(cmd)),
+            path: path.into(),
+            cmd: Box::new(StepKind::Run(cmd.into())),
         }),
         (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
             StepKind::CopyGit {
-                rev,
-                from,
-                to,
+                rev: rev.into(),
+                from: from.into(),
+                to: to.into(),
                 include_dirty: false,
             }
         }),
-        safe_string().prop_map(|path| StepKind::HashSha256 { path }),
+        safe_string().prop_map(|path| StepKind::HashSha256 { path: path.into() }),
         (0i32..255).prop_map(StepKind::Exit),
     ]
 }

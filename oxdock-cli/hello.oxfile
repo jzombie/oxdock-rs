@@ -37,7 +37,7 @@ ECHO "(previous-line) Foo is set"
 [env:FOO,platform==linux|platform==mac] ECHO "Foo on linux, or any mac"
 
 # Show that ECHO can print the ENV we set earlier (cross-platform)
-ECHO $FOO
+ECHO {{ env:FOO }}
 
 # --- Notes ---
 # - Guards in `[...]` support comma-separated AND and `|` separated OR alternatives.

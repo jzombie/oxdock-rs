@@ -86,72 +86,41 @@ where
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '$' {
+        if c == '{' {
             if let Some(&'{') = chars.peek() {
-                chars.next();
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    chars.next();
-                    if ch == '}' {
+                chars.next(); // consume second '{'
+                let mut content = String::new();
+                let mut closed = false;
+                // Look ahead for closing }}
+                let mut inner_chars = chars.clone();
+                while let Some(ch) = inner_chars.next() {
+                    if ch == '}'
+                        && let Some(&'}') = inner_chars.peek()
+                    {
+                        closed = true;
                         break;
                     }
-                    name.push(ch);
+                    content.push(ch);
                 }
-                if !name.is_empty() {
-                    out.push_str(&lookup(&name).unwrap_or_default());
-                }
-            } else {
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_ascii_alphanumeric() || ch == '_' {
-                        name.push(ch);
+
+                if closed {
+                    // Advance main iterator past content and closing braces
+                    for _ in 0..content.len() {
                         chars.next();
-                    } else {
-                        break;
                     }
-                }
-                if name.is_empty() {
-                    out.push('$');
+                    chars.next(); // first }
+                    chars.next(); // second }
+
+                    let key = content.trim();
+                    if !key.is_empty() {
+                        out.push_str(&lookup(key).unwrap_or_default());
+                    }
                 } else {
-                    out.push_str(&lookup(&name).unwrap_or_default());
+                    out.push('{');
+                    out.push('{');
                 }
-            }
-        } else if c == '{' {
-            let mut name = String::new();
-            for ch in chars.by_ref() {
-                if ch == '}' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if !name.is_empty() {
-                out.push_str(&lookup(&name).unwrap_or_default());
-            }
-        } else if c == '%' {
-            let lookahead = chars.clone();
-            let mut has_end = false;
-            for ch in lookahead {
-                if ch == '%' {
-                    has_end = true;
-                    break;
-                }
-            }
-            if !has_end {
-                out.push('%');
-                continue;
-            }
-            let mut name = String::new();
-            while let Some(&ch) = chars.peek() {
-                chars.next();
-                if ch == '%' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if name.is_empty() {
-                out.push('%');
             } else {
-                out.push_str(&lookup(&name).unwrap_or_default());
+                out.push('{');
             }
         } else {
             out.push(c);
@@ -162,25 +131,33 @@ where
 
 pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> String {
     expand_with_lookup(input, |name| {
-        script_envs
-            .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
+        if let Some(key) = name.strip_prefix("env:") {
+            script_envs
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+        } else {
+            None
+        }
     })
 }
 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
-        if name == "CARGO_TARGET_DIR" {
-            return Some(ctx.cargo_target_dir().display().to_string());
+        if let Some(key) = name.strip_prefix("env:") {
+            if key == "CARGO_TARGET_DIR" {
+                return Some(ctx.cargo_target_dir().display().to_string());
+            }
+            if key == "OXBOOK_SNIPPET_PATH" || key == "OXBOOK_SNIPPET_DIR" {
+                return ctx.envs().get(key).cloned();
+            }
+            ctx.envs()
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+        } else {
+            None
         }
-        if name == "OXBOOK_SNIPPET_PATH" || name == "OXBOOK_SNIPPET_DIR" {
-            return ctx.envs().get(name).cloned();
-        }
-        ctx.envs()
-            .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
     })
 }
 
@@ -704,7 +681,76 @@ fn extract_body(cmd: &str, prefix: &str) -> String {
 
 #[cfg(miri)]
 fn expand_env(input: &str, ctx: &CommandContext) -> String {
-    expand_with_lookup(input, |name| Some(env_lookup(name, ctx)))
+    // First expand any double-brace names ({{ ... }}), then expand simple
+    // shell-style `$VAR` and `${VAR}` occurrences so the synthetic Miri
+    // process emulation behaves like a real shell with respect to env vars.
+    let first = expand_with_lookup(input, |name| Some(env_lookup(name, ctx)));
+
+    let mut out = String::with_capacity(first.len());
+    let mut chars = first.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            match chars.peek() {
+                Some('$') => {
+                    // preserve literal $$
+                    out.push('$');
+                    chars.next();
+                }
+                Some('{') => {
+                    // ${VAR}
+                    chars.next(); // consume '{'
+                    let mut name = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '}' {
+                            break;
+                        }
+                        name.push(ch);
+                    }
+                    let val = if name == "CARGO_TARGET_DIR" {
+                        ctx.cargo_target_dir().display().to_string()
+                    } else {
+                        ctx.envs()
+                            .get(&name)
+                            .cloned()
+                            .or_else(|| std::env::var(&name).ok())
+                            .unwrap_or_default()
+                    };
+                    out.push_str(&val);
+                }
+                Some(next) if next.is_alphanumeric() || *next == '_' => {
+                    // $VAR
+                    let mut name = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            name.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let val = if name == "CARGO_TARGET_DIR" {
+                        ctx.cargo_target_dir().display().to_string()
+                    } else {
+                        ctx.envs()
+                            .get(&name)
+                            .cloned()
+                            .or_else(|| std::env::var(&name).ok())
+                            .unwrap_or_default()
+                    };
+                    out.push_str(&val);
+                }
+                _ => {
+                    // Not a recognized var form; keep literal '$'
+                    out.push('$');
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    out
 }
 
 #[cfg(miri)]
@@ -786,6 +832,7 @@ fn spawn_child_with_streams(
     }
     if stdout.is_some() {
         cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
     }
 
     let mut child = cmd
@@ -804,27 +851,50 @@ fn spawn_child_with_streams(
         io_threads.push(thread);
     }
 
-    if let Some(stdout_stream) = stdout
-        && let Some(mut child_stdout) = child.stdout.take()
-    {
-        let thread = std::thread::spawn(move || {
-            let mut buf = [0u8; 1024];
-            loop {
-                match std::io::Read::read(&mut child_stdout, &mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if let Ok(mut guard) = stdout_stream.lock() {
-                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
-                                break;
+    if let Some(stdout_stream) = stdout {
+        if let Some(mut child_stdout) = child.stdout.take() {
+            let stream_clone = stdout_stream.clone();
+            let thread = std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                loop {
+                    match std::io::Read::read(&mut child_stdout, &mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Ok(mut guard) = stream_clone.lock() {
+                                if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                    break;
+                                }
+                                let _ = std::io::Write::flush(&mut *guard);
                             }
-                            let _ = std::io::Write::flush(&mut *guard);
                         }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
-            }
-        });
-        io_threads.push(thread);
+            });
+            io_threads.push(thread);
+        }
+
+        if let Some(mut child_stderr) = child.stderr.take() {
+            let stream_clone = stdout_stream.clone();
+            let thread = std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                loop {
+                    match std::io::Read::read(&mut child_stderr, &mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Ok(mut guard) = stream_clone.lock() {
+                                if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                    break;
+                                }
+                                let _ = std::io::Write::flush(&mut *guard);
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            io_threads.push(thread);
+        }
     }
 
     Ok(ChildHandle { child, io_threads })
@@ -1069,11 +1139,22 @@ mod tests {
         unsafe {
             std::env::set_var("FOO", "from-env");
         }
-        let rendered = expand_script_env("${FOO}:{ONLY}:${MISSING}", &script_envs);
+        let rendered = expand_script_env(
+            "{{ env:FOO }}:{{ env:ONLY }}:{{ env:MISSING }}",
+            &script_envs,
+        );
         assert_eq!(rendered, "from-script:only:");
         unsafe {
             std::env::remove_var("FOO");
         }
+    }
+
+    #[test]
+    fn expand_script_env_supports_colon_separator() {
+        let mut script_envs = HashMap::new();
+        script_envs.insert("FOO".into(), "val".into());
+        let rendered = expand_script_env("{{ env:FOO }}", &script_envs);
+        assert_eq!(rendered, "val");
     }
 
     #[test]
@@ -1089,12 +1170,23 @@ mod tests {
         }
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
-        let rendered =
-            expand_command_env("${FOO}-{PCT}-{HOST_ONLY}-%FOO%-{CARGO_TARGET_DIR}-$$", &ctx);
 
+        // Valid syntax: {{ env:VAR }}
+        let rendered = expand_command_env(
+            "{{ env:FOO }}-{{ env:PCT }}-{{ env:HOST_ONLY }}-{{ env:CARGO_TARGET_DIR }}",
+            &ctx,
+        );
         let target_dir = guard.display();
-        let expected = format!("bar-percent-host-bar-{target_dir}-$$");
+        let expected = format!("bar-percent-host-{}", target_dir);
         assert_eq!(rendered, expected);
+
+        // Invalid/Legacy syntax: treated as literal text
+        // %FOO% -> %FOO%
+        // {CARGO_TARGET_DIR} -> {CARGO_TARGET_DIR}
+        // $$ -> $$
+        let input_literal = "%FOO%-{CARGO_TARGET_DIR}-$$";
+        let rendered_literal = expand_command_env(input_literal, &ctx);
+        assert_eq!(rendered_literal, input_literal);
 
         unsafe {
             std::env::remove_var("HOST_ONLY");
