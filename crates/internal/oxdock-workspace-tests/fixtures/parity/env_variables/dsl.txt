@@ -1,0 +1,3 @@
+CAT {{ oxbook.env.FOO }}
+
+CAT "{{ oxbook.env.BAR }}"

@@ -360,7 +360,7 @@ fn capture_echo_interpolates_env() {
             guards: Vec::new(),
             kind: StepKind::CaptureToFile {
                 path: "echo.txt".into(),
-                cmd: parse_one("ECHO value=${FOO}"),
+                cmd: parse_one("ECHO value={{ oxdock.env.FOO }}"),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -670,7 +670,7 @@ fn env_exposes_git_commit_hash() {
         .expect("git rev-parse failed");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
-    let steps = oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO ${WORKSPACE_GIT_COMMIT}")
+    let steps = oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO {{ oxdock.env.WORKSPACE_GIT_COMMIT }}")
         .unwrap();
     run_steps(&repo, &steps).unwrap();
 

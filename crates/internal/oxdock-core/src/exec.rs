@@ -948,7 +948,7 @@ mod tests {
             },
             Step {
                 guards: Vec::new(),
-                kind: StepKind::Run("echo ${FOO}".into()),
+                kind: StepKind::Run("echo {{ oxdock.env.FOO }}".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
@@ -1220,7 +1220,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Env {
                     key: "BAZ".into(),
-                    value: "${FOO}-baz".into(),
+                    value: "{{ oxdock.env.FOO }}-baz".into(),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1229,7 +1229,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "out.txt".into(),
-                    contents: "val ${BAZ}".into(),
+                    contents: "val {{ oxdock.env.BAZ }}".into(),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1274,7 +1274,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Env {
                     key: "OUT_FILE".into(),
-                    value: "cat-${SNIPPET}".into(),
+                    value: "cat-{{ oxdock.env.SNIPPET }}".into(),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1282,8 +1282,8 @@ mod tests {
             Step {
                 guards: Vec::new(),
                 kind: StepKind::CaptureToFile {
-                    path: "${OUT_FILE}".into(),
-                    cmd: Box::new(StepKind::Cat(Some("${SNIPPET}".into()))),
+                    path: "{{ oxdock.env.OUT_FILE }}".into(),
+                    cmd: Box::new(StepKind::Cat(Some("{{ oxdock.env.SNIPPET }}".into()))),
                 },
                 scope_enter: 0,
                 scope_exit: 0,

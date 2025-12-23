@@ -86,72 +86,41 @@ where
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '$' {
+        if c == '{' {
             if let Some(&'{') = chars.peek() {
-                chars.next();
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    chars.next();
+                chars.next(); // consume second '{'
+                let mut content = String::new();
+                let mut closed = false;
+                // Look ahead for closing }}
+                let mut inner_chars = chars.clone();
+                while let Some(ch) = inner_chars.next() {
                     if ch == '}' {
-                        break;
+                        if let Some(&'}') = inner_chars.peek() {
+                            closed = true;
+                            break;
+                        }
                     }
-                    name.push(ch);
+                    content.push(ch);
                 }
-                if !name.is_empty() {
-                    out.push_str(&lookup(&name).unwrap_or_default());
-                }
-            } else {
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_ascii_alphanumeric() || ch == '_' {
-                        name.push(ch);
+
+                if closed {
+                    // Advance main iterator past content and closing braces
+                    for _ in 0..content.len() {
                         chars.next();
-                    } else {
-                        break;
                     }
-                }
-                if name.is_empty() {
-                    out.push('$');
+                    chars.next(); // first }
+                    chars.next(); // second }
+                    
+                    let key = content.trim();
+                    if !key.is_empty() {
+                         out.push_str(&lookup(key).unwrap_or_default());
+                    }
                 } else {
-                    out.push_str(&lookup(&name).unwrap_or_default());
+                    out.push('{');
+                    out.push('{');
                 }
-            }
-        } else if c == '{' {
-            let mut name = String::new();
-            for ch in chars.by_ref() {
-                if ch == '}' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if !name.is_empty() {
-                out.push_str(&lookup(&name).unwrap_or_default());
-            }
-        } else if c == '%' {
-            let lookahead = chars.clone();
-            let mut has_end = false;
-            for ch in lookahead {
-                if ch == '%' {
-                    has_end = true;
-                    break;
-                }
-            }
-            if !has_end {
-                out.push('%');
-                continue;
-            }
-            let mut name = String::new();
-            while let Some(&ch) = chars.peek() {
-                chars.next();
-                if ch == '%' {
-                    break;
-                }
-                name.push(ch);
-            }
-            if name.is_empty() {
-                out.push('%');
             } else {
-                out.push_str(&lookup(&name).unwrap_or_default());
+                out.push('{');
             }
         } else {
             out.push(c);
@@ -162,25 +131,33 @@ where
 
 pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> String {
     expand_with_lookup(input, |name| {
-        script_envs
-            .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
+        if let Some(key) = name.strip_prefix("oxdock.env.") {
+            script_envs
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+        } else {
+            None
+        }
     })
 }
 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
-        if name == "CARGO_TARGET_DIR" {
-            return Some(ctx.cargo_target_dir().display().to_string());
+        if let Some(key) = name.strip_prefix("oxdock.env.") {
+            if key == "CARGO_TARGET_DIR" {
+                return Some(ctx.cargo_target_dir().display().to_string());
+            }
+            if key == "OXBOOK_SNIPPET_PATH" || key == "OXBOOK_SNIPPET_DIR" {
+                return ctx.envs().get(key).cloned();
+            }
+            ctx.envs()
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+        } else {
+            None
         }
-        if name == "OXBOOK_SNIPPET_PATH" || name == "OXBOOK_SNIPPET_DIR" {
-            return ctx.envs().get(name).cloned();
-        }
-        ctx.envs()
-            .get(name)
-            .cloned()
-            .or_else(|| std::env::var(name).ok())
     })
 }
 
@@ -1093,7 +1070,7 @@ mod tests {
         unsafe {
             std::env::set_var("FOO", "from-env");
         }
-        let rendered = expand_script_env("${FOO}:{ONLY}:${MISSING}", &script_envs);
+        let rendered = expand_script_env("{{ oxdock.env.FOO }}:{{ oxdock.env.ONLY }}:{{ oxdock.env.MISSING }}", &script_envs);
         assert_eq!(rendered, "from-script:only:");
         unsafe {
             std::env::remove_var("FOO");
@@ -1113,12 +1090,23 @@ mod tests {
         }
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
-        let rendered =
-            expand_command_env("${FOO}-{PCT}-{HOST_ONLY}-%FOO%-{CARGO_TARGET_DIR}-$$", &ctx);
 
+        // Valid syntax: {{ oxdock.env.VAR }}
+        let rendered = expand_command_env(
+            "{{ oxdock.env.FOO }}-{{ oxdock.env.PCT }}-{{ oxdock.env.HOST_ONLY }}-{{ oxdock.env.CARGO_TARGET_DIR }}",
+            &ctx,
+        );
         let target_dir = guard.display();
-        let expected = format!("bar-percent-host-bar-{target_dir}-$$");
+        let expected = format!("bar-percent-host-{}", target_dir);
         assert_eq!(rendered, expected);
+
+        // Invalid/Legacy syntax: treated as literal text
+        // %FOO% -> %FOO%
+        // {CARGO_TARGET_DIR} -> {CARGO_TARGET_DIR}
+        // $$ -> $$
+        let input_literal = "%FOO%-{CARGO_TARGET_DIR}-$$";
+        let rendered_literal = expand_command_env(input_literal, &ctx);
+        assert_eq!(rendered_literal, input_literal);
 
         unsafe {
             std::env::remove_var("HOST_ONLY");
