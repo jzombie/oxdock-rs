@@ -93,9 +93,15 @@ fn script_runs_copy_and_symlink() {
             assert!(linked.as_path().exists());
         } else {
             // Host cannot create symlinks — we expect an explicit error and no copy fallback.
-            assert!(res.is_err(), "SYMLINK should error on platforms without symlink privilege");
+            assert!(
+                res.is_err(),
+                "SYMLINK should error on platforms without symlink privilege"
+            );
             let linked_copy = root.join("server/dist/test.txt").unwrap();
-            assert!(!linked_copy.as_path().exists(), "No copy fallback should occur");
+            assert!(
+                !linked_copy.as_path().exists(),
+                "No copy fallback should occur"
+            );
         }
     }
 }

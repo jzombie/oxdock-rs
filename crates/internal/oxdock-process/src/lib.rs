@@ -6,8 +6,8 @@ mod shell;
 
 use anyhow::{Context, Result, anyhow, bail};
 pub use builtin_env::BuiltinEnv;
-pub use oxdock_test_utils::EnvGuard;
 use oxdock_fs::{GuardedPath, PolicyPath};
+pub use oxdock_test_utils::EnvGuard;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
@@ -1128,6 +1128,7 @@ fn simulate_cargo(args: &[String]) -> Result<CommandOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxdock_test_utils::EnvGuard;
     use std::collections::HashMap;
 
     #[test]
@@ -1135,19 +1136,12 @@ mod tests {
         let mut script_envs = HashMap::new();
         script_envs.insert("FOO".into(), "from-script".into());
         script_envs.insert("ONLY".into(), "only".into());
-        // SAFETY: environment mutation is treated as unsafe in this workspace; tests serialize
-        // their own changes.
-        unsafe {
-            std::env::set_var("FOO", "from-env");
-        }
+        let _env_guard = EnvGuard::set("FOO", "from-env");
         let rendered = expand_script_env(
             "{{ env:FOO }}:{{ env:ONLY }}:{{ env:MISSING }}",
             &script_envs,
         );
         assert_eq!(rendered, "from-script:only:");
-        unsafe {
-            std::env::remove_var("FOO");
-        }
     }
 
     #[test]
@@ -1166,9 +1160,7 @@ mod tests {
         let mut envs = HashMap::new();
         envs.insert("FOO".into(), "bar".into());
         envs.insert("PCT".into(), "percent".into());
-        unsafe {
-            std::env::set_var("HOST_ONLY", "host");
-        }
+        let _env_guard = EnvGuard::set("HOST_ONLY", "host");
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
 
@@ -1188,9 +1180,5 @@ mod tests {
         let input_literal = "%FOO%-{CARGO_TARGET_DIR}-$$";
         let rendered_literal = expand_command_env(input_literal, &ctx);
         assert_eq!(rendered_literal, input_literal);
-
-        unsafe {
-            std::env::remove_var("HOST_ONLY");
-        }
     }
 }

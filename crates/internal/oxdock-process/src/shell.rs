@@ -81,7 +81,6 @@ mod tests {
     // For Windows, fixing COMSPEC override test race condition
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-
     #[test]
     fn shell_program_prefers_env_override() {
         let _lock = ENV_LOCK.lock().expect("env lock");

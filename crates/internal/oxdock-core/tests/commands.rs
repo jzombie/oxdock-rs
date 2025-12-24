@@ -228,7 +228,11 @@ fn commands_behave_cross_platform() {
         res.unwrap();
     } else {
         let err = res.unwrap_err();
-        assert!(err.to_string().contains("SYMLINK"), "expected SYMLINK error, got {}", err);
+        assert!(
+            err.to_string().contains("SYMLINK"),
+            "expected SYMLINK error, got {}",
+            err
+        );
         // Host cannot create symlinks; remaining assertions assume successful symlink creation,
         // so skip the rest of this test in that case.
         return;
@@ -896,11 +900,16 @@ fn workdir_accepts_symlink_into_workspace_root() {
     } else {
         // Host cannot create symlinks; ensure run reports a SYMLINK error and no fallback copy occurs.
         let err = run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap_err();
-        assert!(err.to_string().contains("SYMLINK"), "expected SYMLINK error, got {}", err);
-        let workspace_resolver =
-            PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
+        assert!(
+            err.to_string().contains("SYMLINK"),
+            "expected SYMLINK error, got {}",
+            err
+        );
         let seen_path = workspace_root.join("client/seen.txt").unwrap();
-        assert!(!seen_path.as_path().exists(), "No copy fallback should occur");
+        assert!(
+            !seen_path.as_path().exists(),
+            "No copy fallback should occur"
+        );
     }
 }
 

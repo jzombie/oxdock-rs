@@ -366,6 +366,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "oxdock-test-utils",
  "sha2",
 ]
 

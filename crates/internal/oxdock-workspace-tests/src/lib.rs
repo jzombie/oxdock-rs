@@ -295,13 +295,12 @@ pub mod harness {
             let needs_symlink = case.name.contains("symlink")
                 || case.name == "copy_broken_symlink"
                 || case.name == "copy_complex";
-            if needs_symlink {
-                if let Some(t) = &temp_target {
-                    if !oxdock_fs::test_utils::can_create_symlinks(t) {
-                        eprintln!("skipping fixture case {}::{}: symlink unsupported on host", spec.name, case.name);
-                        return Ok(());
-                    }
-                }
+            if needs_symlink && !oxdock_fs::test_utils::can_create_symlinks(target) {
+                eprintln!(
+                    "skipping fixture case {}::{}: symlink unsupported on host",
+                    spec.name, case.name
+                );
+                return Ok(());
             }
         }
         cmd.args(&case.args);

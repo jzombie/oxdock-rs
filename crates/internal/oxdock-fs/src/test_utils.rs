@@ -6,6 +6,7 @@ use crate::GuardedPath;
 pub fn can_create_symlinks(target: &GuardedPath) -> bool {
     #[cfg(unix)]
     {
+        let _ = target;
         true
     }
 
@@ -24,6 +25,7 @@ pub fn can_create_symlinks(target: &GuardedPath) -> bool {
 
     #[cfg(not(any(unix, windows)))]
     {
+        let _ = target;
         false
     }
 }
