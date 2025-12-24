@@ -193,6 +193,25 @@ fn walk(
                                     &mut inner_span_end,
                                 )?;
                                 push_fragment(line, &close.to_string(), false);
+                            } else if *last_was_command {
+                                // Keep the opening brace attached to commands that expect an inner block
+                                // (e.g., WITH_IO block form), then break to a new line for the body.
+                                push_fragment(line, &open.to_string(), gap_space);
+                                finalize_line(lines, line, capture_has_inner);
+                                *last_was_command = false;
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    false,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                finalize_line(lines, line, capture_has_inner);
+                                push_fragment(line, &close.to_string(), false);
+                                finalize_line(lines, line, capture_has_inner);
                             } else {
                                 finalize_line(lines, line, capture_has_inner);
                                 line.push(open);
@@ -215,22 +234,42 @@ fn walk(
                             }
                         }
                         Delimiter::Bracket => {
-                            finalize_line(lines, line, capture_has_inner);
-                            push_fragment(line, &open.to_string(), gap_space);
-                            finalize_line(lines, line, capture_has_inner);
-                            let mut inner_span_end = None;
-                            walk(
-                                g.stream(),
-                                line,
-                                lines,
-                                last_was_command,
-                                false,
-                                capture_has_inner,
-                                &mut inner_span_end,
-                            )?;
-                            finalize_line(lines, line, capture_has_inner);
-                            push_fragment(line, &close.to_string(), false);
-                            finalize_line(lines, line, capture_has_inner);
+                            if *last_was_command {
+                                // Keep bracketed flags (e.g., WITH_IO [...] or guard lists) on the same line
+                                // when they immediately follow a command token. This avoids rendering a
+                                // newline between the command and its bracket payload, which the string DSL
+                                // parser would reject.
+                                push_fragment(line, &open.to_string(), gap_space);
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    false,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                push_fragment(line, &close.to_string(), false);
+                                *last_was_command = true;
+                            } else {
+                                finalize_line(lines, line, capture_has_inner);
+                                push_fragment(line, &open.to_string(), gap_space);
+                                finalize_line(lines, line, capture_has_inner);
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    false,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                finalize_line(lines, line, capture_has_inner);
+                                push_fragment(line, &close.to_string(), false);
+                                finalize_line(lines, line, capture_has_inner);
+                            }
                         }
                         _ => {
                             push_fragment(line, &open.to_string(), *last_was_command || gap_space);
@@ -301,7 +340,8 @@ fn walk(
                 let line_requires_inner = line_expects_inner_command(trimmed);
                 let mut should_finalize = false;
                 if is_command && !trimmed_empty && !guard_prefix {
-                    should_finalize = !line_is_run_context(trimmed);
+                    let current_expects_inner = line_expects_inner_command(trimmed);
+                    should_finalize = !line_is_run_context(trimmed) && !current_expects_inner;
                 }
                 if is_command
                     && !trimmed_empty
