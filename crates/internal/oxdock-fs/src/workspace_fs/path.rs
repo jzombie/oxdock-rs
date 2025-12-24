@@ -671,7 +671,8 @@ mod tests {
             let root_display = root_buf.to_string_lossy();
 
             #[allow(clippy::disallowed_types)]
-            let path_with_backslashes = std::path::PathBuf::from(format!("{}\\foo\\bar", root_display));
+            let path_with_backslashes =
+                std::path::PathBuf::from(format!("{}\\foo\\bar", root_display));
             let guard = GuardedPath::from_guarded_parts(root_buf, path_with_backslashes);
             let normalized = normalized_path(&guard);
             assert!(!normalized.contains('\\'));

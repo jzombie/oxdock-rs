@@ -24,3 +24,37 @@ impl Drop for TestEnvGuard {
         }
     }
 }
+
+#[allow(clippy::disallowed_types)]
+use std::path::Path;
+
+/// Detect whether the current process can create filesystem symlinks under
+/// the provided target directory. Accepts a `&Path` to avoid depending on
+/// `oxdock-fs` and creating a circular crate dependency.
+#[allow(clippy::disallowed_types)]
+pub fn can_create_symlinks(target: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = target;
+        true
+    }
+
+    #[cfg(windows)]
+    {
+        use std::fs;
+        use std::os::windows::fs::symlink_dir;
+        let test_src = target.join("__oxdock_test_symlink_src");
+        let test_dst = target.join("__oxdock_test_symlink_dst");
+        let _ = fs::create_dir_all(&test_src);
+        let ok = symlink_dir(&test_src, &test_dst).is_ok();
+        let _ = fs::remove_dir_all(&test_dst);
+        let _ = fs::remove_dir_all(&test_src);
+        ok
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = target;
+        false
+    }
+}

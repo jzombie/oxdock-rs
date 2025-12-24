@@ -295,7 +295,7 @@ pub mod harness {
             let needs_symlink = case.name.contains("symlink")
                 || case.name == "copy_broken_symlink"
                 || case.name == "copy_complex";
-            if needs_symlink && !oxdock_fs::test_utils::can_create_symlinks(target) {
+            if needs_symlink && !oxdock_test_utils::can_create_symlinks(target.as_path()) {
                 eprintln!(
                     "skipping fixture case {}::{}: symlink unsupported on host",
                     spec.name, case.name
