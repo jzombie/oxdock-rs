@@ -1,5 +1,5 @@
 # ==========================================
-# Rust Interpreter Setup
+# Rust Runner Setup
 # ==========================================
 
 [!env:OXBOOK_SNIPPET_PATH] {
@@ -17,7 +17,7 @@
 
     WORKDIR /
 
-    COPY "{{ env:OXBOOK_INTERPRETER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
+    COPY "{{ env:OXBOOK_RUNNER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
     RUN CARGO_TARGET_DIR="target" cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 }
 

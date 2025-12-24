@@ -53,7 +53,7 @@ struct FenceInfo {
     params: HashMap<String, String>,
 }
 
-struct InterpreterSpec {
+struct RunnerSpec {
     language: String,
     command: Vec<String>,
     oxfile: Option<GuardedPath>,
@@ -61,7 +61,7 @@ struct InterpreterSpec {
 }
 
 #[allow(dead_code)]
-struct InterpreterEnv {
+struct RunnerEnv {
     root: GuardedPath,
     cwd: GuardedPath,
     env_hash: Option<String>,
@@ -69,8 +69,8 @@ struct InterpreterEnv {
 }
 
 #[derive(Default)]
-struct InterpreterCache {
-    envs: HashMap<String, InterpreterEnv>,
+struct RunnerCache {
+    envs: HashMap<String, RunnerEnv>,
 }
 
 fn main() -> Result<()> {
@@ -79,10 +79,10 @@ fn main() -> Result<()> {
     let resolver = PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
         .context("create workspace path resolver")?;
 
-    // Auto-register interpreters discovered in the workspace (files named
-    // `temp.interpreter.<lang>.oxfile`). This allows users to add interpreter
-    // oxfiles to the repository without recompiling or env vars.
-    scan_and_register_interpreters(&workspace_root);
+    // Auto-register runners discovered in the workspace (files named
+    // `temp.runner.<lang>.oxfile`). This allows users to add runner oxfiles to
+    // the repository without recompiling or env vars.
+    scan_and_register_runners(&workspace_root);
 
     // Prefer resolving the provided path relative to the process current working
     // directory (the terminal cwd) when that directory can be represented as a
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("resolve markdown path {}", target))?;
 
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
-    let mut cache = InterpreterCache::default();
+    let mut cache = RunnerCache::default();
 
     let initial_contents = read_stable_contents(&resolver, &watched)?;
     let rendered = render_shell_outputs(
@@ -164,7 +164,7 @@ fn run_watch_loop(
     workspace_root: &GuardedPath,
     watched: &GuardedPath,
     source_dir: &GuardedPath,
-    cache: &mut InterpreterCache,
+    cache: &mut RunnerCache,
     last_contents: &mut String,
 ) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -448,7 +448,7 @@ fn render_shell_outputs(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
     source_dir: &GuardedPath,
-    cache: &mut InterpreterCache,
+    cache: &mut RunnerCache,
     only_missing_outputs: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
@@ -488,7 +488,7 @@ fn render_shell_outputs(
             let _fence_info = parse_fence_info(&info);
             let existing = parse_output_block(&lines, i);
             if let Some(spec) =
-                interpreter_spec(&info, resolver, workspace_root, source_dir, cache)?
+                runner_spec(&info, resolver, workspace_root, source_dir, cache)?
             {
                 let code_hash = code_hash(&script, &spec);
                 let should_run = match &existing {
@@ -572,10 +572,10 @@ fn render_shell_outputs(
                     };
                     let shared_out: SharedOutput = Arc::new(Mutex::new(tee));
 
-                    // Run interpreter with stdin_stream and the tee writer
+                    // Run runner with stdin_stream and the tee writer
                     // as stdout. Provide the capture buffer so the caller
                     // can inspect the captured bytes after execution.
-                    let run_res = run_interpreter(
+                    let run_res = run_runner(
                         resolver,
                         workspace_root,
                         source_dir,
@@ -629,14 +629,14 @@ fn render_shell_outputs(
                     i = block.end_index;
                 }
             } else {
-                // No interpreter spec found. If the fence declared a language,
+                // No runner spec found. If the fence declared a language,
                 // write an informative output block so users see that the
                 // fence was not executed.
                 let parsed = parse_fence_info(&info);
                 if let Some(lang) = parsed.language {
                     let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
                     let output =
-                        format!("error: no interpreter registered for language '{}'", lang);
+                        format!("error: no runner registered for language '{}'", lang);
                     if let Some(block) = existing {
                         i = block.end_index;
                     }
@@ -927,13 +927,13 @@ fn parse_fence_info(info: &str) -> FenceInfo {
     FenceInfo { language, params }
 }
 
-fn interpreter_spec(
+fn runner_spec(
     info: &str,
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
     source_dir: &GuardedPath,
-    cache: &mut InterpreterCache,
-) -> Result<Option<InterpreterSpec>> {
+    cache: &mut RunnerCache,
+) -> Result<Option<RunnerSpec>> {
     let parsed = parse_fence_info(info);
     let language = match parsed.language {
         Some(lang) => lang,
@@ -957,7 +957,7 @@ fn interpreter_spec(
     if command.is_empty() && oxfile.is_none() {
         return Ok(None);
     }
-    Ok(Some(InterpreterSpec {
+    Ok(Some(RunnerSpec {
         language,
         command,
         oxfile,
@@ -1001,16 +1001,16 @@ fn resolve_oxfile_path(
         return Ok(Some(workspace));
     }
 
-    // Fallback: also look for the temp interpreter naming convention to
-    // support in-repo interpreters without requiring the oxbook.<lang> alias.
-    let temp_name = format!("temp.interpreter.{language}.oxfile");
-    let temp_local = source_dir.join(&temp_name)?;
-    if resolver.entry_kind(&temp_local).is_ok() {
-        return Ok(Some(temp_local));
+    // Fallback: also look for the temp.runner naming convention to support
+    // in-repo runners without requiring the oxbook.<lang> alias.
+    let temp_name_runner = format!("temp.runner.{language}.oxfile");
+    let temp_local_runner = source_dir.join(&temp_name_runner)?;
+    if resolver.entry_kind(&temp_local_runner).is_ok() {
+        return Ok(Some(temp_local_runner));
     }
-    let temp_workspace = workspace_root.join(&temp_name)?;
-    if resolver.entry_kind(&temp_workspace).is_ok() {
-        return Ok(Some(temp_workspace));
+    let temp_workspace_runner = workspace_root.join(&temp_name_runner)?;
+    if resolver.entry_kind(&temp_workspace_runner).is_ok() {
+        return Ok(Some(temp_workspace_runner));
     }
 
     // Check registry for a language-specific oxfile override.
@@ -1042,12 +1042,13 @@ fn get_registered_oxfile(language: &str) -> Option<String> {
     reg.get(language).cloned()
 }
 
+// Scan the workspace for `temp.runner.<lang>.oxfile` files and register them.
 #[allow(
     clippy::disallowed_types,
     clippy::disallowed_methods,
     clippy::collapsible_if
 )]
-fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
+fn scan_and_register_runners(workspace_root: &GuardedPath) {
     let root = workspace_root.root();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -1065,16 +1066,17 @@ fn scan_and_register_interpreters(workspace_root: &GuardedPath) {
                 Some(n) => n,
                 None => continue,
             };
-            const PREFIX: &str = "temp.interpreter.";
+            const PREFIX_RUNNER: &str = "temp.runner.";
             const SUFFIX: &str = ".oxfile";
-            if name.starts_with(PREFIX) && name.ends_with(SUFFIX) {
-                let lang = &name[PREFIX.len()..name.len() - SUFFIX.len()];
+            if name.starts_with(PREFIX_RUNNER) && name.ends_with(SUFFIX) {
+                let pfx_len = PREFIX_RUNNER.len();
+                let sfx_len = SUFFIX.len();
+                let lang = &name[pfx_len..name.len() - sfx_len];
                 if lang.is_empty() {
                     continue;
                 }
                 if let Ok(rel) = path.strip_prefix(root) {
                     if let Some(rel_str) = rel.to_str() {
-                        // Normalize to forward slashes for resolution.
                         let rel_str = rel_str.replace('\\', "/");
                         register_language_oxfile(lang, &rel_str);
                     }
@@ -1114,7 +1116,7 @@ impl std::io::Write for EnvTee {
 fn env_hash_for_oxfile(
     resolver: &PathResolver,
     path: &GuardedPath,
-    cache: &mut InterpreterCache,
+    cache: &mut RunnerCache,
 ) -> Result<Option<String>> {
     let key = path.display();
     let script = resolver
@@ -1137,27 +1139,27 @@ fn build_env_from_oxfile(
     path: &GuardedPath,
     script: &str,
     hash: String,
-) -> Result<InterpreterEnv> {
+) -> Result<RunnerEnv> {
     let mut steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
-
-    // Expose interpreter directory relative to the workspace root so oxfiles can
-    // resolve it inside the copied temp workspace without host-absolute paths.
-    let interpreter_dir = path.parent().unwrap_or_else(|| resolver.root().clone());
-    let interpreter_rel = interpreter_dir
+    // Expose runner directory relative to the workspace root so
+    // temp oxfiles can resolve it inside the copied temp workspace without
+    // host-absolute paths.
+    let runner_dir = path.parent().unwrap_or_else(|| resolver.root().clone());
+    let runner_rel = runner_dir
         .as_path()
         .strip_prefix(resolver.root().as_path())
         .map(|p| to_forward_slashes(&p.to_string_lossy()))
-        .unwrap_or_else(|_| interpreter_dir.display().to_string());
-    let interpreter_env = Step {
+        .unwrap_or_else(|_| runner_dir.display().to_string());
+    let runner_env = Step {
         guards: Vec::new(),
         kind: StepKind::Env {
-            key: "OXBOOK_INTERPRETER_DIR".to_string(),
-            value: interpreter_rel.into(),
+            key: "OXBOOK_RUNNER_DIR".to_string(),
+            value: runner_rel.into(),
         },
         scope_enter: 0,
         scope_exit: 0,
     };
-    steps.insert(0, interpreter_env);
+    steps.insert(0, runner_env);
     let tempdir =
         GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
     let temp_root = tempdir.as_guarded_path().clone();
@@ -1184,7 +1186,7 @@ fn build_env_from_oxfile(
         run_steps_with_context_result(&temp_root, &build_context, &steps, None, Some(build_stdout))
             .with_context(|| format!("run {}", path.display()))?;
 
-    Ok(InterpreterEnv {
+    Ok(RunnerEnv {
         root: temp_root,
         cwd: final_cwd,
         env_hash: Some(hash),
@@ -1193,12 +1195,12 @@ fn build_env_from_oxfile(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_interpreter(
+fn run_runner(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
     source_dir: &GuardedPath,
-    cache: &mut InterpreterCache,
-    spec: &InterpreterSpec,
+    cache: &mut RunnerCache,
+    spec: &RunnerSpec,
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
@@ -1233,13 +1235,13 @@ fn run_in_default_env(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
     source_dir: &GuardedPath,
-    spec: &InterpreterSpec,
+    spec: &RunnerSpec,
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
     capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<String> {
-    let env = InterpreterEnv {
+    let env = RunnerEnv {
         root: workspace_root.clone(),
         cwd: source_dir.clone(),
         env_hash: None,
@@ -1259,8 +1261,8 @@ fn run_in_default_env(
 
 fn run_in_env(
     workspace_resolver: &PathResolver,
-    env: &InterpreterEnv,
-    spec: &InterpreterSpec,
+    env: &RunnerEnv,
+    spec: &RunnerSpec,
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
@@ -1283,8 +1285,8 @@ fn run_in_env(
 fn run_in_env_with_resolver(
     workspace_resolver: &PathResolver,
     resolver: &PathResolver,
-    env: &InterpreterEnv,
-    spec: &InterpreterSpec,
+    env: &RunnerEnv,
+    spec: &RunnerSpec,
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
@@ -1296,20 +1298,19 @@ fn run_in_env_with_resolver(
             .with_context(|| format!("read {}", oxfile_path.display()))?;
         let mut steps = parse_script(&oxfile_content)
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
-
-        // Make interpreter location available to oxfiles so they can be path-agnostic.
-        let interpreter_dir = oxfile_path.parent().unwrap_or_else(|| env.root.clone());
-        let interpreter_env = Step {
+        // Make runner location available to oxfiles so they can be path-agnostic.
+        let runner_dir = oxfile_path.parent().unwrap_or_else(|| env.root.clone());
+        let runner_env = Step {
             guards: Vec::new(),
             kind: StepKind::Env {
-                key: "OXBOOK_INTERPRETER_DIR".to_string(),
-                value: interpreter_dir.display().to_string().into(),
+                key: "OXBOOK_RUNNER_DIR".to_string(),
+                value: runner_dir.display().to_string().into(),
             },
             scope_enter: 0,
             scope_exit: 0,
         };
 
-        // Persist the snippet so interpreters can execute the file while
+        // Persist the snippet so runners can execute the file while
         // receiving the previous fence's stdout via stdin.
         let lang_safe: String = spec
             .language
@@ -1353,7 +1354,7 @@ fn run_in_env_with_resolver(
         };
         steps.insert(0, snippet_env);
         steps.insert(0, snippet_dir_env);
-        steps.insert(0, interpreter_env);
+        steps.insert(0, runner_env);
 
         // Use the previous fence's stdout (if any) as stdin; the snippet
         // itself is provided via OXBOOK_SNIPPET_PATH.
@@ -1442,7 +1443,7 @@ fn command_output_to_string(output: &CommandOutput) -> String {
     }
 }
 
-fn code_hash(script: &str, spec: &InterpreterSpec) -> String {
+fn code_hash(script: &str, spec: &RunnerSpec) -> String {
     let mut combined = String::new();
     combined.push_str(script);
     combined.push('\n');
