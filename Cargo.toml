@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/docgen/oxbook/oxbook-cli",
     "crates/oxdock-core",
     "crates/oxdock-embed",
     "crates/oxdock-fixture",
@@ -11,7 +12,6 @@ members = [
     "oxdock-buildtime-helpers",
     "oxdock-buildtime-macros",
     "oxdock-cli",
-    "crates/docgen/oxbook/oxbook-cli"
 ]
 resolver = "2"
 
