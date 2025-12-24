@@ -538,7 +538,6 @@ mod tests {
         }};
     }
 
-
     fn guard_root(path: &UnguardedPath) -> GuardedPath {
         GuardedPath::new_root(path.as_path()).unwrap()
     }

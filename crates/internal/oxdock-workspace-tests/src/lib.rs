@@ -298,7 +298,10 @@ pub mod harness {
             if needs_symlink {
                 if let Some(t) = &temp_target {
                     if !oxdock_fs::test_utils::can_create_symlinks(t) {
-                        eprintln!("skipping fixture case {}::{}: symlink unsupported on host", spec.name, case.name);
+                        eprintln!(
+                            "skipping fixture case {}::{}: symlink unsupported on host",
+                            spec.name, case.name
+                        );
                         return Ok(());
                     }
                 }

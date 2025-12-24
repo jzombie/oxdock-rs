@@ -635,6 +635,16 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
     }
 
     if let Some(val) = value {
+        // Disallow the confusing pattern `!env:KEY==value` — require using
+        // `env:KEY!=value` or `!env:KEY` for negation without equality.
+        if invert && !is_not_equals {
+            bail!(
+                "inverted env equality is not allowed: use 'env:{}!={}' or '!env:{}'",
+                key,
+                val,
+                key
+            );
+        }
         Ok(Guard::EnvEquals {
             key,
             value: val,

@@ -308,9 +308,10 @@ impl fmt::Display for Guard {
             }
             Guard::EnvEquals { key, value, invert } => {
                 if *invert {
-                    write!(f, "!")?
+                    write!(f, "env:{}!={}", key, value)
+                } else {
+                    write!(f, "env:{}=={}", key, value)
                 }
-                write!(f, "env:{}=={}", key, value)
             }
         }
     }

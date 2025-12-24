@@ -6,8 +6,8 @@ mod shell;
 
 use anyhow::{Context, Result, anyhow, bail};
 pub use builtin_env::BuiltinEnv;
-pub use oxdock_test_utils::EnvGuard;
 use oxdock_fs::{GuardedPath, PolicyPath};
+pub use oxdock_test_utils::EnvGuard;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
