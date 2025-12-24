@@ -10,7 +10,6 @@ default-run = "oxbook-cli"
 
 [dependencies]
 anyhow.workspace = true
-cargo_metadata.workspace = true
 notify.workspace = true
 once_cell.workspace = true
 os_pipe.workspace = true

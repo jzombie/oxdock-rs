@@ -25,7 +25,6 @@ publish = true
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-cargo_metadata = "0.23.1"
 indoc = "2.0.7"
 libc = "0.2.178"
 libtest-mimic = "0.8.1"
