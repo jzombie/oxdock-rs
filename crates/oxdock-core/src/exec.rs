@@ -13,10 +13,29 @@ use oxdock_process::{
 };
 use sha2::{Digest, Sha256};
 
+#[derive(Clone)]
+enum PipeEndpoint {
+    Stream(SharedOutput),
+    Inherit,
+}
+
+impl PipeEndpoint {
+    fn stream(writer: SharedOutput) -> Self {
+        PipeEndpoint::Stream(writer)
+    }
+
+    fn to_stream_handle(&self) -> StreamHandle {
+        match self {
+            PipeEndpoint::Stream(writer) => StreamHandle::Stream(writer.clone()),
+            PipeEndpoint::Inherit => StreamHandle::Inherit,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct PipeOutputs {
-    stdout: Option<SharedOutput>,
-    stderr: Option<SharedOutput>,
+    stdout: Option<PipeEndpoint>,
+    stderr: Option<PipeEndpoint>,
 }
 
 #[derive(Clone, Default)]
@@ -26,6 +45,28 @@ pub struct ExecIo {
     stderr: Option<SharedOutput>,
     input_pipes: HashMap<String, SharedInput>,
     output_pipes: HashMap<String, PipeOutputs>,
+}
+
+#[derive(Clone)]
+enum StreamHandle {
+    Inherit,
+    Stream(SharedOutput),
+}
+
+impl StreamHandle {
+    fn to_stdout(&self) -> CommandStdout {
+        match self {
+            StreamHandle::Stream(writer) => CommandStdout::Stream(writer.clone()),
+            StreamHandle::Inherit => CommandStdout::Inherit,
+        }
+    }
+
+    fn to_stderr(&self) -> CommandStderr {
+        match self {
+            StreamHandle::Stream(writer) => CommandStderr::Stream(writer.clone()),
+            StreamHandle::Inherit => CommandStderr::Inherit,
+        }
+    }
 }
 
 impl ExecIo {
@@ -54,18 +95,28 @@ impl ExecIo {
 
     pub fn insert_output_pipe<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
         let entry = self.output_pipes.entry(name.into()).or_default();
-        entry.stdout = Some(writer.clone());
-        entry.stderr = Some(writer);
+        entry.stdout = Some(PipeEndpoint::stream(writer.clone()));
+        entry.stderr = Some(PipeEndpoint::stream(writer));
     }
 
     pub fn insert_output_pipe_stdout<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
         let entry = self.output_pipes.entry(name.into()).or_default();
-        entry.stdout = Some(writer);
+        entry.stdout = Some(PipeEndpoint::stream(writer));
     }
 
     pub fn insert_output_pipe_stderr<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
         let entry = self.output_pipes.entry(name.into()).or_default();
-        entry.stderr = Some(writer);
+        entry.stderr = Some(PipeEndpoint::stream(writer));
+    }
+
+    pub fn insert_output_pipe_stdout_inherit<S: Into<String>>(&mut self, name: S) {
+        let entry = self.output_pipes.entry(name.into()).or_default();
+        entry.stdout = Some(PipeEndpoint::Inherit);
+    }
+
+    pub fn insert_output_pipe_stderr_inherit<S: Into<String>>(&mut self, name: S) {
+        let entry = self.output_pipes.entry(name.into()).or_default();
+        entry.stderr = Some(PipeEndpoint::Inherit);
     }
 
     pub fn stdin(&self) -> Option<SharedInput> {
@@ -84,13 +135,13 @@ impl ExecIo {
         self.input_pipes.get(name).cloned()
     }
 
-    pub fn output_pipe_stdout(&self, name: &str) -> Option<SharedOutput> {
+    fn output_pipe_stdout(&self, name: &str) -> Option<PipeEndpoint> {
         self.output_pipes
             .get(name)
             .and_then(|pipe| pipe.stdout.clone())
     }
 
-    pub fn output_pipe_stderr(&self, name: &str) -> Option<SharedOutput> {
+    fn output_pipe_stderr(&self, name: &str) -> Option<PipeEndpoint> {
         self.output_pipes
             .get(name)
             .and_then(|pipe| pipe.stderr.clone())
@@ -260,8 +311,8 @@ fn run_steps_with_manager<P: ProcessManager>(
 
     let _default_stdout = io::stdout();
     let stdin = state.io.stdin();
-    let stdout = state.io.stdout();
-    let stderr = state.io.stderr();
+    let stdout = state.io.stdout().map(StreamHandle::Stream);
+    let stderr = state.io.stderr().map(StreamHandle::Stream);
     let mut proc_mgr = process;
     execute_steps(
         &mut state,
@@ -283,8 +334,8 @@ fn execute_steps<P: ProcessManager>(
     steps: &[Step],
     stdin: Option<SharedInput>,
     expose_stdin: bool,
-    out: Option<SharedOutput>,
-    err: Option<SharedOutput>,
+    out: Option<StreamHandle>,
+    err: Option<StreamHandle>,
     wait_at_end: bool,
 ) -> Result<()> {
     let fs_root = state.fs.root().clone();
@@ -396,14 +447,14 @@ fn execute_steps<P: ProcessManager>(
                         CommandStdout::Inherit
                     } else {
                         out.clone()
-                            .map(CommandStdout::Stream)
+                            .map(|handle| handle.to_stdout())
                             .unwrap_or(CommandStdout::Inherit)
                     };
                     let stderr_mode = if inherit_override {
                         CommandStderr::Inherit
                     } else {
                         err.clone()
-                            .map(CommandStderr::Stream)
+                            .map(|handle| handle.to_stderr())
                             .unwrap_or(CommandStderr::Inherit)
                     };
 
@@ -435,15 +486,15 @@ fn execute_steps<P: ProcessManager>(
                 StepKind::Echo(msg) => {
                     let ctx = state.command_ctx();
                     let rendered = expand_template(msg, &ctx);
-                    if let Some(output_stream) = out.clone() {
-                        if let Ok(mut guard) = output_stream.lock() {
-                            writeln!(guard, "{}", rendered)?;
+                    match out.clone() {
+                        Some(StreamHandle::Stream(writer)) => {
+                            if let Ok(mut guard) = writer.lock() {
+                                writeln!(guard, "{}", rendered)?;
+                            }
                         }
-                    } else {
-                        // Fallback to stdout if no output stream provided?
-                        // Or just ignore?
-                        // Echo usually goes to stdout.
-                        println!("{}", rendered);
+                        _ => {
+                            println!("{}", rendered);
+                        }
                     }
                     Ok(())
                 }
@@ -453,11 +504,11 @@ fn execute_steps<P: ProcessManager>(
                     let step_stdin = if expose_stdin { stdin.clone() } else { None };
                     let stdout_mode = out
                         .clone()
-                        .map(CommandStdout::Stream)
+                        .map(|handle| handle.to_stdout())
                         .unwrap_or(CommandStdout::Inherit);
                     let stderr_mode = err
                         .clone()
-                        .map(CommandStderr::Stream)
+                        .map(|handle| handle.to_stderr())
                         .unwrap_or(CommandStderr::Inherit);
                     let mut options = CommandOptions::background();
                     options.stdin = step_stdin;
@@ -555,12 +606,15 @@ fn execute_steps<P: ProcessManager>(
                     let mut hasher = Sha256::new();
                     hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
                     let digest = hasher.finalize();
-                    if let Some(output_stream) = out.clone() {
-                        if let Ok(mut guard) = output_stream.lock() {
-                            writeln!(guard, "{:x}", digest)?;
+                    match out.clone() {
+                        Some(StreamHandle::Stream(writer)) => {
+                            if let Ok(mut guard) = writer.lock() {
+                                writeln!(guard, "{:x}", digest)?;
+                            }
                         }
-                    } else {
-                        println!("{:x}", digest);
+                        _ => {
+                            println!("{:x}", digest);
+                        }
                     }
                     Ok(())
                 }
@@ -631,17 +685,20 @@ fn execute_steps<P: ProcessManager>(
                             format!("step {}: LS {}", idx + 1, target_dir.display())
                         })?;
                     entries.sort_by_key(|e| e.file_name());
-                    if let Some(output_stream) = out.clone() {
-                        if let Ok(mut guard) = output_stream.lock() {
-                            writeln!(guard, "{}:", target_dir.display())?;
-                            for entry in entries {
-                                writeln!(guard, "{}", entry.file_name().to_string_lossy())?;
+                    match out.clone() {
+                        Some(StreamHandle::Stream(writer)) => {
+                            if let Ok(mut guard) = writer.lock() {
+                                writeln!(guard, "{}:", target_dir.display())?;
+                                for entry in entries {
+                                    writeln!(guard, "{}", entry.file_name().to_string_lossy())?;
+                                }
                             }
                         }
-                    } else {
-                        println!("{}:", target_dir.display());
-                        for entry in entries {
-                            println!("{}", entry.file_name().to_string_lossy());
+                        _ => {
+                            println!("{}:", target_dir.display());
+                            for entry in entries {
+                                println!("{}", entry.file_name().to_string_lossy());
+                            }
                         }
                     }
                     Ok(())
@@ -655,12 +712,15 @@ fn execute_steps<P: ProcessManager>(
                             state.cwd.display()
                         )
                     })?;
-                    if let Some(output_stream) = out.clone() {
-                        if let Ok(mut guard) = output_stream.lock() {
-                            writeln!(guard, "{}", real)?;
+                    match out.clone() {
+                        Some(StreamHandle::Stream(writer)) => {
+                            if let Ok(mut guard) = writer.lock() {
+                                writeln!(guard, "{}", real)?;
+                            }
                         }
-                    } else {
-                        println!("{}", real);
+                        _ => {
+                            println!("{}", real);
+                        }
                     }
                     Ok(())
                 }
@@ -688,16 +748,19 @@ fn execute_steps<P: ProcessManager>(
 
                         buf
                     };
-                    if let Some(output_stream) = out.clone() {
-                        if let Ok(mut guard) = output_stream.lock() {
-                            guard
-                                .write_all(&data)
-                                .context("failed to write to output")?;
+                    match out.clone() {
+                        Some(StreamHandle::Stream(writer)) => {
+                            if let Ok(mut guard) = writer.lock() {
+                                guard
+                                    .write_all(&data)
+                                    .context("failed to write to output")?;
+                            }
                         }
-                    } else {
-                        io::stdout()
-                            .write_all(&data)
-                            .context("failed to write to stdout")?;
+                        _ => {
+                            io::stdout()
+                                .write_all(&data)
+                                .context("failed to write to stdout")?;
+                        }
                     }
                     Ok(())
                 }
@@ -767,13 +830,19 @@ fn execute_steps<P: ProcessManager>(
                                 }
                                 seen_stdout = true;
                                 step_stdout = if let Some(pipe) = &binding.pipe {
-                                    Some(state.io.output_pipe_stdout(pipe).ok_or_else(|| {
-                                        anyhow!(
-                                            "step {}: WITH_IO stdout pipe '{}' is undefined",
-                                            idx + 1,
-                                            pipe
-                                        )
-                                    })?)
+                                    Some(
+                                        state
+                                            .io
+                                            .output_pipe_stdout(pipe)
+                                            .ok_or_else(|| {
+                                                anyhow!(
+                                                    "step {}: WITH_IO stdout pipe '{}' is undefined",
+                                                    idx + 1,
+                                                    pipe
+                                                )
+                                            })?
+                                            .to_stream_handle(),
+                                    )
                                 } else {
                                     out.clone()
                                 };
@@ -787,13 +856,19 @@ fn execute_steps<P: ProcessManager>(
                                 }
                                 seen_stderr = true;
                                 step_stderr = if let Some(pipe) = &binding.pipe {
-                                    Some(state.io.output_pipe_stderr(pipe).ok_or_else(|| {
-                                        anyhow!(
-                                            "step {}: WITH_IO stderr pipe '{}' is undefined",
-                                            idx + 1,
-                                            pipe
-                                        )
-                                    })?)
+                                    Some(
+                                        state
+                                            .io
+                                            .output_pipe_stderr(pipe)
+                                            .ok_or_else(|| {
+                                                anyhow!(
+                                                    "step {}: WITH_IO stderr pipe '{}' is undefined",
+                                                    idx + 1,
+                                                    pipe
+                                                )
+                                            })?
+                                            .to_stream_handle(),
+                                    )
                                 } else {
                                     err.clone()
                                 };
@@ -870,8 +945,8 @@ fn execute_steps<P: ProcessManager>(
                         &steps,
                         stdin.clone(),
                         expose_stdin,
-                        Some(buf.clone()),
-                        Some(buf.clone()),
+                        Some(StreamHandle::Stream(buf.clone())),
+                        Some(StreamHandle::Stream(buf.clone())),
                         true,
                     )?;
 
@@ -1582,8 +1657,8 @@ mod tests {
             &steps,
             None,
             false,
-            Some(sink.clone()),
-            Some(sink),
+            Some(StreamHandle::Stream(sink.clone())),
+            Some(StreamHandle::Stream(sink)),
             false,
         )
         .unwrap_err();
