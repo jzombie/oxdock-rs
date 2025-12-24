@@ -2,7 +2,9 @@ use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
 use oxdock_core::run_steps_with_context_result;
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes};
+use oxdock_fs::{
+    GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes,
+};
 use oxdock_parser::{Step, StepKind, parse_script};
 use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 
@@ -1296,9 +1298,7 @@ fn run_in_env_with_resolver(
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
 
         // Make interpreter location available to oxfiles so they can be path-agnostic.
-        let interpreter_dir = oxfile_path
-            .parent()
-            .unwrap_or_else(|| env.root.clone());
+        let interpreter_dir = oxfile_path.parent().unwrap_or_else(|| env.root.clone());
         let interpreter_env = Step {
             guards: Vec::new(),
             kind: StepKind::Env {
