@@ -535,8 +535,9 @@ fn render_shell_outputs(
                     let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> =
                         Arc::new(Mutex::new(writer));
 
-                    // Capture buffer to embed output in the markdown.
-                    let capture_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                    // Capture buffers to embed output in the markdown.
+                    let capture_stdout: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                    let capture_stderr: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                     // Tee writer writes to both the capture buffer and the
                     // pipe writer so we both embed and stream the output.
@@ -566,11 +567,34 @@ fn render_shell_outputs(
                         }
                     }
 
+                    struct CaptureWriter {
+                        cap: Arc<Mutex<Vec<u8>>>,
+                    }
+
+                    impl std::io::Write for CaptureWriter {
+                        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::write_all(&mut *g, buf);
+                            }
+                            Ok(buf.len())
+                        }
+
+                        fn flush(&mut self) -> std::io::Result<()> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::flush(&mut *g);
+                            }
+                            Ok(())
+                        }
+                    }
+
                     let tee = TeeWriter {
-                        cap: capture_buf.clone(),
+                        cap: capture_stdout.clone(),
                         pipe: writer_shared.clone(),
                     };
-                    let shared_out: SharedOutput = Arc::new(Mutex::new(tee));
+                    let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
+                    let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter {
+                        cap: capture_stderr.clone(),
+                    }));
 
                     // Run runner with stdin_stream and the tee writer
                     // as stdout. Provide the capture buffer so the caller
@@ -583,16 +607,20 @@ fn render_shell_outputs(
                         &spec,
                         &script,
                         stdin_stream,
-                        Some(shared_out.clone()),
-                        Some(capture_buf.clone()),
+                        Some(stdout_writer.clone()),
+                        Some(stderr_writer.clone()),
+                        Some(capture_stdout.clone()),
+                        Some(capture_stderr.clone()),
                     );
                     match run_res {
-                        Ok(_) => {
-                            let data = capture_buf.lock().unwrap();
-                            let output = String::from_utf8_lossy(&data).to_string();
+                        Ok(run_output) => {
                             // Make the reader available to the next fence.
                             prev_reader = Some(reader_shared);
-                            let output_block = format_output_block(&code_hash, &output, "");
+                            let output_block = format_output_block(
+                                &code_hash,
+                                &run_output.stdout,
+                                &run_output.stderr,
+                            );
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
@@ -608,10 +636,27 @@ fn render_shell_outputs(
                                 }
                             }
                             let err_msg = chain.join("\n");
+                            let stdout_output = {
+                                let data = capture_stdout.lock().unwrap();
+                                String::from_utf8_lossy(&data).to_string()
+                            };
+                            let mut stderr_output = {
+                                let data = capture_stderr.lock().unwrap();
+                                String::from_utf8_lossy(&data).to_string()
+                            };
+                            if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+                                stderr_output.push('\n');
+                            }
+                            if !stderr_output.is_empty() {
+                                stderr_output.push_str(&err_msg);
+                            } else {
+                                stderr_output = err_msg.clone();
+                            }
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
-                            let output_block = format_output_block(&code_hash, "", &err_msg);
+                            let output_block =
+                                format_output_block(&code_hash, &stdout_output, &stderr_output);
                             out_lines.extend(output_block);
                         }
                     }
@@ -1202,6 +1247,11 @@ fn build_env_from_oxfile(
     })
 }
 
+struct RunnerOutput {
+    stdout: String,
+    stderr: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_runner(
     resolver: &PathResolver,
@@ -1212,8 +1262,10 @@ fn run_runner(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     let env = match &spec.oxfile {
         Some(path) => {
             let key = path.display();
@@ -1231,11 +1283,23 @@ fn run_runner(
                 script,
                 stdin,
                 stdout,
-                capture_buf,
+                stderr,
+                stdout_capture,
+                stderr_capture,
             );
         }
     };
-    run_in_env(resolver, env, spec, script, stdin, stdout, capture_buf)
+    run_in_env(
+        resolver,
+        env,
+        spec,
+        script,
+        stdin,
+        stdout,
+        stderr,
+        stdout_capture,
+        stderr_capture,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1247,8 +1311,10 @@ fn run_in_default_env(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     let env = RunnerEnv {
         root: workspace_root.clone(),
         cwd: source_dir.clone(),
@@ -1263,7 +1329,9 @@ fn run_in_default_env(
         script,
         stdin,
         stdout,
-        capture_buf,
+        stderr,
+        stdout_capture,
+        stderr_capture,
     )
 }
 
@@ -1274,8 +1342,10 @@ fn run_in_env(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
     run_in_env_with_resolver(
         workspace_resolver,
@@ -1285,7 +1355,9 @@ fn run_in_env(
         script,
         stdin,
         stdout,
-        capture_buf,
+        stderr,
+        stdout_capture,
+        stderr_capture,
     )
 }
 
@@ -1298,8 +1370,10 @@ fn run_in_env_with_resolver(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     if let Some(oxfile_path) = &spec.oxfile {
         let oxfile_content = workspace_resolver
             .read_to_string(oxfile_path)
@@ -1370,7 +1444,7 @@ fn run_in_env_with_resolver(
 
         // Prepare stdout: if provided, use it; otherwise create a capture
         // buffer and use that for stdout so we can return captured output.
-        let (use_stdout, internal_capture): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
+        let (use_stdout, internal_stdout): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
             match stdout {
                 Some(s) => (s, None),
                 None => {
@@ -1394,10 +1468,19 @@ fn run_in_env_with_resolver(
                 }
             };
 
+        let (use_stderr, internal_stderr): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
+            match stderr {
+                Some(s) => (s, None),
+                None => {
+                    let buf = Arc::new(Mutex::new(Vec::new()));
+                    (buf.clone(), Some(buf))
+                }
+            };
+
         let mut io_cfg = ExecIo::new();
         io_cfg.set_stdin(input_stream);
         io_cfg.set_stdout(Some(use_stdout.clone()));
-        io_cfg.set_stderr(Some(use_stdout.clone()));
+        io_cfg.set_stderr(Some(use_stderr.clone()));
 
         // Pipe setup/build output directly to the user's terminal.
         let setup_buf = Arc::new(Mutex::new(Vec::new()));
@@ -1406,7 +1489,8 @@ fn run_in_env_with_resolver(
             term: Some(std::io::stdout()),
         }));
         io_cfg.insert_output_pipe(PIPE_SETUP, setup_stream);
-        io_cfg.insert_output_pipe(PIPE_SNIPPET, use_stdout.clone());
+        io_cfg.insert_output_pipe_stdout(PIPE_SNIPPET, use_stdout.clone());
+        io_cfg.insert_output_pipe_stderr(PIPE_SNIPPET, use_stderr.clone());
 
         run_steps_with_context_result_with_io(
             &env.root,
@@ -1417,19 +1501,28 @@ fn run_in_env_with_resolver(
         .with_context(|| format!("run {}", oxfile_path.display()))?;
 
         // Determine which capture buffer to read from: prefer explicit
-        // capture_buf passed by caller, otherwise use internal_capture.
-        if let Some(cb) = capture_buf {
-            let data = cb.lock().unwrap();
-            return Ok(String::from_utf8_lossy(&data).to_string());
-        }
-        if let Some(cb) = internal_capture {
-            let data = cb.lock().unwrap();
-            return Ok(String::from_utf8_lossy(&data).to_string());
-        }
+        // capture buffers passed by the caller; otherwise use the internal
+        // captures when stdout/stderr writers were synthesized above.
+        let stdout_bytes = if let Some(cb) = stdout_capture {
+            cb.lock().unwrap().clone()
+        } else if let Some(cb) = internal_stdout {
+            cb.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        };
 
-        // If stdout was provided and no capture buffer passed, we cannot
-        // reliably return the captured text here — return empty string.
-        return Ok(String::new());
+        let stderr_bytes = if let Some(cb) = stderr_capture {
+            cb.lock().unwrap().clone()
+        } else if let Some(cb) = internal_stderr {
+            cb.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        };
+
+        return Ok(RunnerOutput {
+            stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+            stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+        });
     }
 
     // At this point we require an oxfile to drive execution. The old behavior

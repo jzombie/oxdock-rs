@@ -14,12 +14,18 @@ use oxdock_process::{
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
+struct PipeOutputs {
+    stdout: Option<SharedOutput>,
+    stderr: Option<SharedOutput>,
+}
+
+#[derive(Clone, Default)]
 pub struct ExecIo {
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
     stderr: Option<SharedOutput>,
     input_pipes: HashMap<String, SharedInput>,
-    output_pipes: HashMap<String, SharedOutput>,
+    output_pipes: HashMap<String, PipeOutputs>,
 }
 
 impl ExecIo {
@@ -47,7 +53,19 @@ impl ExecIo {
     }
 
     pub fn insert_output_pipe<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
-        self.output_pipes.insert(name.into(), writer);
+        let entry = self.output_pipes.entry(name.into()).or_default();
+        entry.stdout = Some(writer.clone());
+        entry.stderr = Some(writer);
+    }
+
+    pub fn insert_output_pipe_stdout<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
+        let entry = self.output_pipes.entry(name.into()).or_default();
+        entry.stdout = Some(writer);
+    }
+
+    pub fn insert_output_pipe_stderr<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
+        let entry = self.output_pipes.entry(name.into()).or_default();
+        entry.stderr = Some(writer);
     }
 
     pub fn stdin(&self) -> Option<SharedInput> {
@@ -66,8 +84,16 @@ impl ExecIo {
         self.input_pipes.get(name).cloned()
     }
 
-    pub fn output_pipe(&self, name: &str) -> Option<SharedOutput> {
-        self.output_pipes.get(name).cloned()
+    pub fn output_pipe_stdout(&self, name: &str) -> Option<SharedOutput> {
+        self.output_pipes
+            .get(name)
+            .and_then(|pipe| pipe.stdout.clone())
+    }
+
+    pub fn output_pipe_stderr(&self, name: &str) -> Option<SharedOutput> {
+        self.output_pipes
+            .get(name)
+            .and_then(|pipe| pipe.stderr.clone())
     }
 }
 
@@ -741,7 +767,7 @@ fn execute_steps<P: ProcessManager>(
                                 }
                                 seen_stdout = true;
                                 step_stdout = if let Some(pipe) = &binding.pipe {
-                                    Some(state.io.output_pipe(pipe).ok_or_else(|| {
+                                    Some(state.io.output_pipe_stdout(pipe).ok_or_else(|| {
                                         anyhow!(
                                             "step {}: WITH_IO stdout pipe '{}' is undefined",
                                             idx + 1,
@@ -761,7 +787,7 @@ fn execute_steps<P: ProcessManager>(
                                 }
                                 seen_stderr = true;
                                 step_stderr = if let Some(pipe) = &binding.pipe {
-                                    Some(state.io.output_pipe(pipe).ok_or_else(|| {
+                                    Some(state.io.output_pipe_stderr(pipe).ok_or_else(|| {
                                         anyhow!(
                                             "step {}: WITH_IO stderr pipe '{}' is undefined",
                                             idx + 1,
