@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
 use oxdock_core::run_steps_with_context_result;
-use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes};
 use oxdock_parser::{Step, StepKind, parse_script};
 use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 
@@ -1138,14 +1138,19 @@ fn build_env_from_oxfile(
 ) -> Result<InterpreterEnv> {
     let mut steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
 
-    // Expose interpreter directory to the setup oxfile so it can reference its
-    // own assets without hardcoded paths.
+    // Expose interpreter directory relative to the workspace root so oxfiles can
+    // resolve it inside the copied temp workspace without host-absolute paths.
     let interpreter_dir = path.parent().unwrap_or_else(|| resolver.root().clone());
+    let interpreter_rel = interpreter_dir
+        .as_path()
+        .strip_prefix(resolver.root().as_path())
+        .map(|p| to_forward_slashes(&p.to_string_lossy()))
+        .unwrap_or_else(|_| interpreter_dir.display().to_string());
     let interpreter_env = Step {
         guards: Vec::new(),
         kind: StepKind::Env {
             key: "OXBOOK_INTERPRETER_DIR".to_string(),
-            value: interpreter_dir.display().to_string().into(),
+            value: interpreter_rel.into(),
         },
         scope_enter: 0,
         scope_exit: 0,

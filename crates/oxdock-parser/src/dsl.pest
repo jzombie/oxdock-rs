@@ -102,7 +102,8 @@ exit_command = ${ "EXIT" ~ sep ~ exit_code }
 
 // Arguments
 sep = _{ WHITESPACE+ }
-argument = { quoted_string | unquoted_arg }
+argument = { quoted_string | templated_arg | unquoted_arg }
+templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
 unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 include_dirty_flag = { "--include-dirty" }
 io_flags = { "[" ~ ws? ~ io_flag ~ (ws? ~ "," ~ ws? ~ io_flag)* ~ ws? ~ "]" }

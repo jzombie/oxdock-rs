@@ -392,6 +392,7 @@ fn parse_argument(pair: Pair<Rule>) -> Result<String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::quoted_string => parse_quoted_string(inner),
+        Rule::templated_arg => Ok(inner.as_str().to_string()),
         Rule::unquoted_arg => Ok(inner.as_str().to_string()),
         _ => unreachable!(),
     }

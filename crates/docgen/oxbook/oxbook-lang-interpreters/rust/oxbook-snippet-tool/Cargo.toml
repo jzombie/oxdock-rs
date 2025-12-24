@@ -1,0 +1,8 @@
+[package]
+name = "oxbook-snippet-tool"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+cargo_metadata = "0.23"

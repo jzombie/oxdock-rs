@@ -3,22 +3,22 @@
 # ==========================================
 
 [!env:OXBOOK_SNIPPET_PATH] {
+    WORKDIR /
+
     # 1. Prepare the workspace
-    MKDIR ws
-    COPY_GIT --include-dirty HEAD . ws
+    WORKDIR ws
+    COPY_GIT --include-dirty HEAD . .
 
     # 2. Generate the snippet manifest by copying the manifest generator source
     #    into a throwaway crate and building it locally. This avoids depending
     #    on oxbook-cli being a workspace member or on a pre-installed binary.
-    MKDIR ws/snippet/src
+    MKDIR snippet/src
     ENV OXDOCK_INHERIT_STDOUT=1
 
-    RUN rm -rf "ws/oxbook-snippet-tool" && cargo new --bin "ws/oxbook-snippet-tool" --quiet
-    RUN mv "ws/oxbook-snippet-tool/src/main.rs" "ws/oxbook-snippet-tool/src/main.rs.bak"
-    COPY "{{ env:OXBOOK_INTERPRETER_DIR }}/src/bin/oxbook_snippet_manifest.rs" ws/oxbook-snippet-tool/src/main.rs
-    RUN printf %s $'[package]\nname = "oxbook-snippet-tool"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\nanyhow = "1.0"\ncargo_metadata = "0.23"\n' > ws/oxbook-snippet-tool/Cargo.toml
+    WORKDIR /
 
-    RUN CARGO_TARGET_DIR="ws/target" cargo run --manifest-path "ws/oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+    COPY "{{ env:OXBOOK_INTERPRETER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
+    RUN CARGO_TARGET_DIR="target" cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 }
 
 # ==========================================
