@@ -45,6 +45,8 @@ Every internal command is engineered to run the same way across platforms, excep
 ... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor.  
 ... TODO: Show example
 
+... TODO: Note that OxDock guard expressions borrow TOML-like syntax for single-line conditions, and support multi-line guarded blocks using `{ ... }` braces.
+
 ## Testing & Coverage
 
 ### Testing
@@ -170,7 +172,7 @@ Guards can now span multiple lines and wrap entire blocks of commands. This make
 ]
 WRITE linux-release.txt generated
 
-[platform==windows] {
+[platform:windows] {
     WRITE win.txt hi
     RUN powershell -Command Write-Host "windows!"
 }

@@ -325,6 +325,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
+ "oxdock-sys-test-utils",
 ]
 
 [[package]]
@@ -353,6 +354,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "oxdock-sys-test-utils",
  "tempfile",
 ]
 
@@ -365,6 +367,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "oxdock-sys-test-utils",
  "sha2",
 ]
 
@@ -397,9 +400,26 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "libc",
+ "oxdock-sys-test-utils",
  "tempfile",
  "tracing",
  "windows-sys",
+]
+
+[[package]]
+name = "oxdock-logic-tests"
+version = "0.5.0-alpha"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "libtest-mimic",
+ "oxdock-fixture",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-sys-test-utils",
+ "proc-macro2",
+ "proptest",
+ "toml_edit",
 ]
 
 [[package]]
@@ -421,21 +441,12 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
+ "oxdock-sys-test-utils",
 ]
 
 [[package]]
-name = "oxdock-workspace-tests"
+name = "oxdock-sys-test-utils"
 version = "0.5.0-alpha"
-dependencies = [
- "anyhow",
- "libtest-mimic",
- "oxdock-fixture",
- "oxdock-fs",
- "oxdock-parser",
- "proc-macro2",
- "proptest",
- "toml_edit",
-]
 
 [[package]]
 name = "pest"

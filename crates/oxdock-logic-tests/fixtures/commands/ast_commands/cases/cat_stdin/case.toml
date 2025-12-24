@@ -1,0 +1,6 @@
+name = "cat_stdin"
+script = "script.oxfile"
+stdin = "hello from stdin"
+
+[expect]
+stdout = "hello from stdin"

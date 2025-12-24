@@ -1,0 +1,3 @@
+CAT {{ env:FOO }}
+
+CAT "{{ env:BAR }}"

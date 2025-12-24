@@ -73,7 +73,7 @@ fn parse_cat() {
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 1);
     if let Step {
-        kind: StepKind::Cat(ref p),
+        kind: StepKind::Cat(Some(ref p)),
         ..
     } = steps[0]
     {
