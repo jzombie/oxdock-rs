@@ -487,9 +487,7 @@ fn render_shell_outputs(
             // Parse fence info params (currently used for language/oxfile/cmd only).
             let _fence_info = parse_fence_info(&info);
             let existing = parse_output_block(&lines, i);
-            if let Some(spec) =
-                runner_spec(&info, resolver, workspace_root, source_dir, cache)?
-            {
+            if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
                 let code_hash = code_hash(&script, &spec);
                 let should_run = match &existing {
                     Some(block) => {
@@ -635,8 +633,7 @@ fn render_shell_outputs(
                 let parsed = parse_fence_info(&info);
                 if let Some(lang) = parsed.language {
                     let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
-                    let output =
-                        format!("error: no runner registered for language '{}'", lang);
+                    let output = format!("error: no runner registered for language '{}'", lang);
                     if let Some(block) = existing {
                         i = block.end_index;
                     }
