@@ -66,20 +66,18 @@ fn workspace_local_copy_cannot_escape_workspace_root() {
     let outside_file = outside.join("escape.txt").unwrap();
     write_text(&outside_file, "outside workspace");
 
-    let script = indoc!(r#"
+    let script = indoc!(
+        r#"
         WORKSPACE LOCAL
         COPY --from-current-workspace "{outside}" out/target
-    "#);
+    "#
+    );
     let outside_str = outside_file.as_path().to_string_lossy().to_string();
     let script = script.replace("{outside}", &outside_str);
     let steps = oxdock_parser::parse_script(&script).unwrap();
 
-    let result = run_steps_with_context_result_with_io(
-        &snapshot,
-        &workspace,
-        &steps,
-        ExecIo::new(),
-    );
+    let result =
+        run_steps_with_context_result_with_io(&snapshot, &workspace, &steps, ExecIo::new());
     assert!(
         result.is_err(),
         "expected COPY --from-current-workspace to reject paths outside workspace root even after WORKSPACE LOCAL"
