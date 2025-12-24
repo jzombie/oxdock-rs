@@ -1136,7 +1136,21 @@ fn build_env_from_oxfile(
     script: &str,
     hash: String,
 ) -> Result<InterpreterEnv> {
-    let steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
+    let mut steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
+
+    // Expose interpreter directory to the setup oxfile so it can reference its
+    // own assets without hardcoded paths.
+    let interpreter_dir = path.parent().unwrap_or_else(|| resolver.root().clone());
+    let interpreter_env = Step {
+        guards: Vec::new(),
+        kind: StepKind::Env {
+            key: "OXBOOK_INTERPRETER_DIR".to_string(),
+            value: interpreter_dir.display().to_string().into(),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    };
+    steps.insert(0, interpreter_env);
     let tempdir =
         GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
     let temp_root = tempdir.as_guarded_path().clone();
@@ -1276,6 +1290,20 @@ fn run_in_env_with_resolver(
         let mut steps = parse_script(&oxfile_content)
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
 
+        // Make interpreter location available to oxfiles so they can be path-agnostic.
+        let interpreter_dir = oxfile_path
+            .parent()
+            .unwrap_or_else(|| env.root.clone());
+        let interpreter_env = Step {
+            guards: Vec::new(),
+            kind: StepKind::Env {
+                key: "OXBOOK_INTERPRETER_DIR".to_string(),
+                value: interpreter_dir.display().to_string().into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        };
+
         // Persist the snippet so interpreters can execute the file while
         // receiving the previous fence's stdout via stdin.
         let lang_safe: String = spec
@@ -1320,6 +1348,7 @@ fn run_in_env_with_resolver(
         };
         steps.insert(0, snippet_env);
         steps.insert(0, snippet_dir_env);
+        steps.insert(0, interpreter_env);
 
         // Use the previous fence's stdout (if any) as stdin; the snippet
         // itself is provided via OXBOOK_SNIPPET_PATH.

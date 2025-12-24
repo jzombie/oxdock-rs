@@ -15,7 +15,7 @@
 
     RUN rm -rf "ws/oxbook-snippet-tool" && cargo new --bin "ws/oxbook-snippet-tool" --quiet
     RUN mv "ws/oxbook-snippet-tool/src/main.rs" "ws/oxbook-snippet-tool/src/main.rs.bak"
-    COPY crates/docgen/oxbook/oxbook-lang-interpreters/rust/src/bin/oxbook_snippet_manifest.rs ws/oxbook-snippet-tool/src/main.rs
+    COPY "{{ env:OXBOOK_INTERPRETER_DIR }}/src/bin/oxbook_snippet_manifest.rs" ws/oxbook-snippet-tool/src/main.rs
     RUN printf %s $'[package]\nname = "oxbook-snippet-tool"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\nanyhow = "1.0"\ncargo_metadata = "0.23"\n' > ws/oxbook-snippet-tool/Cargo.toml
 
     RUN CARGO_TARGET_DIR="ws/target" cargo run --manifest-path "ws/oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
