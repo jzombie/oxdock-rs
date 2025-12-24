@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use crate::{
     BackgroundHandle, CommandContext, CommandMode, CommandOptions, CommandResult, CommandStdout,
@@ -95,7 +95,9 @@ impl ProcessManager for MockProcessManager {
                 });
                 match stdout {
                     CommandStdout::Capture => Ok(CommandResult::Captured(Vec::new())),
-                    CommandStdout::Stream(_) | CommandStdout::Inherit => Ok(CommandResult::Completed),
+                    CommandStdout::Stream(_) | CommandStdout::Inherit => {
+                        Ok(CommandResult::Completed)
+                    }
                 }
             }
             CommandMode::Background => {

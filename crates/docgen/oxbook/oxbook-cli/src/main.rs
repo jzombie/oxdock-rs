@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
-use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
+use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes,
 };
@@ -1232,13 +1232,9 @@ fn build_env_from_oxfile(
     io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
     io_cfg.insert_output_pipe_stderr_inherit(PIPE_SETUP);
     io_cfg.insert_output_pipe(PIPE_SNIPPET, build_stdout.clone());
-    let final_cwd = run_steps_with_context_result_with_io(
-        &temp_root,
-        &build_context,
-        &steps,
-        io_cfg,
-    )
-    .with_context(|| format!("run {}", path.display()))?;
+    let final_cwd =
+        run_steps_with_context_result_with_io(&temp_root, &build_context, &steps, io_cfg)
+            .with_context(|| format!("run {}", path.display()))?;
 
     Ok(RunnerEnv {
         root: temp_root,
@@ -1490,13 +1486,8 @@ fn run_in_env_with_resolver(
         io_cfg.insert_output_pipe_stdout(PIPE_SNIPPET, use_stdout.clone());
         io_cfg.insert_output_pipe_stderr(PIPE_SNIPPET, use_stderr.clone());
 
-        run_steps_with_context_result_with_io(
-            &env.root,
-            workspace_resolver.root(),
-            &steps,
-            io_cfg,
-        )
-        .with_context(|| format!("run {}", oxfile_path.display()))?;
+        run_steps_with_context_result_with_io(&env.root, workspace_resolver.root(), &steps, io_cfg)
+            .with_context(|| format!("run {}", oxfile_path.display()))?;
 
         // Determine which capture buffer to read from: prefer explicit
         // capture buffers passed by the caller; otherwise use the internal

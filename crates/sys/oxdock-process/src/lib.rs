@@ -493,9 +493,7 @@ impl ProcessManager for SyntheticProcessManager {
                 }
                 CommandStdout::Inherit => {
                     if matches!(stderr, CommandStderr::Stream(_)) {
-                        bail!(
-                            "stderr streaming not supported for background command under miri"
-                        );
+                        bail!("stderr streaming not supported for background command under miri");
                     }
                     let plan = plan_background(ctx, script)?;
                     Ok(CommandResult::Background(plan))

@@ -17,7 +17,11 @@ fn with_io_block_wraps_commands() {
     let first = &steps[0].kind;
     match first {
         StepKind::WithIo { bindings, cmd } => {
-            assert_eq!(bindings.len(), 1, "stdout default should be applied exactly once");
+            assert_eq!(
+                bindings.len(),
+                1,
+                "stdout default should be applied exactly once"
+            );
             assert_eq!(bindings[0].stream, IoStream::Stdout);
             assert_eq!(bindings[0].pipe.as_deref(), Some("setup"));
             match cmd.as_ref() {

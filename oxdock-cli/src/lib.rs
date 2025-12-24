@@ -7,8 +7,8 @@ use std::env;
 use std::io::{self, IsTerminal, Read};
 use std::sync::{Arc, Mutex};
 
+use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
 pub use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result};
-use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
 pub use oxdock_process::shell_program;
 
@@ -197,12 +197,8 @@ where
 
         let mut io_cfg = ExecIo::new();
         io_cfg.set_stdin(stdin_handle);
-        final_cwd = run_steps_with_context_result_with_io(
-            &temp_root,
-            &workspace_root,
-            &steps,
-            io_cfg,
-        )?;
+        final_cwd =
+            run_steps_with_context_result_with_io(&temp_root, &workspace_root, &steps, io_cfg)?;
     }
 
     // If requested, drop into an interactive shell after running the script.

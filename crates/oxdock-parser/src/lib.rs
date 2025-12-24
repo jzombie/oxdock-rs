@@ -125,9 +125,19 @@ mod tests {
         match &steps[0].kind {
             StepKind::WithIo { bindings, cmd } => {
                 assert_eq!(bindings.len(), 3);
-                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stdin) && b.pipe.is_none()));
-                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stdout) && b.pipe.as_deref() == Some("setup")));
-                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stderr) && b.pipe.as_deref() == Some("errors")));
+                assert!(
+                    bindings
+                        .iter()
+                        .any(|b| matches!(b.stream, IoStream::Stdin) && b.pipe.is_none())
+                );
+                assert!(
+                    bindings.iter().any(|b| matches!(b.stream, IoStream::Stdout)
+                        && b.pipe.as_deref() == Some("setup"))
+                );
+                assert!(
+                    bindings.iter().any(|b| matches!(b.stream, IoStream::Stderr)
+                        && b.pipe.as_deref() == Some("errors"))
+                );
                 assert_eq!(cmd.as_ref(), &StepKind::Run("echo hi".into()));
             }
             other => panic!("expected WITH_IO, saw {:?}", other),

@@ -163,10 +163,7 @@ impl ExecIo {
     }
 }
 
-fn assemble_default_io(
-    stdin: Option<SharedInput>,
-    stdout: Option<SharedOutput>,
-) -> ExecIo {
+fn assemble_default_io(stdin: Option<SharedInput>, stdout: Option<SharedOutput>) -> ExecIo {
     let mut io = ExecIo::new();
     io.set_stdin(stdin);
     io.set_stdout(stdout.clone());

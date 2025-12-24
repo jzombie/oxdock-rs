@@ -1,6 +1,4 @@
-use crate::ast::{
-    Guard, IoBinding, IoStream, PlatformGuard, Step, StepKind, WorkspaceTarget,
-};
+use crate::ast::{Guard, IoBinding, IoStream, PlatformGuard, Step, StepKind, WorkspaceTarget};
 use crate::lexer::{self, RawToken, Rule};
 use anyhow::{Result, anyhow, bail};
 use pest::iterators::Pair;
@@ -90,17 +88,15 @@ impl<'a> ScriptParser<'a> {
             pending_can_open_block: false,
             pending_scope_enters: 0,
             scope_stack: Vec::new(),
-             pending_io_block: None,
-             io_scope_stack: Vec::new(),
-             block_stack: Vec::new(),
+            pending_io_block: None,
+            io_scope_stack: Vec::new(),
+            block_stack: Vec::new(),
         })
     }
 
     pub fn parse(mut self) -> Result<Vec<Step>> {
         while let Some(token) = self.tokens.pop_front() {
-            if self.pending_io_block.is_some()
-                && !matches!(token, RawToken::BlockStart { .. })
-            {
+            if self.pending_io_block.is_some() && !matches!(token, RawToken::BlockStart { .. }) {
                 let pending = self.pending_io_block.take().unwrap();
                 bail!(
                     "line {}: WITH_IO block must be followed by '{{'",
@@ -390,9 +386,9 @@ impl<'a> ScriptParser<'a> {
     }
 
     fn apply_io_guards(&self, guards: Vec<Vec<Guard>>) -> Vec<Vec<Guard>> {
-        self.io_scope_stack
-            .iter()
-            .fold(guards, |acc, frame| combine_guard_groups(&acc, &frame.guards))
+        self.io_scope_stack.iter().fold(guards, |acc, frame| {
+            combine_guard_groups(&acc, &frame.guards)
+        })
     }
 }
 
