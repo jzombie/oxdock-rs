@@ -455,8 +455,20 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             StepKind::RunBg(cmd.into())
         }
         Rule::copy_command => {
-            let mut args = parse_args(pair)?;
+            let mut args: Vec<String> = Vec::new();
+            let mut from_current_workspace = false;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::from_current_workspace_flag => from_current_workspace = true,
+                    Rule::argument => args.push(parse_argument(inner)?),
+                    _ => {}
+                }
+            }
+            if args.len() != 2 {
+                bail!("COPY expects 2 arguments (from, to)");
+            }
             StepKind::Copy {
+                from_current_workspace,
                 from: args.remove(0).into(),
                 to: args.remove(0).into(),
             }

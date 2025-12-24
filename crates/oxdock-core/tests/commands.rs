@@ -55,6 +55,36 @@ fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
 }
 
 #[test]
+fn workspace_local_copy_cannot_escape_workspace_root() {
+    let snapshot_dir = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_dir);
+    let workspace_dir = GuardedPath::tempdir().unwrap();
+    let workspace = guard_root(&workspace_dir);
+
+    let outside_dir = GuardedPath::tempdir().unwrap();
+    let outside = guard_root(&outside_dir);
+    let outside_file = outside.join("escape.txt").unwrap();
+    write_text(&outside_file, "outside workspace");
+
+    let script = indoc!(
+        r#"
+        WORKSPACE LOCAL
+        COPY --from-current-workspace "{outside}" out/target
+    "#
+    );
+    let outside_str = outside_file.as_path().to_string_lossy().to_string();
+    let script = script.replace("{outside}", &outside_str);
+    let steps = oxdock_parser::parse_script(&script).unwrap();
+
+    let result =
+        run_steps_with_context_result_with_io(&snapshot, &workspace, &steps, ExecIo::new());
+    assert!(
+        result.is_err(),
+        "expected COPY --from-current-workspace to reject paths outside workspace root even after WORKSPACE LOCAL"
+    );
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "requires symlink support; Miri synthetic fs cannot create symlinks"
@@ -139,6 +169,7 @@ fn commands_behave_cross_platform() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Copy {
+                from_current_workspace: false,
                 from: "./source.txt".into(),
                 to: "./client/dist/from_build.txt".into(),
             },

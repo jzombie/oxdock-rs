@@ -21,7 +21,8 @@
 
     COPY "{{ env:OXBOOK_RUNNER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
     WITH_IO [stdout=pipe:setup, stderr=pipe:setup] {
-        RUN CARGO_TARGET_DIR="target" cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+        ENV CARGO_TARGET_DIR="target"
+        RUN cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
     }
 }
 
@@ -33,7 +34,7 @@
     # 3. Build the Snippet
     #    Stream build output to terminal via setup pipe
     WITH_IO [stdout=pipe:setup, stderr=pipe:setup] {
-        RUN cp "{{ env:OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
+        COPY --from-current-workspace "{{ env:OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
         RUN CARGO_TARGET_DIR="ws/target" cargo build --manifest-path "ws/snippet/Cargo.toml"
     }
 
