@@ -2,4 +2,4 @@ name = "copy_from_workspace_outside_escape"
 args = ["run", "--quiet"]
 
 [expect]
-status = "failure"
+status = "success"

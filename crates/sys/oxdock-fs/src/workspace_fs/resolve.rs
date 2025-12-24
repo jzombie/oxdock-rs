@@ -115,17 +115,9 @@ impl PathResolver {
 
         let from_path = Path::new(from);
         if Self::is_absolute_or_rooted(from_path) {
-            if let Ok(guarded) =
-                self.check_access_with_root(workspace_root, from_path, AccessMode::Read)
-            {
-                return self.backend.resolve_copy_source(guarded);
-            }
-
-            let rel = Self::root_relative_path(from_path);
-            let candidate = workspace_root.as_path().join(rel);
             return self
-                .check_access_with_root(workspace_root, &candidate, AccessMode::Read)
-                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
+                .check_access_with_root(workspace_root, from_path, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", from_path.display()))
                 .and_then(|guarded| self.backend.resolve_copy_source(guarded));
         }
 
@@ -235,6 +227,56 @@ mod tests {
     }
 
     #[test]
+    fn workspace_copy_source_absolute_within_root_is_allowed() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let workspace = GuardedPath::tempdir().unwrap();
+        let snapshot_root = snapshot.as_guarded_path().clone();
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut resolver =
+            PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
+        resolver.set_workspace_root(workspace_root.clone());
+
+        let workspace_resolver =
+            PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone()).unwrap();
+        let ws_dir = workspace_root.join("ws").unwrap();
+        workspace_resolver.create_dir_all(&ws_dir).unwrap();
+        let source = ws_dir.join("input.txt").unwrap();
+        workspace_resolver
+            .write_file(&source, b"workspace file")
+            .unwrap();
+
+        let source_str = source.as_path().to_string_lossy().to_string();
+        let resolved = resolver
+            .resolve_copy_source_from_workspace(&source_str)
+            .unwrap();
+        assert_eq!(resolved.as_path(), source.as_path());
+    }
+
+    #[test]
+    fn workspace_copy_source_relative_within_root_is_allowed() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let workspace = GuardedPath::tempdir().unwrap();
+        let snapshot_root = snapshot.as_guarded_path().clone();
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut resolver =
+            PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
+        resolver.set_workspace_root(workspace_root.clone());
+
+        let workspace_resolver =
+            PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone()).unwrap();
+        let ws_dir = workspace_root.join("ws_rel").unwrap();
+        workspace_resolver.create_dir_all(&ws_dir).unwrap();
+        let source = ws_dir.join("input.txt").unwrap();
+        workspace_resolver
+            .write_file(&source, b"workspace rel file")
+            .unwrap();
+
+        let resolved =
+            resolver.resolve_copy_source_from_workspace("ws_rel/input.txt").unwrap();
+        assert_eq!(resolved.as_path(), source.as_path());
+    }
+
+    #[test]
     fn workspace_copy_source_cannot_escape_workspace_root() {
         let snapshot = GuardedPath::tempdir().unwrap();
         let workspace = GuardedPath::tempdir().unwrap();
@@ -244,10 +286,25 @@ mod tests {
             PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
         resolver.set_workspace_root(workspace_root.clone());
 
-        // Attempt to resolve an absolute path that is outside the workspace root.
-        // This should fail when resolving specifically against the workspace.
-        let outside = "/this/path/does/not/exist";
-        let res = resolver.resolve_copy_source_from_workspace(outside);
-        assert!(res.is_err(), "expected error when resolving workspace-relative COPY outside root");
+        // Absolute path pointing outside the workspace must fail, even if it exists.
+        let outside_temp = GuardedPath::tempdir().unwrap();
+        let outside_root = outside_temp.as_guarded_path().clone();
+        let outside_resolver =
+            PathResolver::new_guarded(outside_root.clone(), outside_root.clone()).unwrap();
+        let outside_file = outside_root.join("escape.txt").unwrap();
+        outside_resolver
+            .write_file(&outside_file, b"outside workspace")
+            .unwrap();
+        let outside_abs = outside_file.as_path().to_string_lossy().to_string();
+        let res = resolver.resolve_copy_source_from_workspace(&outside_abs);
+        assert!(res.is_err(), "expected error for absolute path outside workspace root");
+
+        // Relative paths that attempt to traverse above the workspace root must also fail.
+        let rel_escape = "../escape.txt";
+        let rel_res = resolver.resolve_copy_source_from_workspace(rel_escape);
+        assert!(
+            rel_res.is_err(),
+            "expected error for relative path escaping workspace root"
+        );
     }
 }
