@@ -288,6 +288,22 @@ pub mod harness {
         };
 
         let mut cmd = fixture.cargo();
+        // If this case requires symlink support but the host cannot create symlinks,
+        // skip it rather than failing the entire harness. This avoids CI breakage on
+        // Windows hosts without developer symlink privileges.
+        if let Some(target) = &temp_target {
+            let needs_symlink = case.name.contains("symlink")
+                || case.name == "copy_broken_symlink"
+                || case.name == "copy_complex";
+            if needs_symlink {
+                if let Some(t) = &temp_target {
+                    if !oxdock_fs::test_utils::can_create_symlinks(t) {
+                        eprintln!("skipping fixture case {}::{}: symlink unsupported on host", spec.name, case.name);
+                        return Ok(());
+                    }
+                }
+            }
+        }
         cmd.args(&case.args);
         if let Some(target) = &temp_target {
             cmd.env("CARGO_TARGET_DIR", command_path(target).into_owned());
