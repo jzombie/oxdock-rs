@@ -15,14 +15,14 @@ anyhow.workspace = true
 libtest-mimic.workspace = true
 oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
-toml_edit.workspace = true
 oxdock-test-utils.workspace = true
+toml_edit.workspace = true
 
 [dev-dependencies]
+indoc.workspace = true
 oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 proc-macro2.workspace = true
 proptest.workspace = true
-indoc.workspace = true
 
 [[test]]
 name = "integration_harness"
