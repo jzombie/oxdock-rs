@@ -101,35 +101,7 @@ fn cfg_env_lines(output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{cfg_env_lines, emit_feature_envs, feature_env_lines, trim_cfg_quotes};
-    use std::env;
-
-    struct EnvGuard {
-        key: &'static str,
-        value: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, value: prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(value) => unsafe {
-                    env::set_var(self.key, value);
-                },
-                None => unsafe {
-                    env::remove_var(self.key);
-                },
-            }
-        }
-    }
+    use oxdock_test_utils::EnvGuard;
 
     #[test]
     fn trims_cfg_quotes() {

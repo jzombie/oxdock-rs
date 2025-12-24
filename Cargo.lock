@@ -325,6 +325,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
+ "oxdock-test-utils",
 ]
 
 [[package]]
@@ -397,6 +398,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "libc",
+ "oxdock-test-utils",
  "tempfile",
  "tracing",
  "windows-sys",
@@ -421,13 +423,19 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
+ "oxdock-test-utils",
 ]
+
+[[package]]
+name = "oxdock-test-utils"
+version = "0.5.0-alpha"
 
 [[package]]
 name = "oxdock-workspace-tests"
 version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
+ "indoc",
  "libtest-mimic",
  "oxdock-fixture",
  "oxdock-fs",

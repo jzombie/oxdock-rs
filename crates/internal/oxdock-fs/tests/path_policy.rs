@@ -4,35 +4,7 @@ use oxdock_fs::{
     GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, normalized_path,
     to_forward_slashes,
 };
-use std::env;
-
-struct EnvGuard {
-    key: &'static str,
-    value: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let prev = env::var(key).ok();
-        unsafe {
-            env::set_var(key, value);
-        }
-        Self { key, value: prev }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match &self.value {
-            Some(value) => unsafe {
-                env::set_var(self.key, value);
-            },
-            None => unsafe {
-                env::remove_var(self.key);
-            },
-        }
-    }
-}
+use oxdock_test_utils::EnvGuard;
 
 #[cfg_attr(
     miri,
