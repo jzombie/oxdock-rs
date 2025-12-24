@@ -172,7 +172,7 @@ Guards can now span multiple lines and wrap entire blocks of commands. This make
 ]
 WRITE linux-release.txt generated
 
-[platform==windows] {
+[platform:windows] {
     WRITE win.txt hi
     RUN powershell -Command Write-Host "windows!"
 }
