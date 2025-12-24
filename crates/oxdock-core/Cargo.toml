@@ -1,6 +1,6 @@
 [package]
-name = "oxdock-cli"
-description = "CLI tooling for executing OxDock's Docker-inspired language on native platforms."
+name = "oxdock-core"
+description = "Core engine for OxDock's Docker-inspired compile-time language, orchestrating workspace snapshots and asset embedding."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -14,19 +14,15 @@ normal = ["tracing"]
 development = []
 build = []
 
-# Use non-cli-suffixed binary name if installing from Cargo
-[[bin]]
-name = "oxdock"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
-indoc.workspace = true
-oxdock-core.workspace = true
 oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
-tempfile.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
+indoc.workspace = true
+oxdock-fs = { workspace = true, features = ["mock-fs"] }
+oxdock-process = { workspace = true, features = ["mock-process"] }
 oxdock-sys-test-utils.workspace = true
