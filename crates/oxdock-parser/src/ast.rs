@@ -216,6 +216,9 @@ pub enum StepKind {
         bindings: Vec<IoBinding>,
         cmd: Box<StepKind>,
     },
+    WithIoBlock {
+        bindings: Vec<IoBinding>,
+    },
     CopyGit {
         rev: TemplateString,
         from: TemplateString,
@@ -450,6 +453,10 @@ impl fmt::Display for StepKind {
             StepKind::WithIo { bindings, cmd } => {
                 let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
                 write!(f, "WITH_IO [{}] {}", parts.join(", "), cmd)
+            }
+            StepKind::WithIoBlock { bindings } => {
+                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
+                write!(f, "WITH_IO [{}] {{...}}", parts.join(", "))
             }
             StepKind::CopyGit {
                 rev,

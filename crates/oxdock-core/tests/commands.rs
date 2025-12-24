@@ -1,3 +1,4 @@
+use indoc::indoc;
 use oxdock_core::{
     run_steps, run_steps_with_context, run_steps_with_context_result_with_io, run_steps_with_fs,
     ExecIo,
@@ -1022,4 +1023,28 @@ fn cat_reads_stdin_with_io() {
 
     let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert_eq!(result, "hello from stdin");
+}
+
+#[test]
+fn with_io_block_applies_defaults() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let script = indoc! {r#"
+        WITH_IO [stdout=pipe:snippet] {
+            ECHO "alpha"
+            ECHO "beta"
+        }
+    "#};
+    let steps = oxdock_parser::parse_script(script).expect("parse WITH_IO block");
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_output_pipe("snippet", captured.clone());
+
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("execute WITH_IO block");
+
+    let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert_eq!(contents, "alpha\nbeta\n");
 }

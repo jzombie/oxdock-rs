@@ -12,6 +12,58 @@ struct ScopeFrame {
     had_command: bool,
 }
 
+#[derive(Clone)]
+struct PendingIoBlock {
+    line_no: usize,
+    bindings: Vec<IoBinding>,
+    guards: Vec<Vec<Guard>>,
+}
+
+#[derive(Clone)]
+struct IoScopeFrame {
+    line_no: usize,
+    had_command: bool,
+    bindings: Vec<IoBinding>,
+    guards: Vec<Vec<Guard>>,
+}
+
+#[derive(Clone, Copy)]
+enum BlockKind {
+    Guard,
+    Io,
+}
+
+#[derive(Default)]
+struct IoBindingSet {
+    stdin: Option<IoBinding>,
+    stdout: Option<IoBinding>,
+    stderr: Option<IoBinding>,
+}
+
+impl IoBindingSet {
+    fn insert(&mut self, binding: IoBinding) {
+        match binding.stream {
+            IoStream::Stdin => self.stdin = Some(binding),
+            IoStream::Stdout => self.stdout = Some(binding),
+            IoStream::Stderr => self.stderr = Some(binding),
+        }
+    }
+
+    fn into_vec(self) -> Vec<IoBinding> {
+        let mut out = Vec::new();
+        if let Some(binding) = self.stdin {
+            out.push(binding);
+        }
+        if let Some(binding) = self.stdout {
+            out.push(binding);
+        }
+        if let Some(binding) = self.stderr {
+            out.push(binding);
+        }
+        out
+    }
+}
+
 pub struct ScriptParser<'a> {
     tokens: VecDeque<RawToken<'a>>,
     steps: Vec<Step>,
@@ -21,6 +73,9 @@ pub struct ScriptParser<'a> {
     pending_can_open_block: bool,
     pending_scope_enters: usize,
     scope_stack: Vec<ScopeFrame>,
+    pending_io_block: Option<PendingIoBlock>,
+    io_scope_stack: Vec<IoScopeFrame>,
+    block_stack: Vec<BlockKind>,
 }
 
 impl<'a> ScriptParser<'a> {
@@ -35,23 +90,42 @@ impl<'a> ScriptParser<'a> {
             pending_can_open_block: false,
             pending_scope_enters: 0,
             scope_stack: Vec::new(),
+             pending_io_block: None,
+             io_scope_stack: Vec::new(),
+             block_stack: Vec::new(),
         })
     }
 
     pub fn parse(mut self) -> Result<Vec<Step>> {
         while let Some(token) = self.tokens.pop_front() {
+            if self.pending_io_block.is_some()
+                && !matches!(token, RawToken::BlockStart { .. })
+            {
+                let pending = self.pending_io_block.take().unwrap();
+                bail!(
+                    "line {}: WITH_IO block must be followed by '{{'",
+                    pending.line_no
+                );
+            }
             match token {
                 RawToken::Guard { pair, line_end } => {
                     let groups = parse_guard_line(pair)?;
                     self.handle_guard_token(line_end, groups)?
                 }
-                RawToken::BlockStart { line_no } => self.start_block_from_pending(line_no)?,
+                RawToken::BlockStart { line_no } => self.start_block(line_no)?,
                 RawToken::BlockEnd { line_no } => self.end_block(line_no)?,
                 RawToken::Command { pair, line_no } => {
                     let kind = parse_command(pair)?;
                     self.handle_command_token(line_no, kind)?
                 }
             }
+        }
+
+        if let Some(pending) = self.pending_io_block.take() {
+            bail!(
+                "line {}: WITH_IO block must be followed by '{{'",
+                pending.line_no
+            );
         }
 
         if self.guard_stack.len() != 1 {
@@ -61,6 +135,13 @@ impl<'a> ScriptParser<'a> {
             && !pending.is_empty()
         {
             bail!("guard declared on final lines without a following command");
+        }
+
+        if let Some(frame) = self.io_scope_stack.last() {
+            bail!(
+                "WITH_IO block starting on line {} was not closed",
+                frame.line_no
+            );
         }
 
         Ok(self.steps)
@@ -92,7 +173,7 @@ impl<'a> ScriptParser<'a> {
         });
     }
 
-    fn start_block_from_pending(&mut self, line_no: usize) -> Result<()> {
+    fn start_guard_block_from_pending(&mut self, line_no: usize) -> Result<()> {
         let guards = self
             .pending_guards
             .take()
@@ -101,10 +182,10 @@ impl<'a> ScriptParser<'a> {
             bail!("line {}: '{{' must directly follow a guard", line_no);
         }
         self.pending_can_open_block = false;
-        self.start_block(guards, line_no)
+        self.enter_guard_block(guards, line_no)
     }
 
-    fn start_block(&mut self, guards: Vec<Vec<Guard>>, line_no: usize) -> Result<()> {
+    fn enter_guard_block(&mut self, guards: Vec<Vec<Guard>>, line_no: usize) -> Result<()> {
         let with_pending = if let Some(pending) = self.pending_guards.take() {
             combine_guard_groups(&pending, &guards)
         } else {
@@ -127,7 +208,55 @@ impl<'a> ScriptParser<'a> {
         Ok(())
     }
 
+    fn begin_io_block(
+        &mut self,
+        line_no: usize,
+        bindings: Vec<IoBinding>,
+        guards: Vec<Vec<Guard>>,
+    ) -> Result<()> {
+        if self.pending_io_block.is_some() {
+            bail!(
+                "line {}: previous WITH_IO block is still waiting for '{{'",
+                line_no
+            );
+        }
+        self.pending_io_block = Some(PendingIoBlock {
+            line_no,
+            bindings,
+            guards,
+        });
+        Ok(())
+    }
+
+    fn start_block(&mut self, line_no: usize) -> Result<()> {
+        if let Some(pending) = self.pending_io_block.take() {
+            self.block_stack.push(BlockKind::Io);
+            self.io_scope_stack.push(IoScopeFrame {
+                line_no: pending.line_no,
+                had_command: false,
+                bindings: pending.bindings,
+                guards: pending.guards,
+            });
+            Ok(())
+        } else {
+            self.start_guard_block_from_pending(line_no)?;
+            self.block_stack.push(BlockKind::Guard);
+            Ok(())
+        }
+    }
+
     fn end_block(&mut self, line_no: usize) -> Result<()> {
+        let kind = self
+            .block_stack
+            .pop()
+            .ok_or_else(|| anyhow!("line {}: unexpected '}}'", line_no))?;
+        match kind {
+            BlockKind::Guard => self.end_guard_block(line_no),
+            BlockKind::Io => self.end_io_block(line_no),
+        }
+    }
+
+    fn end_guard_block(&mut self, line_no: usize) -> Result<()> {
         if self.guard_stack.len() == 1 {
             bail!("line {}: unexpected '}}'", line_no);
         }
@@ -159,6 +288,21 @@ impl<'a> ScriptParser<'a> {
         Ok(())
     }
 
+    fn end_io_block(&mut self, line_no: usize) -> Result<()> {
+        let frame = self
+            .io_scope_stack
+            .pop()
+            .ok_or_else(|| anyhow!("line {}: unexpected '}}'", line_no))?;
+        if !frame.had_command {
+            bail!(
+                "line {}: WITH_IO block starting on line {} must contain at least one command",
+                line_no,
+                frame.line_no
+            );
+        }
+        Ok(())
+    }
+
     fn guard_context(&mut self, inline: Option<Vec<Vec<Guard>>>) -> Vec<Vec<Guard>> {
         let mut context = if let Some(top) = self.guard_stack.last() {
             top.clone()
@@ -185,16 +329,27 @@ impl<'a> ScriptParser<'a> {
 
     fn handle_command(
         &mut self,
-        _line_no: usize,
+        line_no: usize,
         kind: StepKind,
         inline_guards: Option<Vec<Vec<Guard>>>,
     ) -> Result<()> {
+        if let StepKind::WithIoBlock { bindings } = kind {
+            let guards = self.guard_context(inline_guards);
+            self.begin_io_block(line_no, bindings, guards)?;
+            return Ok(());
+        }
+
         let guards = self.guard_context(inline_guards);
+        let guards = self.apply_io_guards(guards);
         let scope_enter = self.pending_scope_enters;
         self.pending_scope_enters = 0;
         for frame in self.scope_stack.iter_mut() {
             frame.had_command = true;
         }
+        for frame in self.io_scope_stack.iter_mut() {
+            frame.had_command = true;
+        }
+        let kind = self.apply_io_defaults(kind);
         self.steps.push(Step {
             guards,
             kind,
@@ -202,6 +357,42 @@ impl<'a> ScriptParser<'a> {
             scope_exit: 0,
         });
         Ok(())
+    }
+
+    fn apply_io_defaults(&self, kind: StepKind) -> StepKind {
+        let defaults = self.current_io_defaults();
+        if defaults.is_empty() {
+            return kind;
+        }
+        match kind {
+            StepKind::WithIo { bindings, cmd } => StepKind::WithIo {
+                bindings: merge_bindings(&defaults, &bindings),
+                cmd,
+            },
+            other => StepKind::WithIo {
+                bindings: defaults,
+                cmd: Box::new(other),
+            },
+        }
+    }
+
+    fn current_io_defaults(&self) -> Vec<IoBinding> {
+        if self.io_scope_stack.is_empty() {
+            return Vec::new();
+        }
+        let mut set = IoBindingSet::default();
+        for frame in &self.io_scope_stack {
+            for binding in &frame.bindings {
+                set.insert(binding.clone());
+            }
+        }
+        set.into_vec()
+    }
+
+    fn apply_io_guards(&self, guards: Vec<Vec<Guard>>) -> Vec<Vec<Guard>> {
+        self.io_scope_stack
+            .iter()
+            .fold(guards, |acc, frame| combine_guard_groups(&acc, &frame.guards))
     }
 }
 
@@ -225,6 +416,17 @@ fn combine_guard_groups(a: &[Vec<Guard>], b: &[Vec<Guard>]) -> Vec<Vec<Guard>> {
         }
     }
     combined
+}
+
+fn merge_bindings(defaults: &[IoBinding], overrides: &[IoBinding]) -> Vec<IoBinding> {
+    let mut set = IoBindingSet::default();
+    for binding in defaults {
+        set.insert(binding.clone());
+    }
+    for binding in overrides {
+        set.insert(binding.clone());
+    }
+    set.into_vec()
 }
 
 fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
@@ -296,9 +498,10 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                     }
                 }
             }
-            StepKind::WithIo {
-                bindings,
-                cmd: cmd.ok_or_else(|| anyhow!("missing command in WITH_IO"))?,
+            if let Some(cmd) = cmd {
+                StepKind::WithIo { bindings, cmd }
+            } else {
+                StepKind::WithIoBlock { bindings }
             }
         }
         Rule::copy_git_command => {

@@ -868,6 +868,9 @@ fn execute_steps<P: ProcessManager>(
                     )?;
                     Ok(())
                 }
+                StepKind::WithIoBlock { .. } => {
+                    bail!("WITH_IO block should have been expanded during parsing")
+                }
 
                 StepKind::CaptureToFile { path, cmd } => {
                     let ctx = state.command_ctx();

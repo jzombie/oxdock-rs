@@ -183,6 +183,27 @@ WRITE linux-release.txt generated
 - Guard-only lines without a block apply to the next command, preserving the existing syntax.
 - Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
 
+## WITH_IO defaults and blocks
+
+- The inline form (`WITH_IO [stdin, stdout=pipe:setup] RUN cargo test`) applies only to the next command and lets you mix-and-match stream sources (stdin), sinks (stdout/stderr), and named pipes that UI layers can render elsewhere.
+- The block form (`WITH_IO [stdout=pipe:block_outer] { ... }`) hoists those bindings so every enclosed command inherits them. Defaults stack: nested blocks merge bindings, and inline `WITH_IO` calls inside a block can override or extend the inherited defaults without affecting siblings.
+- Pipes decouple the DSL from the host: the CLI/docgen runtimes pre-register names such as `setup` or `snippet`, but you can also expose your own handles via `ExecIo` to tee structured logs into files, sockets, or streamed UI widgets.
+
+```text
+WITH_IO [stdout=pipe:block_outer] {
+  ECHO "outer-1"
+  WITH_IO [stdout] ECHO "override-stdout" # inline override streams to the terminal
+  WITH_IO [stdout=pipe:block_inner] {
+    ECHO "inner-2"
+  }
+  ECHO "outer-3"
+}
+
+ECHO "outside"
+```
+
+`block_outer` captures the first and last lines, `block_inner` isolates the nested section, and the inline override prints directly to the user before the default binding resumes. Once the braces close the previous IO defaults are restored, so later commands behave exactly as if the block never ran.
+
 ## Comments in DSL scripts
 
 - **String / file-based DSL (the original format):** The parser strips three comment styles before interpreting commands. Lines that start with `#` or `//` are ignored entirely, and C-style `/* ... */` block comments (with nesting) are removed while preserving newlines so error spans remain stable. Comment markers inside quoted strings stay intact—only actual comment regions are dropped.
