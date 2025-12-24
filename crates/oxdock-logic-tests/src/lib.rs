@@ -232,27 +232,19 @@ pub mod harness {
             )
             .with_path_dependency(
                 "oxdock-embed",
-                workspace_root
-                    .join("crates/oxdock-embed")?
-                    .to_string(),
+                workspace_root.join("crates/oxdock-embed")?.to_string(),
             )
             .with_path_dependency(
                 "oxdock-fs",
-                workspace_root
-                    .join("crates/sys/oxdock-fs")?
-                    .to_string(),
+                workspace_root.join("crates/sys/oxdock-fs")?.to_string(),
             )
             .with_path_dependency(
                 "oxdock-core",
-                workspace_root
-                    .join("crates/oxdock-core")?
-                    .to_string(),
+                workspace_root.join("crates/oxdock-core")?.to_string(),
             )
             .with_path_dependency(
                 "oxdock-parser",
-                workspace_root
-                    .join("crates/oxdock-parser")?
-                    .to_string(),
+                workspace_root.join("crates/oxdock-parser")?.to_string(),
             )
             .with_path_dependency(
                 "oxdock-process",
