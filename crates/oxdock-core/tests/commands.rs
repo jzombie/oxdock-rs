@@ -1,8 +1,9 @@
 use oxdock_core::{
-    run_steps, run_steps_with_context, run_steps_with_context_result, run_steps_with_fs,
+    run_steps, run_steps_with_context, run_steps_with_context_result_with_io, run_steps_with_fs,
+    ExecIo,
 };
 use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
-use oxdock_parser::{Step, StepKind, WorkspaceTarget};
+use oxdock_parser::{IoBinding, IoStream, Step, StepKind, WorkspaceTarget};
 use oxdock_process::CommandBuilder;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -1004,14 +1005,20 @@ fn cat_reads_stdin_with_io() {
     let steps = vec![Step {
         guards: Vec::new(),
         kind: StepKind::WithIo {
-            streams: vec!["stdin".to_string()],
+            bindings: vec![IoBinding {
+                stream: IoStream::Stdin,
+                pipe: None,
+            }],
             cmd: Box::new(StepKind::Cat(None)),
         },
         scope_enter: 0,
         scope_exit: 0,
     }];
 
-    run_steps_with_context_result(&root, &root, &steps, Some(input), Some(output.clone())).unwrap();
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
 
     let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert_eq!(result, "hello from stdin");

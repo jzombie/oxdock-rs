@@ -1,4 +1,6 @@
-use crate::ast::{Guard, PlatformGuard, Step, StepKind, WorkspaceTarget};
+use crate::ast::{
+    Guard, IoBinding, IoStream, PlatformGuard, Step, StepKind, WorkspaceTarget,
+};
 use crate::lexer::{self, RawToken, Rule};
 use anyhow::{Result, anyhow, bail};
 use pest::iterators::Pair;
@@ -278,14 +280,14 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             }
         }
         Rule::with_io_command => {
-            let mut streams = Vec::new();
+            let mut bindings = Vec::new();
             let mut cmd = None;
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::io_flags => {
                         for flag in inner.into_inner() {
-                            if flag.as_rule() == Rule::io_flag {
-                                streams.push(flag.as_str().to_string());
+                            if flag.as_rule() == Rule::io_binding {
+                                bindings.push(parse_io_binding(flag)?);
                             }
                         }
                     }
@@ -295,7 +297,7 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 }
             }
             StepKind::WithIo {
-                streams,
+                bindings,
                 cmd: cmd.ok_or_else(|| anyhow!("missing command in WITH_IO"))?,
             }
         }
@@ -561,6 +563,38 @@ fn parse_guard_line(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {
         }
     }
     Ok(groups)
+}
+
+fn parse_io_binding(pair: Pair<Rule>) -> Result<IoBinding> {
+    let mut stream = None;
+    let mut pipe = None;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::io_stream => stream = Some(parse_io_stream(inner.as_str())),
+            Rule::pipe_binding => pipe = Some(parse_pipe_binding(inner)?),
+            _ => {}
+        }
+    }
+    let stream = stream.ok_or_else(|| anyhow!("missing IO stream in WITH_IO"))?;
+    Ok(IoBinding { stream, pipe })
+}
+
+fn parse_io_stream(text: &str) -> IoStream {
+    match text {
+        "stdin" => IoStream::Stdin,
+        "stdout" => IoStream::Stdout,
+        "stderr" => IoStream::Stderr,
+        _ => unreachable!("parser produced invalid io_stream token"),
+    }
+}
+
+fn parse_pipe_binding(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::pipe_name {
+            return Ok(inner.as_str().to_string());
+        }
+    }
+    bail!("missing pipe identifier in WITH_IO binding");
 }
 
 fn parse_guard_groups(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {

@@ -106,8 +106,11 @@ argument = { quoted_string | templated_arg | unquoted_arg }
 templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
 unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 include_dirty_flag = { "--include-dirty" }
-io_flags = { "[" ~ ws? ~ io_flag ~ (ws? ~ "," ~ ws? ~ io_flag)* ~ ws? ~ "]" }
-io_flag = { "stdin" | "stdout" | "stderr" }
+io_flags = { "[" ~ ws? ~ io_binding ~ (ws? ~ "," ~ ws? ~ io_binding)* ~ ws? ~ "]" }
+io_binding = { io_stream ~ (ws? ~ "=" ~ ws? ~ pipe_binding)? }
+io_stream = { "stdin" | "stdout" | "stderr" }
+pipe_binding = { "pipe" ~ ":" ~ pipe_name }
+pipe_name = @{ (ASCII_ALPHANUMERIC | "_" | "-")+ }
 
 workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
 env_pair = { env_key_part ~ ws? ~ "=" ~ ws? ~ env_value_part }

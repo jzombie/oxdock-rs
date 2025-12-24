@@ -8,6 +8,7 @@ use std::io::{self, IsTerminal, Read};
 use std::sync::{Arc, Mutex};
 
 pub use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result};
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
 pub use oxdock_process::shell_program;
 
@@ -107,7 +108,12 @@ pub fn execute_with_result(opts: Options, workspace_root: GuardedPath) -> Result
     let mut final_cwd = temp_root.clone();
     if !script.trim().is_empty() {
         let steps = parse_script(&script)?;
-        final_cwd = run_steps_with_context_result(&temp_root, &workspace_root, &steps, None, None)?;
+        final_cwd = run_steps_with_context_result_with_io(
+            &temp_root,
+            &workspace_root,
+            &steps,
+            ExecIo::new(),
+        )?;
     }
 
     Ok(ExecutionResult { tempdir, final_cwd })
@@ -189,8 +195,14 @@ where
             }
         }
 
-        final_cwd =
-            run_steps_with_context_result(&temp_root, &workspace_root, &steps, stdin_handle, None)?;
+        let mut io_cfg = ExecIo::new();
+        io_cfg.set_stdin(stdin_handle);
+        final_cwd = run_steps_with_context_result_with_io(
+            &temp_root,
+            &workspace_root,
+            &steps,
+            io_cfg,
+        )?;
     }
 
     // If requested, drop into an interactive shell after running the script.

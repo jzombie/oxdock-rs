@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes,
 };
@@ -25,6 +25,8 @@ const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
 const SHORT_HASH_LEN: usize = 32;
 // If set to "0" disables terminal streaming; otherwise auto-on when stdout is a TTY.
 const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
+const PIPE_SETUP: &str = "setup";
+const PIPE_SNIPPET: &str = "snippet";
 
 #[derive(Debug)]
 struct FenceBlock {
@@ -1179,9 +1181,18 @@ fn build_env_from_oxfile(
         output_buf.clone()
     };
 
-    let final_cwd =
-        run_steps_with_context_result(&temp_root, &build_context, &steps, None, Some(build_stdout))
-            .with_context(|| format!("run {}", path.display()))?;
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(build_stdout.clone()));
+    io_cfg.set_stderr(Some(build_stdout.clone()));
+    io_cfg.insert_output_pipe(PIPE_SETUP, build_stdout.clone());
+    io_cfg.insert_output_pipe(PIPE_SNIPPET, build_stdout.clone());
+    let final_cwd = run_steps_with_context_result_with_io(
+        &temp_root,
+        &build_context,
+        &steps,
+        io_cfg,
+    )
+    .with_context(|| format!("run {}", path.display()))?;
 
     Ok(RunnerEnv {
         root: temp_root,
@@ -1383,12 +1394,25 @@ fn run_in_env_with_resolver(
                 }
             };
 
-        run_steps_with_context_result(
+        let mut io_cfg = ExecIo::new();
+        io_cfg.set_stdin(input_stream);
+        io_cfg.set_stdout(Some(use_stdout.clone()));
+        io_cfg.set_stderr(Some(use_stdout.clone()));
+
+        // Pipe setup/build output directly to the user's terminal.
+        let setup_buf = Arc::new(Mutex::new(Vec::new()));
+        let setup_stream: SharedOutput = Arc::new(Mutex::new(EnvTee {
+            buf: setup_buf,
+            term: Some(std::io::stdout()),
+        }));
+        io_cfg.insert_output_pipe(PIPE_SETUP, setup_stream);
+        io_cfg.insert_output_pipe(PIPE_SNIPPET, use_stdout.clone());
+
+        run_steps_with_context_result_with_io(
             &env.root,
             workspace_resolver.root(),
             &steps,
-            input_stream,
-            Some(use_stdout),
+            io_cfg,
         )
         .with_context(|| format!("run {}", oxfile_path.display()))?;
 

@@ -5,12 +5,82 @@ use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
-use oxdock_parser::{Step, StepKind, TemplateString, WorkspaceTarget};
+use oxdock_parser::{IoStream, Step, StepKind, TemplateString, WorkspaceTarget};
 use oxdock_process::{
-    BackgroundHandle, BuiltinEnv, CommandContext, CommandOptions, CommandResult, CommandStdout,
-    ProcessManager, SharedInput, SharedOutput, default_process_manager, expand_command_env,
+    BackgroundHandle, BuiltinEnv, CommandContext, CommandOptions, CommandResult, CommandStderr,
+    CommandStdout, ProcessManager, SharedInput, SharedOutput, default_process_manager,
+    expand_command_env,
 };
 use sha2::{Digest, Sha256};
+
+#[derive(Clone, Default)]
+pub struct ExecIo {
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+    stderr: Option<SharedOutput>,
+    input_pipes: HashMap<String, SharedInput>,
+    output_pipes: HashMap<String, SharedOutput>,
+}
+
+impl ExecIo {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_stdin(&mut self, stdin: Option<SharedInput>) {
+        self.stdin = stdin;
+    }
+
+    pub fn set_stdout(&mut self, stdout: Option<SharedOutput>) {
+        self.stdout = stdout.clone();
+        if self.stderr.is_none() {
+            self.stderr = stdout;
+        }
+    }
+
+    pub fn set_stderr(&mut self, stderr: Option<SharedOutput>) {
+        self.stderr = stderr;
+    }
+
+    pub fn insert_input_pipe<S: Into<String>>(&mut self, name: S, reader: SharedInput) {
+        self.input_pipes.insert(name.into(), reader);
+    }
+
+    pub fn insert_output_pipe<S: Into<String>>(&mut self, name: S, writer: SharedOutput) {
+        self.output_pipes.insert(name.into(), writer);
+    }
+
+    pub fn stdin(&self) -> Option<SharedInput> {
+        self.stdin.clone()
+    }
+
+    pub fn stdout(&self) -> Option<SharedOutput> {
+        self.stdout.clone()
+    }
+
+    pub fn stderr(&self) -> Option<SharedOutput> {
+        self.stderr.clone().or_else(|| self.stdout.clone())
+    }
+
+    pub fn input_pipe(&self, name: &str) -> Option<SharedInput> {
+        self.input_pipes.get(name).cloned()
+    }
+
+    pub fn output_pipe(&self, name: &str) -> Option<SharedOutput> {
+        self.output_pipes.get(name).cloned()
+    }
+}
+
+fn assemble_default_io(
+    stdin: Option<SharedInput>,
+    stdout: Option<SharedOutput>,
+) -> ExecIo {
+    let mut io = ExecIo::new();
+    io.set_stdin(stdin);
+    io.set_stdout(stdout.clone());
+    io.set_stderr(stdout);
+    io
+}
 
 struct ExecState<P: ProcessManager> {
     fs: Box<dyn WorkspaceFs>,
@@ -19,6 +89,7 @@ struct ExecState<P: ProcessManager> {
     envs: HashMap<String, String>,
     bg_children: Vec<P::Handle>,
     scope_stack: Vec<ScopeSnapshot>,
+    io: ExecIo,
 }
 
 struct ScopeSnapshot {
@@ -63,7 +134,17 @@ pub fn run_steps_with_context_result(
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
 ) -> Result<GuardedPath> {
-    match run_steps_inner(fs_root, build_context, steps, stdin, stdout) {
+    let io = assemble_default_io(stdin, stdout);
+    run_steps_with_context_result_with_io(fs_root, build_context, steps, io)
+}
+
+pub fn run_steps_with_context_result_with_io(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+    io: ExecIo,
+) -> Result<GuardedPath> {
+    match run_steps_inner(fs_root, build_context, steps, io) {
         Ok(final_cwd) => Ok(final_cwd),
         Err(err) => {
             // Compose a single error message with the top cause plus a compact fs snapshot.
@@ -106,12 +187,11 @@ fn run_steps_inner(
     fs_root: &GuardedPath,
     build_context: &GuardedPath,
     steps: &[Step],
-    stdin: Option<SharedInput>,
-    stdout: Option<SharedOutput>,
+    io: ExecIo,
 ) -> Result<GuardedPath> {
     let mut resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
     resolver.set_workspace_root(build_context.clone());
-    run_steps_with_fs(Box::new(resolver), steps, stdin, stdout)
+    run_steps_with_fs_with_io(Box::new(resolver), steps, io)
 }
 
 pub fn run_steps_with_fs(
@@ -120,15 +200,23 @@ pub fn run_steps_with_fs(
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
 ) -> Result<GuardedPath> {
-    run_steps_with_manager(fs, steps, default_process_manager(), stdin, stdout)
+    let io = assemble_default_io(stdin, stdout);
+    run_steps_with_fs_with_io(fs, steps, io)
+}
+
+pub fn run_steps_with_fs_with_io(
+    fs: Box<dyn WorkspaceFs>,
+    steps: &[Step],
+    io: ExecIo,
+) -> Result<GuardedPath> {
+    run_steps_with_manager(fs, steps, default_process_manager(), io)
 }
 
 fn run_steps_with_manager<P: ProcessManager>(
     fs: Box<dyn WorkspaceFs>,
     steps: &[Step],
     process: P,
-    stdin: Option<SharedInput>,
-    stdout: Option<SharedOutput>,
+    io: ExecIo,
 ) -> Result<GuardedPath> {
     let fs_root = fs.root().clone();
     let cwd = fs.root().clone();
@@ -141,10 +229,13 @@ fn run_steps_with_manager<P: ProcessManager>(
         envs,
         bg_children: Vec::new(),
         scope_stack: Vec::new(),
+        io,
     };
 
     let _default_stdout = io::stdout();
-    let out = stdout;
+    let stdin = state.io.stdin();
+    let stdout = state.io.stdout();
+    let stderr = state.io.stderr();
     let mut proc_mgr = process;
     execute_steps(
         &mut state,
@@ -152,7 +243,8 @@ fn run_steps_with_manager<P: ProcessManager>(
         steps,
         stdin,
         false,
-        out.clone(),
+        stdout,
+        stderr,
         true,
     )?;
 
@@ -166,6 +258,7 @@ fn execute_steps<P: ProcessManager>(
     stdin: Option<SharedInput>,
     expose_stdin: bool,
     out: Option<SharedOutput>,
+    err: Option<SharedOutput>,
     wait_at_end: bool,
 ) -> Result<()> {
     let fs_root = state.fs.root().clone();
@@ -280,10 +373,18 @@ fn execute_steps<P: ProcessManager>(
                             .map(CommandStdout::Stream)
                             .unwrap_or(CommandStdout::Inherit)
                     };
+                    let stderr_mode = if inherit_override {
+                        CommandStderr::Inherit
+                    } else {
+                        err.clone()
+                            .map(CommandStderr::Stream)
+                            .unwrap_or(CommandStderr::Inherit)
+                    };
 
                     let mut options = CommandOptions::foreground();
                     options.stdin = step_stdin;
                     options.stdout = stdout_mode;
+                    options.stderr = stderr_mode;
                     match process
                         .run_command(&ctx, &rendered, options)
                         .with_context(|| format!("step {}: RUN {}", idx + 1, rendered))?
@@ -328,9 +429,14 @@ fn execute_steps<P: ProcessManager>(
                         .clone()
                         .map(CommandStdout::Stream)
                         .unwrap_or(CommandStdout::Inherit);
+                    let stderr_mode = err
+                        .clone()
+                        .map(CommandStderr::Stream)
+                        .unwrap_or(CommandStderr::Inherit);
                     let mut options = CommandOptions::background();
                     options.stdin = step_stdin;
                     options.stdout = stdout_mode;
+                    options.stderr = stderr_mode;
                     match process
                         .run_command(&ctx, &rendered, options)
                         .with_context(|| format!("step {}: RUN_BG {}", idx + 1, rendered))?
@@ -586,7 +692,7 @@ fn execute_steps<P: ProcessManager>(
                         .with_context(|| format!("failed to write {}", target.display()))?;
                     Ok(())
                 }
-                StepKind::WithIo { streams, cmd } => {
+                StepKind::WithIo { bindings, cmd } => {
                     let inner_step = Step {
                         guards: Vec::new(),
                         kind: *cmd.clone(),
@@ -595,22 +701,78 @@ fn execute_steps<P: ProcessManager>(
                     };
                     let steps = vec![inner_step];
 
-                    // Determine IO configuration for the inner steps
                     let mut step_stdin = None;
-                    let step_stdout = out.clone();
+                    let mut step_stdout = out.clone();
+                    let mut step_stderr = err.clone();
                     let mut next_expose_stdin = false;
+                    let mut seen_stdin = false;
+                    let mut seen_stdout = false;
+                    let mut seen_stderr = false;
 
-                    if streams.contains(&"stdin".to_string()) {
-                        step_stdin = stdin.clone();
-                        next_expose_stdin = true;
-                    }
-
-                    if streams.contains(&"stdout".to_string()) {
-                        // If stdout is requested, we ensure it's passed down.
-                        // If out is None (no capture), we might want to default to stdout?
-                        // But out is Option<SharedOutput>.
-                        // If out is None, Run/RunBg will use stdout/inherit.
-                        // So we just pass out through.
+                    for binding in bindings {
+                        match binding.stream {
+                            IoStream::Stdin => {
+                                if seen_stdin {
+                                    bail!(
+                                        "step {}: WITH_IO declared stdin more than once",
+                                        idx + 1
+                                    );
+                                }
+                                seen_stdin = true;
+                                next_expose_stdin = true;
+                                step_stdin = if let Some(pipe) = &binding.pipe {
+                                    Some(state.io.input_pipe(pipe).ok_or_else(|| {
+                                        anyhow!(
+                                            "step {}: WITH_IO stdin pipe '{}' is undefined",
+                                            idx + 1,
+                                            pipe
+                                        )
+                                    })?)
+                                } else {
+                                    stdin.clone()
+                                };
+                            }
+                            IoStream::Stdout => {
+                                if seen_stdout {
+                                    bail!(
+                                        "step {}: WITH_IO declared stdout more than once",
+                                        idx + 1
+                                    );
+                                }
+                                seen_stdout = true;
+                                step_stdout = if let Some(pipe) = &binding.pipe {
+                                    Some(state.io.output_pipe(pipe).ok_or_else(|| {
+                                        anyhow!(
+                                            "step {}: WITH_IO stdout pipe '{}' is undefined",
+                                            idx + 1,
+                                            pipe
+                                        )
+                                    })?)
+                                } else {
+                                    out.clone()
+                                };
+                            }
+                            IoStream::Stderr => {
+                                if seen_stderr {
+                                    bail!(
+                                        "step {}: WITH_IO declared stderr more than once",
+                                        idx + 1
+                                    );
+                                }
+                                seen_stderr = true;
+                                step_stderr = if let Some(pipe) = &binding.pipe {
+                                    Some(state.io.output_pipe(pipe).ok_or_else(|| {
+                                        anyhow!(
+                                            "step {}: WITH_IO stderr pipe '{}' is undefined",
+                                            idx + 1,
+                                            pipe
+                                        )
+                                    })?)
+                                } else {
+                                    err.clone()
+                                };
+                            }
+                        }
                     }
 
                     execute_steps(
@@ -620,6 +782,7 @@ fn execute_steps<P: ProcessManager>(
                         step_stdin,
                         next_expose_stdin,
                         step_stdout,
+                        step_stderr,
                         false,
                     )?;
                     Ok(())
@@ -659,6 +822,7 @@ fn execute_steps<P: ProcessManager>(
                         envs: state.envs.clone(),
                         bg_children: Vec::new(),
                         scope_stack: Vec::new(),
+                        io: state.io.clone(),
                     };
                     let mut sub_process = process.clone();
 
@@ -680,6 +844,7 @@ fn execute_steps<P: ProcessManager>(
                         &steps,
                         stdin.clone(),
                         expose_stdin,
+                        Some(buf.clone()),
                         Some(buf.clone()),
                         true,
                     )?;
@@ -888,7 +1053,7 @@ fn hash_path(
 mod tests {
     use super::*;
     use oxdock_fs::{GuardedPath, MockFs};
-    use oxdock_parser::Guard;
+    use oxdock_parser::{Guard, IoBinding};
     use oxdock_process::{MockProcessManager, MockRunCall};
     use std::collections::HashMap;
 
@@ -914,7 +1079,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         let MockRunCall {
@@ -955,7 +1120,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo bar");
@@ -981,7 +1146,7 @@ mod tests {
         let mock = MockProcessManager::default();
         mock.push_bg_plan(0, success_status());
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap();
         assert!(
             mock.recorded_runs().is_empty(),
             "foreground run should not execute when RUN_BG completes early"
@@ -1011,7 +1176,7 @@ mod tests {
         let mock = MockProcessManager::default();
         mock.push_bg_plan(usize::MAX, success_status());
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        let err = run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap_err();
+        let err = run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap_err();
         assert!(
             err.to_string().contains("EXIT requested with code 5"),
             "unexpected error: {err}"
@@ -1085,7 +1250,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo second");
@@ -1123,7 +1288,7 @@ mod tests {
         ];
         let mock = MockProcessManager::default();
         let fs = Box::new(PathResolver::new_guarded(root.clone(), root.clone()).unwrap());
-        run_steps_with_manager(fs, &steps, mock.clone(), None, None).unwrap();
+        run_steps_with_manager(fs, &steps, mock.clone(), ExecIo::new()).unwrap();
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo guarded");
@@ -1154,6 +1319,7 @@ mod tests {
             envs: HashMap::new(),
             bg_children: Vec::new(),
             scope_stack: Vec::new(),
+            io: ExecIo::new(),
         }
     }
 
@@ -1161,7 +1327,7 @@ mod tests {
         let fs = MockFs::new();
         let mut state = create_exec_state(fs.clone());
         let mut proc = MockProcessManager::default();
-        execute_steps(&mut state, &mut proc, steps, None, false, None, true).unwrap();
+        execute_steps(&mut state, &mut proc, steps, None, false, None, None, true).unwrap();
         (state.cwd, fs.snapshot())
     }
 
@@ -1390,6 +1556,7 @@ mod tests {
             &steps,
             None,
             false,
+            Some(sink.clone()),
             Some(sink),
             false,
         )
@@ -1406,7 +1573,10 @@ mod tests {
         let steps = vec![Step {
             guards: Vec::new(),
             kind: StepKind::WithIo {
-                streams: vec!["stdin".to_string()],
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: None,
+                }],
                 cmd: Box::new(StepKind::Run("cat".into())),
             },
             scope_enter: 0,
@@ -1419,7 +1589,10 @@ mod tests {
 
         let input = Arc::new(Mutex::new(std::io::Cursor::new(b"hello world".to_vec())));
 
-        run_steps_with_manager(fs, &steps, mock.clone(), Some(input), None).unwrap();
+        let mut io_cfg = ExecIo::new();
+        io_cfg.set_stdin(Some(input));
+
+        run_steps_with_manager(fs, &steps, mock.clone(), io_cfg).unwrap();
 
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);

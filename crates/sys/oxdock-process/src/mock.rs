@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 
 use crate::{
     BackgroundHandle, CommandContext, CommandMode, CommandOptions, CommandResult, CommandStdout,
@@ -77,7 +77,9 @@ impl ProcessManager for MockProcessManager {
             mode,
             stdin,
             stdout,
+            stderr,
         } = options;
+        let _ = stderr;
         let stdin_provided = stdin.is_some();
         let captured_stdin = capture_stdin(stdin)?;
 
@@ -93,9 +95,7 @@ impl ProcessManager for MockProcessManager {
                 });
                 match stdout {
                     CommandStdout::Capture => Ok(CommandResult::Captured(Vec::new())),
-                    CommandStdout::Stream(_) | CommandStdout::Inherit => {
-                        Ok(CommandResult::Completed)
-                    }
+                    CommandStdout::Stream(_) | CommandStdout::Inherit => Ok(CommandResult::Completed),
                 }
             }
             CommandMode::Background => {
@@ -114,7 +114,7 @@ impl ProcessManager for MockProcessManager {
                     .plans
                     .borrow_mut()
                     .pop_front()
-                    .unwrap_or(BgPlan::success());
+                    .unwrap_or_else(BgPlan::success);
                 Ok(CommandResult::Background(MockHandle {
                     script: script.to_string(),
                     remaining: plan.ready_after,

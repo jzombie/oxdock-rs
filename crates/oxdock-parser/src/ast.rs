@@ -169,6 +169,19 @@ impl std::ops::Deref for TemplateString {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub enum IoStream {
+    Stdin,
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IoBinding {
+    pub stream: IoStream,
+    pub pipe: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StepKind {
     Workdir(TemplateString),
     Workspace(WorkspaceTarget),
@@ -200,7 +213,7 @@ pub enum StepKind {
         cmd: Box<StepKind>,
     },
     WithIo {
-        streams: Vec<String>,
+        bindings: Vec<IoBinding>,
         cmd: Box<StepKind>,
     },
     CopyGit {
@@ -386,6 +399,19 @@ fn quote_run(s: &str) -> String {
         .join(" ")
 }
 
+fn format_io_binding(binding: &IoBinding) -> String {
+    let stream = match binding.stream {
+        IoStream::Stdin => "stdin",
+        IoStream::Stdout => "stdout",
+        IoStream::Stderr => "stderr",
+    };
+    if let Some(pipe) = &binding.pipe {
+        format!("{}=pipe:{}", stream, pipe)
+    } else {
+        stream.to_string()
+    }
+}
+
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -421,8 +447,9 @@ impl fmt::Display for StepKind {
             StepKind::CaptureToFile { path, cmd } => {
                 write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
             }
-            StepKind::WithIo { streams, cmd } => {
-                write!(f, "WITH_IO [{}] {}", streams.join(", "), cmd)
+            StepKind::WithIo { bindings, cmd } => {
+                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
+                write!(f, "WITH_IO [{}] {}", parts.join(", "), cmd)
             }
             StepKind::CopyGit {
                 rev,

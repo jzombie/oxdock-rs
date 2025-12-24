@@ -1,6 +1,6 @@
 use oxdock_buildtime_macros::{embed, prepare};
 use oxdock_cli::{ExecutionResult, Options, ScriptSource, execute_with_result};
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_parser::parse_script;
 use std::error::Error;
@@ -116,7 +116,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let core_root = core_temp.as_guarded_path().clone();
     let core_resolver = PathResolver::new_guarded(core_root.clone(), workspace_root.clone())?;
     let steps = parse_script(SCRIPT)?;
-    let core_final = run_steps_with_context_result(&core_root, &workspace_root, &steps, None, None)?;
+    let core_final =
+        run_steps_with_context_result_with_io(&core_root, &workspace_root, &steps, ExecIo::new())?;
     let core_hash = read_dir_hash(&core_resolver, &core_final)?;
     let core_file_hash = read_file_hash(&core_resolver, &core_final)?;
 

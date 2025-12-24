@@ -118,6 +118,23 @@ mod tests {
     }
 
     #[test]
+    fn with_io_supports_named_pipes() {
+        let script = "WITH_IO [stdin, stdout=pipe:setup, stderr=pipe:errors] RUN echo hi";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].kind {
+            StepKind::WithIo { bindings, cmd } => {
+                assert_eq!(bindings.len(), 3);
+                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stdin) && b.pipe.is_none()));
+                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stdout) && b.pipe.as_deref() == Some("setup")));
+                assert!(bindings.iter().any(|b| matches!(b.stream, IoStream::Stderr) && b.pipe.as_deref() == Some("errors")));
+                assert_eq!(cmd.as_ref(), &StepKind::Run("echo hi".into()));
+            }
+            other => panic!("expected WITH_IO, saw {:?}", other),
+        }
+    }
+
+    #[test]
     fn brace_blocks_require_guard() {
         let script = indoc! {r#"
             {

@@ -194,10 +194,18 @@ pub enum CommandStdout {
 }
 
 #[derive(Clone, Default)]
+pub enum CommandStderr {
+    #[default]
+    Inherit,
+    Stream(SharedOutput),
+}
+
+#[derive(Clone, Default)]
 pub struct CommandOptions {
     pub mode: CommandMode,
     pub stdin: Option<SharedInput>,
     pub stdout: CommandStdout,
+    pub stderr: CommandStderr,
 }
 
 impl CommandOptions {
@@ -254,6 +262,7 @@ impl ProcessManager for ShellProcessManager {
             mode,
             stdin,
             stdout,
+            stderr,
         } = options;
 
         let (stdout_stream, capture_buf) = match stdout {
@@ -269,6 +278,11 @@ impl ProcessManager for ShellProcessManager {
             }
         };
 
+        let stderr_stream = match stderr {
+            CommandStderr::Inherit => None,
+            CommandStderr::Stream(stream) => Some(stream),
+        };
+
         let need_null_stdin = stdin.is_none();
         if need_null_stdin {
             // Do not inherit stdin by default; ensure isolation unless WITH_STDIN is used.
@@ -278,7 +292,8 @@ impl ProcessManager for ShellProcessManager {
 
         match mode {
             CommandMode::Foreground => {
-                let mut handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                let mut handle =
+                    spawn_child_with_streams(&mut command, stdin, stdout_stream, stderr_stream)?;
                 let status = handle
                     .wait()
                     .with_context(|| format!("failed to run {desc}"))?;
@@ -292,7 +307,8 @@ impl ProcessManager for ShellProcessManager {
                 Ok(CommandResult::Completed)
             }
             CommandMode::Background => {
-                let handle = spawn_child_with_streams(&mut command, stdin, stdout_stream)?;
+                let handle =
+                    spawn_child_with_streams(&mut command, stdin, stdout_stream, stderr_stream)?;
                 Ok(CommandResult::Background(handle))
             }
         }
@@ -434,6 +450,7 @@ impl ProcessManager for SyntheticProcessManager {
             mode,
             stdin,
             stdout,
+            stderr,
         } = options;
 
         if let Some(reader) = stdin
@@ -450,6 +467,10 @@ impl ProcessManager for SyntheticProcessManager {
                 let (out, status) = execute_sync(ctx, script, needs_bytes)?;
                 if !status.success() {
                     bail!("command {:?} failed with status {}", script, status);
+                }
+                if matches!(stderr, CommandStderr::Stream(_)) {
+                    // Synthetic manager does not produce stderr output; warn if requested.
+                    // We simply ignore the stream since no bytes are generated.
                 }
                 match stdout {
                     CommandStdout::Inherit => Ok(CommandResult::Completed),
@@ -471,6 +492,11 @@ impl ProcessManager for SyntheticProcessManager {
                     bail!("stdout streaming not supported for background command under miri")
                 }
                 CommandStdout::Inherit => {
+                    if matches!(stderr, CommandStderr::Stream(_)) {
+                        bail!(
+                            "stderr streaming not supported for background command under miri"
+                        );
+                    }
                     let plan = plan_background(ctx, script)?;
                     Ok(CommandResult::Background(plan))
                 }
@@ -827,12 +853,15 @@ fn spawn_child_with_streams(
     cmd: &mut ProcessCommand,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
+    stderr: Option<SharedOutput>,
 ) -> Result<ChildHandle> {
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
     }
     if stdout.is_some() {
         cmd.stdout(Stdio::piped());
+    }
+    if stderr.is_some() {
         cmd.stderr(Stdio::piped());
     }
 
@@ -874,9 +903,11 @@ fn spawn_child_with_streams(
             });
             io_threads.push(thread);
         }
+    }
 
+    if let Some(stderr_stream) = stderr {
         if let Some(mut child_stderr) = child.stderr.take() {
-            let stream_clone = stdout_stream.clone();
+            let stream_clone = stderr_stream.clone();
             let thread = std::thread::spawn(move || {
                 let mut buf = [0u8; 1024];
                 loop {

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, ensure_git_identity,
 };
@@ -622,7 +622,12 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stdout: SharedOutput = stdout_buf.clone();
 
-    let result = run_steps_with_context_result(&snapshot, &build_context, steps, stdin, Some(stdout)).map(|_| ());
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(stdout.clone()));
+    io_cfg.set_stdin(stdin);
+
+    let result =
+        run_steps_with_context_result_with_io(&snapshot, &build_context, steps, io_cfg).map(|_| ());
     match (&case.expect_error, result) {
         (Some(expectation), Err(err)) => {
             expectations::assert_error_matches(
