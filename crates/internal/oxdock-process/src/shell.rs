@@ -73,48 +73,21 @@ impl ShellLauncher {
 #[cfg(test)]
 mod tests {
     use super::{ShellLauncher, shell_cmd, shell_program};
-    use std::env;
+    use crate::TestEnvGuard;
+
     use std::ffi::OsStr;
     use std::sync::Mutex;
 
     // For Windows, fixing COMSPEC override test race condition
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    struct EnvGuard {
-        key: &'static str,
-        value: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, value: prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(value) => unsafe {
-                    env::set_var(self.key, value);
-                },
-                None => unsafe {
-                    env::remove_var(self.key);
-                },
-            }
-        }
-    }
-
     #[test]
     fn shell_program_prefers_env_override() {
         let _lock = ENV_LOCK.lock().expect("env lock");
         #[cfg(windows)]
-        let _guard = EnvGuard::set("COMSPEC", "custom-cmd");
+        let _guard = TestEnvGuard::set("COMSPEC", "custom-cmd");
         #[cfg(not(windows))]
-        let _guard = EnvGuard::set("SHELL", "custom-sh");
+        let _guard = TestEnvGuard::set("SHELL", "custom-sh");
         let program = shell_program();
         #[cfg(windows)]
         assert_eq!(program, "custom-cmd");

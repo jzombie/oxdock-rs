@@ -2,7 +2,7 @@
 
 ## Linting
 
-Do not override linter rules in any crate except `oxdock-fs` or `oxdock-process`, and never add global/blanket overrides.
+Do not override linter rules in any crate except `oxdock-fs`, `oxdock-test-utils`, or `oxdock-process`, and never add global/blanket overrides.
 
 - **Naming**: Do not prefix parameter names with `_` to silence unused warnings. Prefer using the value (e.g., `let _ = param;`) or a localized `#[allow(unused_variables)]` if absolutely necessary.
 
@@ -34,9 +34,15 @@ Prefer explicit, test-only skips over runtime detection.
 - **Process Execution**: Use `oxdock-process` abstractions instead of raw `std::process::Command`.
     - Logic handling process execution differences (e.g. Miri vs Native) belongs in `oxdock-process`.
 
+## Cross-Platform Compatibility
+
+- **Consistency**: All features and DSL commands must behave identically across platforms (Linux, macOS, Windows) as much as possible.
+- **Exceptions**: Only `RUN` and `RUN_BG` commands are expected to differ, as they execute arbitrary shell commands specific to the host OS.
+- **Testing**: Tests must ensure parity. If platform-specific setup is required (e.g. creating symlinks in test fixtures), ensure both Unix and Windows paths are covered.
+
 ## Testing & Layout
 
-- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-workspace-tests/fixtures/integration/buildtime_macros`.
+- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-logic-tests/fixtures/integration/buildtime_macros`.
 - **Workspace layout**: Internal crates live under `crates/internal`; the CLI & build-time macros sit at the workspace root.
 
 ## Workflow

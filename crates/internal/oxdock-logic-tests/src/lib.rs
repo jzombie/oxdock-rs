@@ -261,9 +261,9 @@ pub mod harness {
                     .to_string(),
             )
             .with_path_dependency(
-                "oxdock-workspace-tests",
+                "oxdock-logic-tests",
                 workspace_root
-                    .join("crates/internal/oxdock-workspace-tests")?
+                    .join("crates/internal/oxdock-logic-tests")?
                     .to_string(),
             )
             .with_path_dependency("oxdock-cli", workspace_root.join("oxdock-cli")?.to_string())
@@ -288,6 +288,21 @@ pub mod harness {
         };
 
         let mut cmd = fixture.cargo();
+        // If this case requires symlink support but the host cannot create symlinks,
+        // skip it rather than failing the entire harness. This avoids CI breakage on
+        // Windows hosts without developer symlink privileges.
+        if let Some(target) = &temp_target {
+            let needs_symlink = case.name.contains("symlink")
+                || case.name == "copy_broken_symlink"
+                || case.name == "copy_complex";
+            if needs_symlink && !oxdock_test_utils::can_create_symlinks(target.as_path()) {
+                eprintln!(
+                    "skipping fixture case {}::{}: symlink unsupported on host",
+                    spec.name, case.name
+                );
+                return Ok(());
+            }
+        }
         cmd.args(&case.args);
         if let Some(target) = &temp_target {
             cmd.env("CARGO_TARGET_DIR", command_path(target).into_owned());
@@ -441,6 +456,10 @@ pub mod harness {
             }
         }
 
+        // Allow per-platform expectation sections in `case.toml`, e.g.
+        // `[unix]` or `[windows]` containing `expect_error_contains` or
+        // `expect_error_equals`. Prefer the platform-specific table when
+        // present; otherwise fall back to the top-level expectation.
         case.error_expectation = super::expectations::parse_error_expectation(&doc)?;
         if case.error_expectation.is_some() {
             if expect_success_override == Some(true) {
@@ -598,7 +617,7 @@ pub mod harness {
 pub mod expectations {
     use anyhow::{Context, Result, anyhow};
     use oxdock_fs::{EntryKind, GuardedPath, PathResolver};
-    use toml_edit::DocumentMut;
+    use toml_edit::{DocumentMut, Item};
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum ErrorExpectation {
@@ -618,26 +637,68 @@ pub mod expectations {
             .read_to_string(&case_path)
             .with_context(|| format!("read {}", case_path.display()))?;
         let doc = contents.parse::<DocumentMut>().context("parse case.toml")?;
+        // Prefer a platform-specific override when present. This allows fixture
+        // authors to declare `[windows]` or `[unix]` sections containing
+        // `expect_error_contains` / `expect_error_equals` that are only used on
+        // the matching platform. Fall back to the top-level expectation.
+        #[cfg(windows)]
+        {
+            if let Some(item) = doc.get("windows") {
+                return parse_error_expectation_from_item(item);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Some(item) = doc.get("unix") {
+                return parse_error_expectation_from_item(item);
+            }
+        }
+
         parse_error_expectation(&doc)
     }
 
     pub fn parse_error_expectation(doc: &DocumentMut) -> Result<Option<ErrorExpectation>> {
+        // Prefer a platform-specific table at runtime. First look for an
+        // exact OS key (e.g. "linux", "macos", "windows"). If that
+        // doesn't exist, prefer a generic `unix` table for unix-like
+        // platforms. Finally fall back to the top-level expectation.
+        let os = std::env::consts::OS;
+        if let Some(item) = doc.get(os) {
+            return parse_error_expectation_from_item(item);
+        }
+
+        #[allow(clippy::disallowed_macros)]
+        if cfg!(unix)
+            && let Some(item) = doc.get("unix")
+        {
+            return parse_error_expectation_from_item(item);
+        }
+
+        parse_error_expectation_from_item(doc.as_item())
+    }
+
+    // Removed helper for `Table`-based parsing: parsing is centralized on `Item`.
+    // `parse_error_expectation_from_item` is the canonical implementation and
+    // is used by callers (including platform-specific overrides). The
+    // `DocumentMut` -> `Item` conversion is performed where needed.
+
+    pub fn parse_error_expectation_from_item(item: &Item) -> Result<Option<ErrorExpectation>> {
         let mut out = None;
 
-        if let Some(value) = doc
+        if let Some(value) = item
             .get("expect_error_contains")
             .and_then(|item| item.as_str())
         {
             set_expectation(&mut out, ErrorExpectation::Contains(value.to_string()))?;
         }
-        if let Some(value) = doc
+        if let Some(value) = item
             .get("expect_error_equals")
             .and_then(|item| item.as_str())
         {
             set_expectation(&mut out, ErrorExpectation::Equals(value.to_string()))?;
         }
 
-        if let Some(expect) = doc.get("expect").and_then(|item| item.as_table())
+        if let Some(expect) = item.get("expect").and_then(|item| item.as_table())
             && let Some(error) = expect.get("error").and_then(|item| item.as_table())
         {
             if let Some(value) = error.get("contains").and_then(|item| item.as_str()) {
@@ -696,5 +757,71 @@ pub mod expectations {
 
     fn normalize_error_text(input: &str) -> String {
         input.replace("\r\n", "\n").trim_end().to_string()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use indoc::indoc;
+        use toml_edit::DocumentMut;
+
+        fn doc(s: &str) -> DocumentMut {
+            s.parse::<DocumentMut>().expect("parse toml")
+        }
+
+        #[test]
+        fn exact_os_table_is_preferred() {
+            let os = std::env::consts::OS;
+            let toml = format!("[{os}]\nexpect_error_contains = \"os-specific\"\n", os = os);
+            let doc = doc(&toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("os-specific".into()));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn unix_table_is_used_as_fallback_on_unix() {
+            let toml = indoc!(
+                r#"
+                [unix]
+                expect_error_contains = "unix-only"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("unix-only".into()));
+        }
+
+        #[test]
+        fn top_level_expect_error_contains_parsed() {
+            let toml = indoc!(
+                r#"
+                expect_error_contains = "top-level"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("top-level".into()));
+        }
+
+        #[test]
+        fn nested_expect_error_table() {
+            let toml = indoc!(
+                r#"
+                [expect.error]
+                contains = "nested"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("nested".into()));
+        }
     }
 }

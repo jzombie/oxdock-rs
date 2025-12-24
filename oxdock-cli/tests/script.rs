@@ -69,7 +69,7 @@ fn script_runs_copy_and_symlink() {
         },
     ];
 
-    run_script(&root, &steps).unwrap();
+    let res = run_script(&root, &steps);
 
     // Copy should exist and contain the file
     let copied = root.join("client/dist-copy/test.txt").unwrap();
@@ -77,16 +77,31 @@ fn script_runs_copy_and_symlink() {
     let contents = resolver.read_to_string(&copied).unwrap();
     assert!(contents.contains("hello"));
 
-    // Symlink should resolve to dist (on Unix); on non-Unix we copied.
+    // Symlink: on Unix it should succeed; on non-Unix we expect an explicit error
     #[cfg(unix)]
     {
+        res.unwrap();
         let linked = root.join("server/dist/test.txt").unwrap();
         assert!(linked.as_path().exists());
     }
     #[cfg(not(unix))]
     {
-        // On non-Unix, symlink_dir may not be available; ensure copy fallback works.
-        let linked_copy = root.join("server/dist/test.txt").unwrap();
-        assert!(linked_copy.as_path().exists());
+        if oxdock_test_utils::can_create_symlinks(root.as_path()) {
+            // Host supports symlinks — the script should succeed and the link should exist.
+            res.unwrap();
+            let linked = root.join("server/dist/test.txt").unwrap();
+            assert!(linked.as_path().exists());
+        } else {
+            // Host cannot create symlinks — we expect an explicit error and no copy fallback.
+            assert!(
+                res.is_err(),
+                "SYMLINK should error on platforms without symlink privilege"
+            );
+            let linked_copy = root.join("server/dist/test.txt").unwrap();
+            assert!(
+                !linked_copy.as_path().exists(),
+                "No copy fallback should occur"
+            );
+        }
     }
 }

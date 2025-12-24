@@ -1,5 +1,5 @@
 [package]
-name = "oxdock-workspace-tests"
+name = "oxdock-logic-tests"
 description = "Workspace-level test harness and fixtures for OxDock"
 authors.workspace = true
 version.workspace = true
@@ -15,9 +15,11 @@ anyhow.workspace = true
 libtest-mimic.workspace = true
 oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
+oxdock-test-utils.workspace = true
 toml_edit.workspace = true
 
 [dev-dependencies]
+indoc.workspace = true
 oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 proc-macro2.workspace = true
 proptest.workspace = true

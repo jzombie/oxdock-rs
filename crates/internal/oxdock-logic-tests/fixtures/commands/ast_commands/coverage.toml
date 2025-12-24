@@ -39,4 +39,6 @@ cases = [
   "cat_stdin",
   "cwd_stdout",
   "with_io_bg",
+  "copy_complex",
+  "copy_broken_symlink",
 ]

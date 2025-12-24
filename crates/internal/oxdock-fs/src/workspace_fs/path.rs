@@ -659,13 +659,38 @@ mod tests {
 
     #[test]
     fn normalized_path_normalizes_backslashes() {
-        let guard = GuardedPath::new_from_str("C:\\sandbox", "C:\\sandbox\\foo\\bar")
-            .expect("guarded path");
-        let normalized = normalized_path(&guard);
-        assert!(!normalized.contains('\\'));
-        assert!(normalized.contains("sandbox"));
-        assert!(normalized.contains("foo"));
-        assert!(normalized.contains("bar"));
+        // Avoid using a hard-coded Windows drive prefix as the root when
+        // running cross-platform tests. Construct a guarded root from a
+        // temporary directory and synthesize a path that contains
+        // backslashes so `normalized_path` still exercises the
+        // backslash-to-forward-slash normalization.
+        #[cfg(not(miri))]
+        {
+            let tmp = GuardedPath::tempdir().expect("tempdir");
+            let root_buf = tmp.as_guarded_path().root().to_path_buf();
+            let root_display = root_buf.to_string_lossy();
+
+            #[allow(clippy::disallowed_types)]
+            let path_with_backslashes =
+                std::path::PathBuf::from(format!("{}\\foo\\bar", root_display));
+            let guard = GuardedPath::from_guarded_parts(root_buf, path_with_backslashes);
+            let normalized = normalized_path(&guard);
+            assert!(!normalized.contains('\\'));
+            assert!(normalized.contains("foo"));
+            assert!(normalized.contains("bar"));
+        }
+
+        // Under Miri we don't touch the host filesystem; exercise the
+        // normalization helper directly instead.
+        #[cfg(miri)]
+        {
+            let s = r"C:\sandbox\foo\bar";
+            let replaced = to_forward_slashes(s);
+            assert!(!replaced.contains('\\'));
+            assert!(replaced.contains("sandbox"));
+            assert!(replaced.contains("foo"));
+            assert!(replaced.contains("bar"));
+        }
     }
 
     #[cfg_attr(

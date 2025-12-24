@@ -270,6 +270,7 @@ mod tests {
 }
 
 #[cfg(all(test, not(miri), unix))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 mod unix_tests {
     use super::*;
     use anyhow::Result;
@@ -294,6 +295,31 @@ mod unix_tests {
         let copied_link = dst_dir.join("link.txt")?;
         let data = resolver.read_file(&copied_link)?;
         assert_eq!(data, b"hello");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+mod extra_tests {
+    use super::*;
+    use crate::UnguardedPath;
+
+    #[test]
+    fn copy_file_from_unguarded_copies_contents() -> anyhow::Result<()> {
+        let temp = GuardedPath::tempdir()?;
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
+
+        let other = tempfile::tempdir()?;
+        let src = other.path().join("in.txt");
+        std::fs::write(&src, b"payload")?;
+
+        let dst = root.join("out.txt")?;
+        resolver.copy_file_from_unguarded(&UnguardedPath::new(src), &dst)?;
+
+        let got = resolver.read_file(&dst)?;
+        assert_eq!(got, b"payload");
         Ok(())
     }
 }

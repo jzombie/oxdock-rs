@@ -8,7 +8,7 @@ fn platform_guard_display_uses_equals() {
         invert: false,
     };
 
-    assert_eq!(guard.to_string(), "platform==unix");
+    assert_eq!(guard.to_string(), "platform:unix");
 
     let step = Step {
         guards: vec![vec![guard]],
@@ -18,7 +18,7 @@ fn platform_guard_display_uses_equals() {
     };
 
     let rendered = step.to_string();
-    assert_eq!(rendered, "[platform==unix] WORKDIR a");
+    assert_eq!(rendered, "[platform:unix] WORKDIR a");
 
     let parsed = parse_script(&rendered).expect("parse");
     assert_eq!(parsed, vec![step]);

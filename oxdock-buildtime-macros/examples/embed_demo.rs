@@ -11,8 +11,8 @@ mod demo_assets {
           MKDIR assets/dir
           WRITE assets/hello.txt hello from embed
           WRITE assets/dir/nested.txt nested file
-          [platform==windows] RUN cd > current_directory.txt
-          [platform!=windows] RUN pwd > current_directory.txt
+          [platform:windows] RUN cd > current_directory.txt
+          [!platform:windows] RUN pwd > current_directory.txt
           COPY Cargo.toml assets/dir/copied.txt
         "#,
         // Keep generated assets under target/ so running the example does not modify the repo.

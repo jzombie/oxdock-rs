@@ -3,7 +3,7 @@ use libtest_mimic::Arguments;
 #[cfg(not(miri))]
 use oxdock_fs::{GuardedPath, PathResolver};
 #[cfg(not(miri))]
-use oxdock_workspace_tests::harness::{HarnessConfig, build_trials};
+use oxdock_logic_tests::harness::{HarnessConfig, build_trials};
 
 #[cfg(miri)]
 fn main() {
@@ -41,7 +41,7 @@ fn main() {
     config.set_workspace_root_env = true;
     config.set_temp_target_dir = true;
     config.shared_target_dir = Some(shared_target);
-    config.case_config = Some(oxdock_workspace_tests::harness::CaseConfig {
+    config.case_config = Some(oxdock_logic_tests::harness::CaseConfig {
         fixture_name: "ast_commands".to_string(),
         cases_dir: "cases".to_string(),
         case_env: "OXDOCK_AST_CASE".to_string(),

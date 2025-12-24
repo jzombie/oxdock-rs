@@ -27,3 +27,6 @@ oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+oxdock-test-utils.workspace = true

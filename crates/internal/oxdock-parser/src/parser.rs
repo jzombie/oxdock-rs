@@ -635,6 +635,16 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
     }
 
     if let Some(val) = value {
+        // Disallow the confusing pattern `!env:KEY==value` — require using
+        // `env:KEY!=value` or `!env:KEY` for negation without equality.
+        if invert && !is_not_equals {
+            bail!(
+                "inverted env equality is not allowed: use 'env:{}!={}' or '!env:{}'",
+                key,
+                val,
+                key
+            );
+        }
         Ok(Guard::EnvEquals {
             key,
             value: val,
@@ -646,35 +656,15 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
 }
 
 fn parse_platform_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
+    // New platform syntax: `platform:tag`. We ignore legacy ==/!= comparisons.
     let mut tag = "";
-    let mut is_not_equals = false;
     for inner in pair.into_inner() {
-        match inner.as_rule() {
-            Rule::platform_comparison => {
-                for comp in inner.into_inner() {
-                    match comp.as_rule() {
-                        Rule::platform_equals | Rule::platform_not_equals => {
-                            for part in comp.into_inner() {
-                                match part.as_rule() {
-                                    Rule::eq_op => {}
-                                    Rule::neq_op => is_not_equals = true,
-                                    Rule::platform_tag => tag = part.as_str(),
-                                    _ => {}
-                                }
-                            }
-                        }
-                        Rule::eq_op => {}
-                        Rule::neq_op => is_not_equals = true,
-                        Rule::platform_tag => tag = comp.as_str(),
-                        _ => {}
-                    }
-                }
-            }
-            Rule::platform_tag => tag = inner.as_str(),
-            _ => {}
+        if inner.as_rule() == Rule::platform_tag {
+            tag = inner.as_str();
+            break;
         }
     }
-    parse_platform_tag(tag, invert ^ is_not_equals)
+    parse_platform_tag(tag, invert)
 }
 
 fn parse_bare_platform(pair: Pair<Rule>, invert: bool) -> Result<Guard> {

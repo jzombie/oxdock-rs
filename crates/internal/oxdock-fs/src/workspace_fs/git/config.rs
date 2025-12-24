@@ -107,22 +107,12 @@ mod tests {
     use super::super::GitCommand;
     use super::*;
 
-    fn with_env(key: &str, value: &str, f: impl FnOnce()) {
-        let prev = std::env::var(key).ok();
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        f();
-        match prev {
-            Some(v) => unsafe { std::env::set_var(key, v) },
-            None => unsafe { std::env::remove_var(key) },
-        }
-    }
+    use oxdock_test_utils::TestEnvGuard;
 
     fn with_git_config_isolation(f: impl FnOnce()) {
-        with_env("GIT_CONFIG_GLOBAL", "/dev/null", || {
-            with_env("GIT_CONFIG_SYSTEM", "/dev/null", f)
-        });
+        let _g = TestEnvGuard::set("GIT_CONFIG_GLOBAL", "/dev/null");
+        let _s = TestEnvGuard::set("GIT_CONFIG_SYSTEM", "/dev/null");
+        f();
     }
 
     fn init_repo(repo: &GuardedPath) {
@@ -156,13 +146,11 @@ mod tests {
         init_repo(&repo);
 
         with_git_config_isolation(|| {
-            with_env("GIT_AUTHOR_NAME", "CI Bot", || {
-                with_env("GIT_AUTHOR_EMAIL", "ci@example.com", || {
-                    let ident = ensure_git_identity(&repo).expect("identity");
-                    assert_eq!(ident.name, "CI Bot");
-                    assert_eq!(ident.email, "ci@example.com");
-                });
-            });
+            let _n = TestEnvGuard::set("GIT_AUTHOR_NAME", "CI Bot");
+            let _e = TestEnvGuard::set("GIT_AUTHOR_EMAIL", "ci@example.com");
+            let ident = ensure_git_identity(&repo).expect("identity");
+            assert_eq!(ident.name, "CI Bot");
+            assert_eq!(ident.email, "ci@example.com");
         });
     }
 }

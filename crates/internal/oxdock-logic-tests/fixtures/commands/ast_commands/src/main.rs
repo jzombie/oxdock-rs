@@ -5,7 +5,7 @@ use oxdock_fs::{
 };
 use oxdock_parser::{Step, StepKind};
 use oxdock_process::{CommandBuilder, SharedInput, SharedOutput};
-use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
+use oxdock_logic_tests::expectations::{self, ErrorExpectation};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
@@ -809,6 +809,8 @@ fn run_setup(
 ) -> Result<()> {
     match name {
         "copy_inputs" => setup_copy_inputs(snapshot, local),
+        "copy_complex" => setup_copy_complex(snapshot, local),
+        "copy_broken_symlink" => setup_copy_broken_symlink(snapshot, local),
         "symlink_inputs" => setup_symlink_inputs(snapshot, local),
         "copy_git" => setup_copy_git(snapshot, local),
         "read_escape" => setup_read_escape(snapshot, local),
@@ -838,6 +840,41 @@ fn cleanup_escape(snapshot: &GuardedPath, filename: &str) -> Result<()> {
 
 fn setup_copy_inputs(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
     write_text(&local.join("source.txt")?, "from build")?;
+    Ok(())
+}
+
+fn setup_copy_complex(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
+    let src = local.join("src")?;
+    create_dirs(&src)?;
+    write_text(&src.join("file.txt")?, "file content")?;
+
+    let dir = src.join("dir")?;
+    create_dirs(&dir)?;
+    write_text(&dir.join("nested.txt")?, "nested content")?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("file.txt", src.join("symlink_file")?.as_path())?;
+        std::os::unix::fs::symlink("dir", src.join("symlink_dir")?.as_path())?;
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file("file.txt", src.join("symlink_file")?.as_path())?;
+        std::os::windows::fs::symlink_dir("dir", src.join("symlink_dir")?.as_path())?;
+    }
+
+    Ok(())
+}
+
+fn setup_copy_broken_symlink(_snapshot: &GuardedPath, local: &GuardedPath) -> Result<()> {
+    let src = local.join("src")?;
+    create_dirs(&src)?;
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nonexistent", src.join("broken")?.as_path())?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file("nonexistent", src.join("broken")?.as_path())?;
+
     Ok(())
 }
 
