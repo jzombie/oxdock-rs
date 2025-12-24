@@ -86,7 +86,7 @@ fn script_runs_copy_and_symlink() {
     }
     #[cfg(not(unix))]
     {
-        if oxdock_test_utils::can_create_symlinks(root.as_path()) {
+        if oxdock_sys_test_utils::can_create_symlinks(root.as_path()) {
             // Host supports symlinks — the script should succeed and the link should exist.
             res.unwrap();
             let linked = root.join("server/dist/test.txt").unwrap();

@@ -233,37 +233,37 @@ pub mod harness {
             .with_path_dependency(
                 "oxdock-embed",
                 workspace_root
-                    .join("crates/internal/oxdock-embed")?
+                    .join("crates/oxdock-embed")?
                     .to_string(),
             )
             .with_path_dependency(
                 "oxdock-fs",
                 workspace_root
-                    .join("crates/internal/oxdock-fs")?
+                    .join("crates/oxdock-fs")?
                     .to_string(),
             )
             .with_path_dependency(
                 "oxdock-core",
                 workspace_root
-                    .join("crates/internal/oxdock-core")?
+                    .join("crates/oxdock-core")?
                     .to_string(),
             )
             .with_path_dependency(
                 "oxdock-parser",
                 workspace_root
-                    .join("crates/internal/oxdock-parser")?
+                    .join("crates/oxdock-parser")?
                     .to_string(),
             )
             .with_path_dependency(
                 "oxdock-process",
                 workspace_root
-                    .join("crates/internal/oxdock-process")?
+                    .join("crates/oxdock-process")?
                     .to_string(),
             )
             .with_path_dependency(
                 "oxdock-logic-tests",
                 workspace_root
-                    .join("crates/internal/oxdock-logic-tests")?
+                    .join("crates/oxdock-logic-tests")?
                     .to_string(),
             )
             .with_path_dependency("oxdock-cli", workspace_root.join("oxdock-cli")?.to_string())
@@ -295,7 +295,7 @@ pub mod harness {
             let needs_symlink = case.name.contains("symlink")
                 || case.name == "copy_broken_symlink"
                 || case.name == "copy_complex";
-            if needs_symlink && !oxdock_test_utils::can_create_symlinks(target.as_path()) {
+            if needs_symlink && !oxdock_sys_test_utils::can_create_symlinks(target.as_path()) {
                 eprintln!(
                     "skipping fixture case {}::{}: symlink unsupported on host",
                     spec.name, case.name

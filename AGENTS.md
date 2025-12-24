@@ -22,7 +22,7 @@ Prefer explicit, test-only skips over runtime detection.
 
 - **Principle**: Avoid runtime Miri detection in implementation code. Tests *can* be skipped under Miri only when necessary, and they *MUST* include the reason.
 - **Implementation**:
-    - Do not use `cfg!(miri)` or `#[cfg(miri)]` outside of `crates/internal/oxdock-fs` and `crates/internal/oxdock-process`, except for test-only `#[cfg_attr(miri, ignore = "...")]` skips that include a reason.
+    - Do not use `cfg!(miri)` or `#[cfg(miri)]` outside of `crates/oxdock-fs` and `crates/oxdock-process`, except for test-only `#[cfg_attr(miri, ignore = "...")]` skips that include a reason.
 - **Exceptions**:
     - Implementation crates (`oxdock-fs`, `oxdock-process`) may legitimately use `cfg!(...)` or `#[cfg(...)]` internally.
     - Use narrow, localized `#[allow(clippy::disallowed_macros)]` or `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]` on specific functions/items to keep the rest of the crate provably conformant.
@@ -42,8 +42,8 @@ Prefer explicit, test-only skips over runtime detection.
 
 ## Testing & Layout
 
-- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-logic-tests/fixtures/integration/buildtime_macros`.
-- **Workspace layout**: Internal crates live under `crates/internal`; the CLI & build-time macros sit at the workspace root.
+- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/oxdock-logic-tests/fixtures/integration/buildtime_macros`.
+- **Workspace layout**: Internal crates live under `crates`; the CLI & build-time macros sit at the workspace root.
 
 ## Workflow
 

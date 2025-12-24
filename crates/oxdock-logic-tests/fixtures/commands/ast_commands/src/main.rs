@@ -570,7 +570,7 @@ fn assert_coverage(
 fn step_kind_variants() -> Result<HashSet<String>> {
     let workspace_root = discover_workspace_root().context("locate workspace root")?;
     let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
-    let ast_path = workspace_root.join("crates/internal/oxdock-parser/src/ast.rs")?;
+    let ast_path = workspace_root.join("crates/oxdock-parser/src/ast.rs")?;
     let ast_source = resolver.read_to_string(&ast_path).context("read ast.rs")?;
     let expected = extract_step_kind_variants(&ast_source);
     if expected.is_empty() {

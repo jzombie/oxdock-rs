@@ -1,9 +1,9 @@
 [package]
-name = "oxdock-test-utils"
+name = "oxdock-sys-test-utils"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Shared test utilities for OxDock workspace tests."
+description = "Shared system test utilities for OxDock workspace tests."
 license.workspace = true
 repository.workspace = true
 

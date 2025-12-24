@@ -7,7 +7,7 @@ mod shell;
 use anyhow::{Context, Result, anyhow, bail};
 pub use builtin_env::BuiltinEnv;
 use oxdock_fs::{GuardedPath, PolicyPath};
-pub use oxdock_test_utils::TestEnvGuard;
+pub use oxdock_sys_test_utils::TestEnvGuard;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
@@ -1128,7 +1128,7 @@ fn simulate_cargo(args: &[String]) -> Result<CommandOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxdock_test_utils::TestEnvGuard;
+    use oxdock_sys_test_utils::TestEnvGuard;
     use std::collections::HashMap;
 
     #[test]

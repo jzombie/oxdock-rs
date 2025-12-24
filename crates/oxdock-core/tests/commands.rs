@@ -40,7 +40,7 @@ fn create_dirs(path: &GuardedPath) {
     resolver.create_dir_all(path).unwrap();
 }
 
-use oxdock_test_utils::can_create_symlinks;
+use oxdock_sys_test_utils::can_create_symlinks;
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.join(rel).map(|p| p.exists()).unwrap_or(false)

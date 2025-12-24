@@ -107,7 +107,7 @@ mod tests {
     use super::super::GitCommand;
     use super::*;
 
-    use oxdock_test_utils::TestEnvGuard;
+    use oxdock_sys_test_utils::TestEnvGuard;
 
     fn with_git_config_isolation(f: impl FnOnce()) {
         let _g = TestEnvGuard::set("GIT_CONFIG_GLOBAL", "/dev/null");

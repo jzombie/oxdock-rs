@@ -17,7 +17,7 @@ build = []
 [dependencies]
 anyhow.workspace = true
 oxdock-fs.workspace = true
-oxdock-parser = { workspace = true }
+oxdock-parser.workspace = true
 oxdock-process.workspace = true
 sha2.workspace = true
 
@@ -25,4 +25,4 @@ sha2.workspace = true
 indoc.workspace = true
 oxdock-fs = { workspace = true, features = ["mock-fs"] }
 oxdock-process = { workspace = true, features = ["mock-process"] }
-oxdock-test-utils = { workspace = true }
+oxdock-sys-test-utils.workspace = true

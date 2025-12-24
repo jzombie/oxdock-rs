@@ -29,4 +29,4 @@ oxdock-process.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-oxdock-test-utils.workspace = true
+oxdock-sys-test-utils.workspace = true

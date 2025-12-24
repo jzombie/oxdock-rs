@@ -101,7 +101,7 @@ fn cfg_env_lines(output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{cfg_env_lines, emit_feature_envs, feature_env_lines, trim_cfg_quotes};
-    use oxdock_test_utils::TestEnvGuard;
+    use oxdock_sys_test_utils::TestEnvGuard;
 
     #[test]
     fn trims_cfg_quotes() {

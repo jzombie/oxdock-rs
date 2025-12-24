@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     use crate::serial_cargo_env::manifest_env_guard;
     use oxdock_fs::GuardedPath;
-    use oxdock_test_utils::TestEnvGuard;
+    use oxdock_sys_test_utils::TestEnvGuard;
 
     #[test]
     fn collect_includes_cargo_feature_and_cfg_envs() {

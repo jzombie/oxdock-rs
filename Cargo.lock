@@ -325,7 +325,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
 ]
 
 [[package]]
@@ -354,7 +354,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
  "tempfile",
 ]
 
@@ -367,7 +367,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
  "sha2",
 ]
 
@@ -400,7 +400,7 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "libc",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
  "tempfile",
  "tracing",
  "windows-sys",
@@ -416,7 +416,7 @@ dependencies = [
  "oxdock-fixture",
  "oxdock-fs",
  "oxdock-parser",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
  "proc-macro2",
  "proptest",
  "toml_edit",
@@ -441,11 +441,11 @@ version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
- "oxdock-test-utils",
+ "oxdock-sys-test-utils",
 ]
 
 [[package]]
-name = "oxdock-test-utils"
+name = "oxdock-sys-test-utils"
 version = "0.5.0-alpha"
 
 [[package]]

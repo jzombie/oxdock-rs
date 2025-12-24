@@ -4,7 +4,7 @@ use oxdock_fs::{
     GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, normalized_path,
     to_forward_slashes,
 };
-use oxdock_test_utils::TestEnvGuard;
+use oxdock_sys_test_utils::TestEnvGuard;
 
 #[cfg_attr(
     miri,

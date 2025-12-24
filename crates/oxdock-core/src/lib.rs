@@ -281,7 +281,7 @@ mod tests {
         let root = guard_root(&temp);
 
         let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-        let _env_guard = oxdock_test_utils::TestEnvGuard::set("PROFILE", &profile);
+        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set("PROFILE", &profile);
         let script = format!(
             indoc!(
                 r#"
@@ -311,7 +311,7 @@ mod tests {
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_PASS";
-        let _env_guard = oxdock_test_utils::TestEnvGuard::set(key, "ok");
+        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set(key, "ok");
 
         let script = format!(
             indoc!(
@@ -338,7 +338,7 @@ mod tests {
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_FAIL";
-        let _env_guard = oxdock_test_utils::TestEnvGuard::set(key, "ok");
+        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set(key, "ok");
 
         let script = format!(
             indoc!(
