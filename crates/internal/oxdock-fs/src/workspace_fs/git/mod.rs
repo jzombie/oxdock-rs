@@ -356,3 +356,80 @@ impl GitCommand {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+mod tests {
+    use super::*;
+    use crate::GuardedPath;
+    use std::fs;
+
+    #[test]
+    fn git_root_from_path_finds_parent_git() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let base = temp.path().join("a").join("b");
+        fs::create_dir_all(&base).expect("mkdirs");
+        // create .git at temp.path()
+        fs::create_dir_all(temp.path().join(".git")).expect("mkdir .git");
+        let found = git_root_from_path(&base);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), temp.path().to_path_buf());
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn current_head_commit_returns_hash_for_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // init git repo
+        let repo = tmp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(repo)
+            .status()
+            .expect("git init");
+        fs::write(repo.join("x.txt"), b"hi").expect("write");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("add")
+            .arg(".")
+            .status()
+            .expect("git add");
+        // configure identity for commits in test environment
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("config")
+            .arg("user.email")
+            .arg("test@example.com")
+            .status()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("config")
+            .arg("user.name")
+            .arg("Test User")
+            .status()
+            .expect("git config name");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("commit")
+            .arg("-m")
+            .arg("init")
+            .status()
+            .expect("git commit");
+
+        let guard_temp = GuardedPath::tempdir().expect("guarded temp");
+        let _guard = guard_temp.as_guarded_path().clone();
+        // Use current_head_commit directly with the guarded path pointing at repo
+        let guarded = GuardedPath::new_root(repo).expect("guard root");
+        let got = current_head_commit(&guarded).expect("current_head");
+        assert!(got.is_some());
+        assert!(!got.unwrap().is_empty());
+    }
+}
+
+

@@ -759,4 +759,70 @@ pub mod expectations {
     fn normalize_error_text(input: &str) -> String {
         input.replace("\r\n", "\n").trim_end().to_string()
     }
+
+    #[cfg(test)]
+    mod tests {
+        use indoc::indoc;
+        use toml_edit::DocumentMut;
+
+        fn doc(s: &str) -> DocumentMut {
+            s.parse::<DocumentMut>().expect("parse toml")
+        }
+
+        #[test]
+        fn exact_os_table_is_preferred() {
+            let os = std::env::consts::OS;
+            let toml = format!("[{os}]\nexpect_error_contains = \"os-specific\"\n", os = os);
+            let doc = doc(&toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("os-specific".into()));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn unix_table_is_used_as_fallback_on_unix() {
+            let toml = indoc!(
+                r#"
+                [unix]
+                expect_error_contains = "unix-only"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("unix-only".into()));
+        }
+
+        #[test]
+        fn top_level_expect_error_contains_parsed() {
+            let toml = indoc!(
+                r#"
+                expect_error_contains = "top-level"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("top-level".into()));
+        }
+
+        #[test]
+        fn nested_expect_error_table() {
+            let toml = indoc!(
+                r#"
+                [expect.error]
+                contains = "nested"
+            "#
+            );
+            let doc = doc(toml);
+            let got = super::parse_error_expectation(&doc)
+                .expect("parse")
+                .expect("some");
+            assert_eq!(got, super::ErrorExpectation::Contains("nested".into()));
+        }
+    }
 }
