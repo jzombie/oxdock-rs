@@ -1,5 +1,5 @@
 [package]
-name = "oxdock-workspace-tests"
+name = "oxdock-logic-tests"
 description = "Workspace-level test harness and fixtures for OxDock"
 authors.workspace = true
 version.workspace = true

@@ -5,7 +5,7 @@ use oxdock_fs::{
 };
 use oxdock_parser::{Step, StepKind};
 use oxdock_process::{CommandBuilder, SharedInput, SharedOutput};
-use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
+use oxdock_logic_tests::expectations::{self, ErrorExpectation};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;

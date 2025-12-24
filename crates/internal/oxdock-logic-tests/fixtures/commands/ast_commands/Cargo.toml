@@ -11,6 +11,6 @@ oxdock-core.workspace = true
 oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
-oxdock-workspace-tests.workspace = true
+oxdock-logic-tests.workspace = true
 sha2.workspace = true
 toml_edit.workspace = true

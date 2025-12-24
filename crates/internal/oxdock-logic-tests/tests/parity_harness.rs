@@ -7,7 +7,7 @@ use oxdock_fs::{EntryKind, PathResolver};
 #[cfg(not(miri))]
 use oxdock_parser::{Step, parse_braced_tokens, parse_script};
 #[cfg(not(miri))]
-use oxdock_workspace_tests::expectations::{self, ErrorExpectation};
+use oxdock_logic_tests::expectations::{self, ErrorExpectation};
 #[cfg(not(miri))]
 use proc_macro2::TokenStream;
 #[cfg(not(miri))]

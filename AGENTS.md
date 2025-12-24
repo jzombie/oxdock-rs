@@ -42,7 +42,7 @@ Prefer explicit, test-only skips over runtime detection.
 
 ## Testing & Layout
 
-- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-workspace-tests/fixtures/integration/buildtime_macros`.
+- **Testing**: Prefer `cargo test --workspace --tests` to cover all crates; fixtures for the macros live under `crates/internal/oxdock-logic-tests/fixtures/integration/buildtime_macros`.
 - **Workspace layout**: Internal crates live under `crates/internal`; the CLI & build-time macros sit at the workspace root.
 
 ## Workflow
