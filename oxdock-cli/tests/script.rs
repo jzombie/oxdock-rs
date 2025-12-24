@@ -46,6 +46,7 @@ fn script_runs_copy_and_symlink() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Copy {
+                from_current_workspace: false,
                 from: "./client/dist".into(),
                 to: "./client/dist-copy".into(),
             },

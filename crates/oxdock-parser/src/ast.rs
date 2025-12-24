@@ -193,6 +193,7 @@ pub enum StepKind {
     Echo(TemplateString),
     RunBg(TemplateString),
     Copy {
+        from_current_workspace: bool,
         from: TemplateString,
         to: TemplateString,
     },
@@ -424,7 +425,18 @@ impl fmt::Display for StepKind {
             StepKind::Run(cmd) => write!(f, "RUN {}", quote_run(cmd)),
             StepKind::Echo(msg) => write!(f, "ECHO {}", quote_msg(msg)),
             StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_run(cmd)),
-            StepKind::Copy { from, to } => write!(f, "COPY {} {}", quote_arg(from), quote_arg(to)),
+            StepKind::Copy { from_current_workspace, from, to } => {
+                if *from_current_workspace {
+                    write!(
+                        f,
+                        "COPY --from-current-workspace {} {}",
+                        quote_arg(from),
+                        quote_arg(to)
+                    )
+                } else {
+                    write!(f, "COPY {} {}", quote_arg(from), quote_arg(to))
+                }
+            }
             StepKind::Symlink { from, to } => {
                 write!(f, "SYMLINK {} {}", quote_arg(from), quote_arg(to))
             }

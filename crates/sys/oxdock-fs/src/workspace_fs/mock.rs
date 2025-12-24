@@ -342,6 +342,11 @@ impl WorkspaceFs for MockFs {
         self.guard_from_rel(rel)
     }
 
+    fn resolve_copy_source_from_workspace(&self, from: &str) -> Result<GuardedPath> {
+        // Mock has no separate workspace root; treat workspace as build_context.
+        self.resolve_copy_source(from)
+    }
+
     fn copy_from_git(
         &self,
         _rev: &str,

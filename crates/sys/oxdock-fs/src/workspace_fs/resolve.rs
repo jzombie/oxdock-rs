@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 
@@ -107,6 +107,34 @@ impl PathResolver {
         }
     }
 
+    pub fn resolve_copy_source_from_workspace(&self, from: &str) -> Result<GuardedPath> {
+        let workspace_root = self
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| anyhow!("no workspace root set for workspace-relative COPY"))?;
+
+        let from_path = Path::new(from);
+        if Self::is_absolute_or_rooted(from_path) {
+            if let Ok(guarded) =
+                self.check_access_with_root(workspace_root, from_path, AccessMode::Read)
+            {
+                return self.backend.resolve_copy_source(guarded);
+            }
+
+            let rel = Self::root_relative_path(from_path);
+            let candidate = workspace_root.as_path().join(rel);
+            return self
+                .check_access_with_root(workspace_root, &candidate, AccessMode::Read)
+                .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
+                .and_then(|guarded| self.backend.resolve_copy_source(guarded));
+        }
+
+        let candidate = workspace_root.as_path().join(from);
+        self.check_access_with_root(workspace_root, &candidate, AccessMode::Read)
+            .with_context(|| format!("failed to resolve COPY source {}", candidate.display()))
+            .and_then(|guarded| self.backend.resolve_copy_source(guarded))
+    }
+
     fn resolve(&self, cwd: &GuardedPath, rel: &str, mode: AccessMode) -> Result<GuardedPath> {
         let rel_path = Path::new(rel);
         if Self::is_absolute_or_rooted(rel_path) {
@@ -204,5 +232,22 @@ mod tests {
         let source_str = source.as_path().to_string_lossy().to_string();
         let resolved = resolver.resolve_copy_source(&source_str).unwrap();
         assert_eq!(resolved.as_path(), source.as_path());
+    }
+
+    #[test]
+    fn workspace_copy_source_cannot_escape_workspace_root() {
+        let snapshot = GuardedPath::tempdir().unwrap();
+        let workspace = GuardedPath::tempdir().unwrap();
+        let snapshot_root = snapshot.as_guarded_path().clone();
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut resolver =
+            PathResolver::new_guarded(snapshot_root.clone(), workspace_root.clone()).unwrap();
+        resolver.set_workspace_root(workspace_root.clone());
+
+        // Attempt to resolve an absolute path that is outside the workspace root.
+        // This should fail when resolving specifically against the workspace.
+        let outside = "/this/path/does/not/exist";
+        let res = resolver.resolve_copy_source_from_workspace(outside);
+        assert!(res.is_err(), "expected error when resolving workspace-relative COPY outside root");
     }
 }

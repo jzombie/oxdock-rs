@@ -545,17 +545,25 @@ fn execute_steps<P: ProcessManager>(
                         }
                     }
                 }
-                StepKind::Copy { from, to } => {
+                StepKind::Copy { from_current_workspace, from, to } => {
                     let ctx = state.command_ctx();
                     let from_rendered = expand_template(from, &ctx);
                     let to_rendered = expand_template(to, &ctx);
-                    let from_abs =
+                    let from_abs = if *from_current_workspace {
+                        state
+                            .fs
+                            .resolve_copy_source_from_workspace(&from_rendered)
+                            .with_context(|| {
+                                format!("step {}: COPY {} {}", idx + 1, from_rendered, to_rendered)
+                            })?
+                    } else {
                         state
                             .fs
                             .resolve_copy_source(&from_rendered)
                             .with_context(|| {
                                 format!("step {}: COPY {} {}", idx + 1, from_rendered, to_rendered)
-                            })?;
+                            })?
+                    };
                     let to_abs = state
                         .fs
                         .resolve_write(&state.cwd, &to_rendered)

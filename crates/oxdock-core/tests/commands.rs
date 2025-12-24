@@ -139,6 +139,7 @@ fn commands_behave_cross_platform() {
         Step {
             guards: Vec::new(),
             kind: StepKind::Copy {
+                from_current_workspace: false,
                 from: "./source.txt".into(),
                 to: "./client/dist/from_build.txt".into(),
             },
