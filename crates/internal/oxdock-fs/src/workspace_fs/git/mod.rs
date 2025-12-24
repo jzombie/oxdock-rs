@@ -361,7 +361,6 @@ impl GitCommand {
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 mod tests {
     use super::*;
-    use crate::GuardedPath;
     use std::fs;
 
     #[test]
