@@ -101,35 +101,7 @@ fn cfg_env_lines(output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{cfg_env_lines, emit_feature_envs, feature_env_lines, trim_cfg_quotes};
-    use std::env;
-
-    struct EnvGuard {
-        key: &'static str,
-        value: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, value: prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(value) => unsafe {
-                    env::set_var(self.key, value);
-                },
-                None => unsafe {
-                    env::remove_var(self.key);
-                },
-            }
-        }
-    }
+    use oxdock_sys_test_utils::TestEnvGuard;
 
     #[test]
     fn trims_cfg_quotes() {
@@ -141,9 +113,9 @@ mod tests {
 
     #[test]
     fn feature_env_lines_collects_features() {
-        let _a = EnvGuard::set("CARGO_FEATURE_ALPHA", "1");
-        let _b = EnvGuard::set("CARGO_FEATURE_BETA", "1");
-        let _c = EnvGuard::set("CARGO_FEATURE_IGNORE", "0");
+        let _a = TestEnvGuard::set("CARGO_FEATURE_ALPHA", "1");
+        let _b = TestEnvGuard::set("CARGO_FEATURE_BETA", "1");
+        let _c = TestEnvGuard::set("CARGO_FEATURE_IGNORE", "0");
         let lines = feature_env_lines();
         assert!(
             lines

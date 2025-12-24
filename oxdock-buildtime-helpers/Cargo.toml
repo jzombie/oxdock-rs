@@ -13,3 +13,4 @@ anyhow.workspace = true
 oxdock-process.workspace = true
 
 [dev-dependencies]
+oxdock-sys-test-utils.workspace = true

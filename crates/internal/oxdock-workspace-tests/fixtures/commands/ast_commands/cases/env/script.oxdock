@@ -1,2 +1,0 @@
-ENV FOO=bar
-CAPTURE_TO_FILE env.txt ECHO value=${FOO}

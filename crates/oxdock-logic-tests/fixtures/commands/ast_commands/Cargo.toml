@@ -1,0 +1,16 @@
+[package]
+name = "fixture-ast-commands"
+version = "0.5.0-alpha"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+anyhow.workspace = true
+oxdock-core.workspace = true
+oxdock-fs.workspace = true
+oxdock-parser.workspace = true
+oxdock-process.workspace = true
+oxdock-logic-tests.workspace = true
+sha2.workspace = true
+toml_edit.workspace = true
