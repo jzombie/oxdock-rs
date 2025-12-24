@@ -651,10 +651,12 @@ pub mod expectations {
         if let Some(item) = doc.get(os) {
             return parse_error_expectation_from_item(item);
         }
-        if cfg!(unix) {
-            if let Some(item) = doc.get("unix") {
-                return parse_error_expectation_from_item(item);
-            }
+
+        #[allow(clippy::disallowed_macros)]
+        if cfg!(unix)
+            && let Some(item) = doc.get("unix")
+        {
+            return parse_error_expectation_from_item(item);
         }
 
         parse_error_expectation_from_item(doc.as_item())
