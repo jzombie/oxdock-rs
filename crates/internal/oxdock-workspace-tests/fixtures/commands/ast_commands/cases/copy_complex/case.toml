@@ -1,0 +1,6 @@
+name = "copy_complex"
+setup = "copy_complex"
+
+[expect]
+files = { "dst/file.txt" = "file content", "dst/dir/nested.txt" = "nested content", "dst/symlink_file" = "file content", "dst/symlink_dir/nested.txt" = "nested content" }
+dirs = ["dst/symlink_dir"]
