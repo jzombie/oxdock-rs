@@ -110,7 +110,7 @@ fn run_case_inner(case: &ParityCase) -> Result<()> {
     let token_steps = TokenStream::from_str(case.tokens.as_str())
         .map_err(|err| anyhow::anyhow!("failed to parse tokens fixture: {err}"))
         .and_then(|token_stream| script_from_braced_tokens(&token_stream))
-        .and_then(|rendered| parse_script(&rendered).map_err(|e| e.into()));
+        .and_then(|rendered| parse_script(&rendered));
 
     if let Some(expected) = case.expect_error.as_ref() {
         let dsl_error = dsl_steps.as_ref().err();

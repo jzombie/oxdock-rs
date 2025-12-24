@@ -879,52 +879,52 @@ fn spawn_child_with_streams(
         io_threads.push(thread);
     }
 
-    if let Some(stdout_stream) = stdout {
-        if let Some(mut child_stdout) = child.stdout.take() {
-            let stream_clone = stdout_stream.clone();
-            let thread = std::thread::spawn(move || {
-                let mut buf = [0u8; 1024];
-                loop {
-                    match std::io::Read::read(&mut child_stdout, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut guard) = stream_clone.lock() {
-                                if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
-                                    break;
-                                }
-                                let _ = std::io::Write::flush(&mut *guard);
+    if let Some(stdout_stream) = stdout
+        && let Some(mut child_stdout) = child.stdout.take()
+    {
+        let stream_clone = stdout_stream.clone();
+        let thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut child_stdout, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stream_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
                             }
+                            let _ = std::io::Write::flush(&mut *guard);
                         }
-                        Err(_) => break,
                     }
+                    Err(_) => break,
                 }
-            });
-            io_threads.push(thread);
-        }
+            }
+        });
+        io_threads.push(thread);
     }
 
-    if let Some(stderr_stream) = stderr {
-        if let Some(mut child_stderr) = child.stderr.take() {
-            let stream_clone = stderr_stream.clone();
-            let thread = std::thread::spawn(move || {
-                let mut buf = [0u8; 1024];
-                loop {
-                    match std::io::Read::read(&mut child_stderr, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut guard) = stream_clone.lock() {
-                                if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
-                                    break;
-                                }
-                                let _ = std::io::Write::flush(&mut *guard);
+    if let Some(stderr_stream) = stderr
+        && let Some(mut child_stderr) = child.stderr.take()
+    {
+        let stream_clone = stderr_stream.clone();
+        let thread = std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match std::io::Read::read(&mut child_stderr, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = stream_clone.lock() {
+                            if std::io::Write::write_all(&mut *guard, &buf[..n]).is_err() {
+                                break;
                             }
+                            let _ = std::io::Write::flush(&mut *guard);
                         }
-                        Err(_) => break,
                     }
+                    Err(_) => break,
                 }
-            });
-            io_threads.push(thread);
-        }
+            }
+        });
+        io_threads.push(thread);
     }
 
     Ok(ChildHandle { child, io_threads })

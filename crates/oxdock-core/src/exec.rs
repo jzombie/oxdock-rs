@@ -340,6 +340,7 @@ fn run_steps_with_manager<P: ProcessManager>(
     Ok(state.cwd)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_steps<P: ProcessManager>(
     state: &mut ExecState<P>,
     process: &mut P,

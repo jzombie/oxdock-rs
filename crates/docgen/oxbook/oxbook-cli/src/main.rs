@@ -1332,6 +1332,7 @@ fn run_in_default_env(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_in_env(
     workspace_resolver: &PathResolver,
     env: &RunnerEnv,
