@@ -21,9 +21,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Script: copy from workspace-relative path into snapshot output
     // Use the new flag to indicate copy from current workspace
+    let ws_src = workspace_dir
+        .as_path()
+        .to_string_lossy()
+        .replace('\\', "\\\\");
     let script = format!(
-        "COPY --from-current-workspace {ws} out/target_ws && COPY {build} out/target_build",
-        ws = workspace_dir.as_path().display(),
+        "COPY --from-current-workspace \"{ws}\" out/target_ws && COPY {build} out/target_build",
+        ws = ws_src,
         build = "./build_source.txt",
     );
 

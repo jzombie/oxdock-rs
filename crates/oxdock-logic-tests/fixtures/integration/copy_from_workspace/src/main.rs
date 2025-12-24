@@ -22,7 +22,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Script: copy from workspace-relative path into snapshot output
     // Use the new flag to indicate copy from current workspace
-    let ws_src = workspace_file.as_path().display().to_string();
+    let ws_src = workspace_file
+        .as_path()
+        .to_string_lossy()
+        .replace('\\', "\\\\");
     let out_ws_path = "out/target_ws/ws_source.txt";
     let out_build_path = "out/target_build/build_source.txt";
     let script = indoc!(r#"
