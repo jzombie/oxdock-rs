@@ -425,7 +425,11 @@ impl fmt::Display for StepKind {
             StepKind::Run(cmd) => write!(f, "RUN {}", quote_run(cmd)),
             StepKind::Echo(msg) => write!(f, "ECHO {}", quote_msg(msg)),
             StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_run(cmd)),
-            StepKind::Copy { from_current_workspace, from, to } => {
+            StepKind::Copy {
+                from_current_workspace,
+                from,
+                to,
+            } => {
                 if *from_current_workspace {
                     write!(
                         f,

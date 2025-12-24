@@ -271,8 +271,9 @@ mod tests {
             .write_file(&source, b"workspace rel file")
             .unwrap();
 
-        let resolved =
-            resolver.resolve_copy_source_from_workspace("ws_rel/input.txt").unwrap();
+        let resolved = resolver
+            .resolve_copy_source_from_workspace("ws_rel/input.txt")
+            .unwrap();
         assert_eq!(resolved.as_path(), source.as_path());
     }
 
@@ -297,7 +298,10 @@ mod tests {
             .unwrap();
         let outside_abs = outside_file.as_path().to_string_lossy().to_string();
         let res = resolver.resolve_copy_source_from_workspace(&outside_abs);
-        assert!(res.is_err(), "expected error for absolute path outside workspace root");
+        assert!(
+            res.is_err(),
+            "expected error for absolute path outside workspace root"
+        );
 
         // Relative paths that attempt to traverse above the workspace root must also fail.
         let rel_escape = "../escape.txt";

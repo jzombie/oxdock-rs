@@ -545,7 +545,11 @@ fn execute_steps<P: ProcessManager>(
                         }
                     }
                 }
-                StepKind::Copy { from_current_workspace, from, to } => {
+                StepKind::Copy {
+                    from_current_workspace,
+                    from,
+                    to,
+                } => {
                     let ctx = state.command_ctx();
                     let from_rendered = expand_template(from, &ctx);
                     let to_rendered = expand_template(to, &ctx);
