@@ -69,6 +69,21 @@ impl StreamHandle {
     }
 }
 
+fn write_stdout<F>(handle: Option<StreamHandle>, op: F) -> Result<()>
+where
+    F: FnOnce(&mut dyn Write) -> Result<()>,
+{
+    if let Some(StreamHandle::Stream(writer)) = handle {
+        if let Ok(mut guard) = writer.lock() {
+            op(&mut *guard)?;
+        }
+        Ok(())
+    } else {
+        let mut stdout = io::stdout();
+        op(&mut stdout)
+    }
+}
+
 impl ExecIo {
     pub fn new() -> Self {
         Self::default()
@@ -486,16 +501,10 @@ fn execute_steps<P: ProcessManager>(
                 StepKind::Echo(msg) => {
                     let ctx = state.command_ctx();
                     let rendered = expand_template(msg, &ctx);
-                    match out.clone() {
-                        Some(StreamHandle::Stream(writer)) => {
-                            if let Ok(mut guard) = writer.lock() {
-                                writeln!(guard, "{}", rendered)?;
-                            }
-                        }
-                        _ => {
-                            println!("{}", rendered);
-                        }
-                    }
+                    write_stdout(out.clone(), |writer| {
+                        writeln!(writer, "{}", rendered)?;
+                        Ok(())
+                    })?;
                     Ok(())
                 }
                 StepKind::RunBg(cmd) => {
@@ -606,16 +615,10 @@ fn execute_steps<P: ProcessManager>(
                     let mut hasher = Sha256::new();
                     hash_path(state.fs.as_ref(), &target, "", &mut hasher)?;
                     let digest = hasher.finalize();
-                    match out.clone() {
-                        Some(StreamHandle::Stream(writer)) => {
-                            if let Ok(mut guard) = writer.lock() {
-                                writeln!(guard, "{:x}", digest)?;
-                            }
-                        }
-                        _ => {
-                            println!("{:x}", digest);
-                        }
-                    }
+                    write_stdout(out.clone(), |writer| {
+                        writeln!(writer, "{:x}", digest)?;
+                        Ok(())
+                    })?;
                     Ok(())
                 }
 
@@ -685,22 +688,13 @@ fn execute_steps<P: ProcessManager>(
                             format!("step {}: LS {}", idx + 1, target_dir.display())
                         })?;
                     entries.sort_by_key(|e| e.file_name());
-                    match out.clone() {
-                        Some(StreamHandle::Stream(writer)) => {
-                            if let Ok(mut guard) = writer.lock() {
-                                writeln!(guard, "{}:", target_dir.display())?;
-                                for entry in entries {
-                                    writeln!(guard, "{}", entry.file_name().to_string_lossy())?;
-                                }
-                            }
+                    write_stdout(out.clone(), |writer| {
+                        writeln!(writer, "{}:", target_dir.display())?;
+                        for entry in &entries {
+                            writeln!(writer, "{}", entry.file_name().to_string_lossy())?;
                         }
-                        _ => {
-                            println!("{}:", target_dir.display());
-                            for entry in entries {
-                                println!("{}", entry.file_name().to_string_lossy());
-                            }
-                        }
-                    }
+                        Ok(())
+                    })?;
                     Ok(())
                 }
                 StepKind::Cwd => {
@@ -712,16 +706,10 @@ fn execute_steps<P: ProcessManager>(
                             state.cwd.display()
                         )
                     })?;
-                    match out.clone() {
-                        Some(StreamHandle::Stream(writer)) => {
-                            if let Ok(mut guard) = writer.lock() {
-                                writeln!(guard, "{}", real)?;
-                            }
-                        }
-                        _ => {
-                            println!("{}", real);
-                        }
-                    }
+                    write_stdout(out.clone(), |writer| {
+                        writeln!(writer, "{}", real)?;
+                        Ok(())
+                    })?;
                     Ok(())
                 }
                 StepKind::Cat(path_opt) => {
@@ -748,20 +736,12 @@ fn execute_steps<P: ProcessManager>(
 
                         buf
                     };
-                    match out.clone() {
-                        Some(StreamHandle::Stream(writer)) => {
-                            if let Ok(mut guard) = writer.lock() {
-                                guard
-                                    .write_all(&data)
-                                    .context("failed to write to output")?;
-                            }
-                        }
-                        _ => {
-                            io::stdout()
-                                .write_all(&data)
-                                .context("failed to write to stdout")?;
-                        }
-                    }
+                    write_stdout(out.clone(), |writer| {
+                        writer
+                            .write_all(&data)
+                            .context("failed to write to output")?;
+                        Ok(())
+                    })?;
                     Ok(())
                 }
                 StepKind::Write { path, contents } => {
