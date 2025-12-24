@@ -1229,7 +1229,8 @@ fn build_env_from_oxfile(
     let mut io_cfg = ExecIo::new();
     io_cfg.set_stdout(Some(build_stdout.clone()));
     io_cfg.set_stderr(Some(build_stdout.clone()));
-    io_cfg.insert_output_pipe(PIPE_SETUP, build_stdout.clone());
+    io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
+    io_cfg.insert_output_pipe_stderr_inherit(PIPE_SETUP);
     io_cfg.insert_output_pipe(PIPE_SNIPPET, build_stdout.clone());
     let final_cwd = run_steps_with_context_result_with_io(
         &temp_root,
@@ -1482,13 +1483,10 @@ fn run_in_env_with_resolver(
         io_cfg.set_stdout(Some(use_stdout.clone()));
         io_cfg.set_stderr(Some(use_stderr.clone()));
 
-        // Pipe setup/build output directly to the user's terminal.
-        let setup_buf = Arc::new(Mutex::new(Vec::new()));
-        let setup_stream: SharedOutput = Arc::new(Mutex::new(EnvTee {
-            buf: setup_buf,
-            term: Some(std::io::stdout()),
-        }));
-        io_cfg.insert_output_pipe(PIPE_SETUP, setup_stream);
+        // Pipe setup/build output directly to the user's terminal using inherited stdio
+        // so tools like Cargo keep their colorized output.
+        io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
+        io_cfg.insert_output_pipe_stderr_inherit(PIPE_SETUP);
         io_cfg.insert_output_pipe_stdout(PIPE_SNIPPET, use_stdout.clone());
         io_cfg.insert_output_pipe_stderr(PIPE_SNIPPET, use_stderr.clone());
 
