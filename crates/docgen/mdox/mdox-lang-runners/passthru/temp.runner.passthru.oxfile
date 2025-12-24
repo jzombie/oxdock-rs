@@ -1,0 +1,2 @@
+[env:MDOX_SNIPPET_PATH]
+CAT {{ env:MDOX_SNIPPET_PATH }}

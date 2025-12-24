@@ -74,7 +74,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
 
     let mut cargo_toml = String::new();
     cargo_toml.push_str("[package]\n");
-    cargo_toml.push_str("name = \"oxbook-snippet\"\n");
+    cargo_toml.push_str("name = \"mdox-snippet\"\n");
     cargo_toml.push_str("version = \"0.0.0\"\n");
     cargo_toml.push_str("edition = \"2021\"\n\n");
     cargo_toml.push_str("[workspace]\n\n");
@@ -83,7 +83,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
         let path_str = path.display().to_string();
         cargo_toml.push_str(&format!("{name} = {{ path = \"{path_str}\" }}\n"));
     }
-    cargo_toml.push_str("\n[[bin]]\nname = \"oxbook-snippet\"\npath = \"src/main.rs\"\n");
+    cargo_toml.push_str("\n[[bin]]\nname = \"mdox-snippet\"\npath = \"src/main.rs\"\n");
 
     #[allow(clippy::disallowed_methods)]
     {

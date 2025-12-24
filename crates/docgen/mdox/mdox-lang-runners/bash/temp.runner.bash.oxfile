@@ -1,0 +1,2 @@
+[env:MDOX_SNIPPET_PATH]
+WITH_IO [stdin] RUN bash "{{ env:MDOX_SNIPPET_PATH }}"

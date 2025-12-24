@@ -14,7 +14,7 @@ fn read_file(path: &GuardedPath) -> String {
 #[test]
 /// Verifies that `run_steps` can be called multiple times against the same filesystem root,
 /// allowing for incremental state accumulation (e.g., incremental compilation artifacts).
-/// This supports the `oxbook-cli` feature where subsequent code blocks run in the same
+/// This supports the `mdox-cli` feature where subsequent code blocks run in the same
 /// persistent environment (filesystem).
 fn incremental_execution_persists_filesystem_state() {
     let temp = GuardedPath::tempdir().unwrap();

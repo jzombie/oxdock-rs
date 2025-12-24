@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/docgen/oxbook/oxbook-cli",
+    "crates/docgen/mdox/mdox-cli",
     "crates/oxdock-core",
     "crates/oxdock-embed",
     "crates/oxdock-fixture",

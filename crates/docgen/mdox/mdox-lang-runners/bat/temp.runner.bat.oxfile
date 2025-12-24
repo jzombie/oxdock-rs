@@ -1,0 +1,7 @@
+[platform==windows, env:MDOX_SNIPPET_PATH]
+WITH_IO [stdin] RUN "{{ env:MDOX_SNIPPET_PATH }}"
+
+[platform==unix] {
+    ECHO Batch commands only available on Windows.
+    EXIT 1
+}

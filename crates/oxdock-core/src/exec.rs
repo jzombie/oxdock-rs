@@ -266,7 +266,7 @@ fn execute_steps<P: ProcessManager>(
                         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                         .unwrap_or(false);
 
-                    if std::env::var("OXBOOK_DEBUG").is_ok() {
+                    if std::env::var("MDOX_DEBUG").is_ok() {
                         eprintln!(
                             "DEBUG: step RUN {} inherit_override={}",
                             rendered, inherit_override
