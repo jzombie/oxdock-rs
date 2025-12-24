@@ -1,7 +1,7 @@
 #[allow(clippy::disallowed_types)]
 use oxdock_fs::UnguardedPath;
 use oxdock_fs::{
-    GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, normalized_path,
+    GuardPolicy, GuardedPath, PolicyPath, discover_workspace_root, normalized_path,
     to_forward_slashes,
 };
 use oxdock_sys_test_utils::TestEnvGuard;
@@ -86,7 +86,7 @@ fn mock_fs_writes_and_reads_files() {
 #[cfg(feature = "mock-fs")]
 #[test]
 fn mock_fs_resolves_relative_paths() {
-    use oxdock_fs::MockFs;
+    use oxdock_fs::{MockFs, WorkspaceFs};
 
     let fs = MockFs::new();
     let root = fs.root().clone();

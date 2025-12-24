@@ -305,6 +305,10 @@ mod extra_tests {
     use super::*;
     use crate::UnguardedPath;
 
+    #[cfg_attr(
+        miri,
+        ignore = "uses tempfile::tempdir which touches the host filesystem; blocked under Miri isolation"
+    )]
     #[test]
     fn copy_file_from_unguarded_copies_contents() -> anyhow::Result<()> {
         let temp = GuardedPath::tempdir()?;
