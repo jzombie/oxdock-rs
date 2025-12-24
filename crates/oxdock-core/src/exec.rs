@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail};
-use std::collections::HashMap;
-use std::io::{self, Write};
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, Read, Write};
 use std::process::ExitStatus;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use oxdock_fs::{EntryKind, GuardedPath, PathResolver, WorkspaceFs, to_forward_slashes};
 use oxdock_parser::{IoStream, Step, StepKind, TemplateString, WorkspaceTarget};
@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 #[derive(Clone)]
 enum PipeEndpoint {
     Stream(SharedOutput),
+    Script(ScriptPipeEndpoint),
     Inherit,
 }
 
@@ -24,9 +25,16 @@ impl PipeEndpoint {
         PipeEndpoint::Stream(writer)
     }
 
+    fn script(endpoint: ScriptPipeEndpoint) -> Self {
+        PipeEndpoint::Script(endpoint)
+    }
+
     fn to_stream_handle(&self) -> StreamHandle {
         match self {
             PipeEndpoint::Stream(writer) => StreamHandle::Stream(writer.clone()),
+            PipeEndpoint::Script(endpoint) => {
+                StreamHandle::Stream(endpoint.stream_handle())
+            }
             PipeEndpoint::Inherit => StreamHandle::Inherit,
         }
     }
@@ -36,6 +44,171 @@ impl PipeEndpoint {
 struct PipeOutputs {
     stdout: Option<PipeEndpoint>,
     stderr: Option<PipeEndpoint>,
+}
+
+struct ScriptPipe {
+    inner: Arc<PipeInner>,
+    reader: SharedInput,
+}
+
+impl ScriptPipe {
+    fn new() -> Self {
+        let inner = Arc::new(PipeInner::new());
+        let reader: SharedInput = Arc::new(Mutex::new(PipeReader::new(inner.clone())));
+        Self { inner, reader }
+    }
+
+    fn reader(&self) -> SharedInput {
+        self.reader.clone()
+    }
+
+    fn endpoint(&self) -> ScriptPipeEndpoint {
+        ScriptPipeEndpoint::new(self.inner.clone())
+    }
+}
+
+#[derive(Clone)]
+struct ScriptPipeEndpoint {
+    inner: Arc<PipeInner>,
+}
+
+impl ScriptPipeEndpoint {
+    fn new(inner: Arc<PipeInner>) -> Self {
+        Self { inner }
+    }
+
+    fn stream_handle(&self) -> SharedOutput {
+        Arc::new(Mutex::new(PipeWriter::new(self.inner.clone())))
+    }
+}
+
+struct PipeInner {
+    state: Mutex<PipeState>,
+    ready: Condvar,
+}
+
+impl PipeInner {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(PipeState::new()),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn attach_writer(&self) {
+        let mut state = self.lock_state();
+        state.writers += 1;
+        state.closed = false;
+    }
+
+    fn detach_writer(&self) {
+        let mut state = self.lock_state();
+        state.writers = state.writers.saturating_sub(1);
+        if state.writers == 0 {
+            state.closed = true;
+        }
+        drop(state);
+        self.ready.notify_all();
+    }
+
+    fn push_bytes(&self, data: &[u8]) {
+        let mut state = self.lock_state();
+        state.buffer.extend(data.iter().copied());
+        drop(state);
+        self.ready.notify_all();
+    }
+
+    fn read_into(&self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut state = self.lock_state();
+        loop {
+            if !state.buffer.is_empty() {
+                let mut read = 0;
+                while read < buf.len() && !state.buffer.is_empty() {
+                    if let Some(byte) = state.buffer.pop_front() {
+                        buf[read] = byte;
+                        read += 1;
+                    }
+                }
+                return Ok(read);
+            }
+            if state.closed {
+                return Ok(0);
+            }
+            state = self
+                .ready
+                .wait(state)
+                .map_err(|_| io::Error::new(io::ErrorKind::Other, "pipe wait poisoned"))?;
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, PipeState> {
+        self.state
+            .lock()
+            .expect("script pipe state poisoned")
+    }
+}
+
+struct PipeState {
+    buffer: VecDeque<u8>,
+    writers: usize,
+    closed: bool,
+}
+
+impl PipeState {
+    fn new() -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            writers: 0,
+            closed: false,
+        }
+    }
+}
+
+struct PipeReader {
+    inner: Arc<PipeInner>,
+}
+
+impl PipeReader {
+    fn new(inner: Arc<PipeInner>) -> Self {
+        Self { inner }
+    }
+}
+
+impl Read for PipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read_into(buf)
+    }
+}
+
+struct PipeWriter {
+    inner: Arc<PipeInner>,
+}
+
+impl PipeWriter {
+    fn new(inner: Arc<PipeInner>) -> Self {
+        inner.attach_writer();
+        Self { inner }
+    }
+}
+
+impl Write for PipeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.push_bytes(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for PipeWriter {
+    fn drop(&mut self) {
+        self.inner.detach_writer();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -132,6 +305,20 @@ impl ExecIo {
     pub fn insert_output_pipe_stderr_inherit<S: Into<String>>(&mut self, name: S) {
         let entry = self.output_pipes.entry(name.into()).or_default();
         entry.stderr = Some(PipeEndpoint::Inherit);
+    }
+
+    fn ensure_script_pipe(&mut self, name: &str) {
+        if self.input_pipes.contains_key(name) || self.output_pipes.contains_key(name) {
+            return;
+        }
+
+        let pipe = ScriptPipe::new();
+        self.input_pipes.insert(name.to_string(), pipe.reader());
+        let endpoint = PipeEndpoint::script(pipe.endpoint());
+        let mut outputs = PipeOutputs::default();
+        outputs.stdout = Some(endpoint.clone());
+        outputs.stderr = Some(endpoint);
+        self.output_pipes.insert(name.to_string(), outputs);
     }
 
     pub fn stdin(&self) -> Option<SharedInput> {
@@ -789,6 +976,9 @@ fn execute_steps<P: ProcessManager>(
                     let mut seen_stderr = false;
 
                     for binding in bindings {
+                        if let Some(pipe) = &binding.pipe {
+                            state.io.ensure_script_pipe(pipe);
+                        }
                         match binding.stream {
                             IoStream::Stdin => {
                                 if seen_stdin {
@@ -1147,7 +1337,7 @@ fn hash_path(
 mod tests {
     use super::*;
     use oxdock_fs::{GuardedPath, MockFs};
-    use oxdock_parser::{Guard, IoBinding};
+    use oxdock_parser::{Guard, IoBinding, IoStream};
     use oxdock_process::{MockProcessManager, MockRunCall};
     use std::collections::HashMap;
 
@@ -1386,6 +1576,47 @@ mod tests {
         let runs = mock.recorded_runs();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].script, "echo guarded");
+    }
+
+    #[test]
+    fn with_io_pipe_routes_stdout_to_run_stdin() {
+        let steps = vec![
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::WithIo {
+                    bindings: vec![IoBinding {
+                        stream: IoStream::Stdout,
+                        pipe: Some("shared".into()),
+                    }],
+                    cmd: Box::new(StepKind::Echo("hello".into())),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::WithIo {
+                    bindings: vec![IoBinding {
+                        stream: IoStream::Stdin,
+                        pipe: Some("shared".into()),
+                    }],
+                    cmd: Box::new(StepKind::Run("cat".into())),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+        ];
+
+        let fs = MockFs::new();
+        let mut state = create_exec_state(fs);
+        let mut proc = MockProcessManager::default();
+        execute_steps(&mut state, &mut proc, &steps, None, false, None, None, true)
+            .expect("pipeline executes");
+
+        let runs = proc.recorded_runs();
+        assert_eq!(runs.len(), 1);
+        let MockRunCall { stdin, .. } = &runs[0];
+        assert_eq!(stdin.as_deref(), Some(b"hello\n".as_slice()));
     }
 
     fn success_status() -> ExitStatus {

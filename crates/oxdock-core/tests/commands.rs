@@ -1079,3 +1079,25 @@ fn with_io_block_applies_defaults() {
     let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     assert_eq!(contents, "alpha\nbeta\n");
 }
+
+#[test]
+fn with_io_routes_stdout_into_later_stdin() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let script = indoc! {r#"
+        WITH_IO [stdout=pipe:relay] ECHO streamed
+        WITH_IO [stdin=pipe:relay] CAT
+    "#};
+    let steps = oxdock_parser::parse_script(script).expect("parse WITH_IO pipe script");
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(captured.clone()));
+
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("run WITH_IO pipe script");
+
+    let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert_eq!(contents, "streamed\n");
+}
