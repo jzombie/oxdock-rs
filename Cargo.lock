@@ -354,6 +354,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "oxdock-test-utils",
  "tempfile",
 ]
 
@@ -366,6 +367,7 @@ dependencies = [
  "oxdock-fs",
  "oxdock-parser",
  "oxdock-process",
+ "oxdock-test-utils",
  "sha2",
 ]
 
@@ -440,6 +442,7 @@ dependencies = [
  "oxdock-fixture",
  "oxdock-fs",
  "oxdock-parser",
+ "oxdock-test-utils",
  "proc-macro2",
  "proptest",
  "toml_edit",

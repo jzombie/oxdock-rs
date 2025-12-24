@@ -4,7 +4,7 @@ use oxdock_fs::{
     GuardPolicy, GuardedPath, PolicyPath, WorkspaceFs, discover_workspace_root, normalized_path,
     to_forward_slashes,
 };
-use oxdock_test_utils::EnvGuard;
+use oxdock_test_utils::TestEnvGuard;
 
 #[cfg_attr(
     miri,
@@ -61,7 +61,7 @@ fn forward_slash_helpers_normalize_paths() {
 fn discover_workspace_root_prefers_env() {
     let tempdir = GuardedPath::tempdir().expect("tempdir");
     let root = tempdir.as_guarded_path().clone();
-    let _guard = EnvGuard::set("OXDOCK_WORKSPACE_ROOT", root.display().as_str());
+    let _guard = TestEnvGuard::set("OXDOCK_WORKSPACE_ROOT", root.display().as_str());
     let discovered = discover_workspace_root().expect("discover");
     assert_eq!(discovered.as_path(), root.as_path());
 }

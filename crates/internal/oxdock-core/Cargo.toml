@@ -25,3 +25,4 @@ sha2.workspace = true
 indoc.workspace = true
 oxdock-fs = { workspace = true, features = ["mock-fs"] }
 oxdock-process = { workspace = true, features = ["mock-process"] }
+oxdock-test-utils = { workspace = true }

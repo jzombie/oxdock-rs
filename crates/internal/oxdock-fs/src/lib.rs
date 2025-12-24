@@ -27,8 +27,6 @@ pub use workspace_fs::policy::{GuardPolicy, PolicyPath};
 pub use workspace_fs::{DirEntry, EntryKind, GuardedPath, GuardedTempDir, PathResolver};
 pub use workspace_fs::{command_path, embed_path, normalized_path, to_forward_slashes};
 
-pub mod test_utils;
-
 #[allow(clippy::disallowed_types)]
 pub use workspace_fs::UnguardedPath;
 

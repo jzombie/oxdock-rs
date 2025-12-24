@@ -40,7 +40,7 @@ fn create_dirs(path: &GuardedPath) {
     resolver.create_dir_all(path).unwrap();
 }
 
-use oxdock_fs::test_utils::can_create_symlinks;
+use oxdock_test_utils::can_create_symlinks;
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.join(rel).map(|p| p.exists()).unwrap_or(false)
@@ -224,7 +224,7 @@ fn commands_behave_cross_platform() {
     ];
 
     let res = run_steps_with_context(&snapshot, &local, &steps);
-    if can_create_symlinks(&snapshot) {
+    if can_create_symlinks(snapshot.as_path()) {
         res.unwrap();
     } else {
         let err = res.unwrap_err();
@@ -804,7 +804,7 @@ fn read_symlink_escape_is_blocked() {
     parent_fs.write_file(&secret, b"top secret").unwrap();
 
     // Inside root, create a link that points to the outside secret.
-    if !can_create_symlinks(&root) {
+    if !can_create_symlinks(root.as_path()) {
         eprintln!("skipping test: cannot create symlinks on host");
         let _ = parent_fs.remove_file(&secret);
         return;
@@ -884,7 +884,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
         },
     ];
 
-    if can_create_symlinks(&workspace_root) {
+    if can_create_symlinks(workspace_root.as_path()) {
         run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap();
 
         let workspace_resolver =
@@ -905,8 +905,6 @@ fn workdir_accepts_symlink_into_workspace_root() {
             "expected SYMLINK error, got {}",
             err
         );
-        let workspace_resolver =
-            PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
         let seen_path = workspace_root.join("client/seen.txt").unwrap();
         assert!(
             !seen_path.as_path().exists(),
