@@ -10,7 +10,7 @@
     # 2. Generate the snippet manifest
     MKDIR ws/snippet/src
     ENV OXDOCK_INHERIT_STDOUT=1
-    RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+    RUN CARGO_TARGET_DIR="ws/target" cargo run -p oxbook-cli --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 }
 
 # ==========================================
