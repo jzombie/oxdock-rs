@@ -239,7 +239,7 @@ pub mod harness {
             .with_path_dependency(
                 "oxdock-fs",
                 workspace_root
-                    .join("crates/oxdock-fs")?
+                    .join("crates/sys/oxdock-fs")?
                     .to_string(),
             )
             .with_path_dependency(
@@ -257,7 +257,7 @@ pub mod harness {
             .with_path_dependency(
                 "oxdock-process",
                 workspace_root
-                    .join("crates/oxdock-process")?
+                    .join("crates/sys/oxdock-process")?
                     .to_string(),
             )
             .with_path_dependency(
