@@ -261,9 +261,9 @@ pub mod harness {
                     .to_string(),
             )
             .with_path_dependency(
-                "oxdock-workspace-tests",
+                "oxdock-logic-tests",
                 workspace_root
-                    .join("crates/internal/oxdock-workspace-tests")?
+                    .join("crates/internal/oxdock-logic-tests")?
                     .to_string(),
             )
             .with_path_dependency("oxdock-cli", workspace_root.join("oxdock-cli")?.to_string())

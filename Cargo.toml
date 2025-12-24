@@ -6,7 +6,7 @@ members = [
     "crates/internal/oxdock-fs",
     "crates/internal/oxdock-parser",
     "crates/internal/oxdock-process",
-    "crates/internal/oxdock-workspace-tests",
+    "crates/internal/oxdock-logic-tests",
     "crates/internal/oxdock-test-utils",
     "oxdock-buildtime-helpers",
     "oxdock-buildtime-macros",

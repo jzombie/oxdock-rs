@@ -3,7 +3,7 @@ use libtest_mimic::Arguments;
 #[cfg(not(miri))]
 use oxdock_fs::PathResolver;
 #[cfg(not(miri))]
-use oxdock_workspace_tests::harness::{HarnessConfig, build_trials};
+use oxdock_logic_tests::harness::{HarnessConfig, build_trials};
 
 #[cfg(miri)]
 fn main() {

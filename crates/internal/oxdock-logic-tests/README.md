@@ -1,4 +1,4 @@
-# oxdock-workspace-tests
+# oxdock-logic-tests
 
 Workspace-level fixtures and a [libtest-mimic](https://crates.io/crates/libtest-mimic) harness.
 
