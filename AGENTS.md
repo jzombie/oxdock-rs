@@ -2,7 +2,7 @@
 
 ## Linting
 
-Do not override linter rules in any crate except `oxdock-fs`, `oxdock-test-utils`, or `oxdock-process`, and never add global/blanket overrides.
+Do not override linter rules in any crate. The only permitted narrow, crate-local `#[allow(...)]` exceptions are the system crates located under `crates/sys/*` (for example, `oxdock-fs`, `oxdock-process`, `oxdock-sys-test-utils`). Never add workspace-wide or blanket overrides.
 
 - **Naming**: Do not prefix parameter names with `_` to silence unused warnings. Prefer using the value (e.g., `let _ = param;`) or a localized `#[allow(unused_variables)]` if absolutely necessary.
 
