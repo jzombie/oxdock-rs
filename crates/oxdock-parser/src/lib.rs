@@ -281,6 +281,19 @@ mod tests {
     }
 
     #[test]
+    fn workdir_allows_templated_argument_with_spaces() {
+        let script = "WORKDIR {{ env:OXBOOK_RUNNER_DIR }}";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].kind {
+            StepKind::Workdir(path) => {
+                assert_eq!(path, "{{ env:OXBOOK_RUNNER_DIR }}");
+            }
+            other => panic!("expected WORKDIR, saw {:?}", other),
+        }
+    }
+
+    #[test]
     #[cfg(feature = "proc-macro-api")]
     fn string_and_braced_scripts_produce_identical_ast() {
         let mut cases = Vec::new();

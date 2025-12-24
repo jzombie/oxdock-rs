@@ -1,16 +1,24 @@
 # ==========================================
-# Rust Interpreter Setup
+# Rust Runner Setup
 # ==========================================
 
 [!env:OXBOOK_SNIPPET_PATH] {
-    # 1. Prepare the workspace
-    MKDIR ws
-    COPY_GIT HEAD . ws
+    WORKDIR /
 
-    # 2. Generate the snippet manifest
-    MKDIR ws/snippet/src
+    # 1. Prepare the workspace
+    WORKDIR ws
+    COPY_GIT --include-dirty HEAD . .
+
+    # 2. Generate the snippet manifest by copying the manifest generator source
+    #    into a throwaway crate and building it locally. This avoids depending
+    #    on oxbook-cli being a workspace member or on a pre-installed binary.
+    MKDIR snippet/src
     ENV OXDOCK_INHERIT_STDOUT=1
-    RUN CARGO_TARGET_DIR="ws/target" cargo run --bin oxbook_snippet_manifest --manifest-path "ws/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+
+    WORKDIR /
+
+    COPY "{{ env:OXBOOK_RUNNER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
+    RUN CARGO_TARGET_DIR="target" cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
 }
 
 # ==========================================
