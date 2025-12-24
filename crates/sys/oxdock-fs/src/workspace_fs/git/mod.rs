@@ -363,6 +363,10 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg_attr(
+        miri,
+        ignore = "creates temporary directories via tempfile::tempdir which touches the host filesystem; blocked under Miri isolation"
+    )]
     #[test]
     fn git_root_from_path_finds_parent_git() {
         let temp = tempfile::tempdir().expect("tempdir");
