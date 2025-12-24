@@ -73,7 +73,7 @@ impl ShellLauncher {
 #[cfg(test)]
 mod tests {
     use super::{ShellLauncher, shell_cmd, shell_program};
-    use crate::EnvGuard;
+    use crate::TestEnvGuard;
 
     use std::ffi::OsStr;
     use std::sync::Mutex;
@@ -85,9 +85,9 @@ mod tests {
     fn shell_program_prefers_env_override() {
         let _lock = ENV_LOCK.lock().expect("env lock");
         #[cfg(windows)]
-        let _guard = EnvGuard::set("COMSPEC", "custom-cmd");
+        let _guard = TestEnvGuard::set("COMSPEC", "custom-cmd");
         #[cfg(not(windows))]
-        let _guard = EnvGuard::set("SHELL", "custom-sh");
+        let _guard = TestEnvGuard::set("SHELL", "custom-sh");
         let program = shell_program();
         #[cfg(windows)]
         assert_eq!(program, "custom-cmd");

@@ -107,11 +107,11 @@ mod tests {
     use super::super::GitCommand;
     use super::*;
 
-    use oxdock_test_utils::EnvGuard;
+    use oxdock_test_utils::TestEnvGuard;
 
     fn with_git_config_isolation(f: impl FnOnce()) {
-        let _g = EnvGuard::set("GIT_CONFIG_GLOBAL", "/dev/null");
-        let _s = EnvGuard::set("GIT_CONFIG_SYSTEM", "/dev/null");
+        let _g = TestEnvGuard::set("GIT_CONFIG_GLOBAL", "/dev/null");
+        let _s = TestEnvGuard::set("GIT_CONFIG_SYSTEM", "/dev/null");
         f();
     }
 
@@ -146,8 +146,8 @@ mod tests {
         init_repo(&repo);
 
         with_git_config_isolation(|| {
-            let _n = EnvGuard::set("GIT_AUTHOR_NAME", "CI Bot");
-            let _e = EnvGuard::set("GIT_AUTHOR_EMAIL", "ci@example.com");
+            let _n = TestEnvGuard::set("GIT_AUTHOR_NAME", "CI Bot");
+            let _e = TestEnvGuard::set("GIT_AUTHOR_EMAIL", "ci@example.com");
             let ident = ensure_git_identity(&repo).expect("identity");
             assert_eq!(ident.name, "CI Bot");
             assert_eq!(ident.email, "ci@example.com");

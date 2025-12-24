@@ -1,12 +1,12 @@
 /// Small test helper to temporarily set an environment variable and restore
 /// its previous value when dropped. Intended for use in unit/integration
 /// tests across workspace crates.
-pub struct EnvGuard {
+pub struct TestEnvGuard {
     key: &'static str,
     value: Option<String>,
 }
 
-impl EnvGuard {
+impl TestEnvGuard {
     /// Set `key` to `value`, returning a guard that restores the previous
     /// value (or removes the variable) when dropped.
     pub fn set(key: &'static str, value: &str) -> Self {
@@ -20,7 +20,7 @@ impl EnvGuard {
     }
 }
 
-impl Drop for EnvGuard {
+impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         match &self.value {
             Some(value) => unsafe { std::env::set_var(self.key, value) },

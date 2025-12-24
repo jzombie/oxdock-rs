@@ -7,7 +7,7 @@ mod shell;
 use anyhow::{Context, Result, anyhow, bail};
 pub use builtin_env::BuiltinEnv;
 use oxdock_fs::{GuardedPath, PolicyPath};
-pub use oxdock_test_utils::EnvGuard;
+pub use oxdock_test_utils::TestEnvGuard;
 use shell::shell_cmd;
 pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
@@ -1128,7 +1128,7 @@ fn simulate_cargo(args: &[String]) -> Result<CommandOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxdock_test_utils::EnvGuard;
+    use oxdock_test_utils::TestEnvGuard;
     use std::collections::HashMap;
 
     #[test]
@@ -1136,7 +1136,7 @@ mod tests {
         let mut script_envs = HashMap::new();
         script_envs.insert("FOO".into(), "from-script".into());
         script_envs.insert("ONLY".into(), "only".into());
-        let _env_guard = EnvGuard::set("FOO", "from-env");
+        let _env_guard = TestEnvGuard::set("FOO", "from-env");
         let rendered = expand_script_env(
             "{{ env:FOO }}:{{ env:ONLY }}:{{ env:MISSING }}",
             &script_envs,
@@ -1160,7 +1160,7 @@ mod tests {
         let mut envs = HashMap::new();
         envs.insert("FOO".into(), "bar".into());
         envs.insert("PCT".into(), "percent".into());
-        let _env_guard = EnvGuard::set("HOST_ONLY", "host");
+        let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
 

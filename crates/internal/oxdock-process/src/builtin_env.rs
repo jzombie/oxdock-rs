@@ -66,15 +66,15 @@ mod tests {
     use super::*;
     use crate::serial_cargo_env::manifest_env_guard;
     use oxdock_fs::GuardedPath;
-    use oxdock_test_utils::EnvGuard;
+    use oxdock_test_utils::TestEnvGuard;
 
     #[test]
     fn collect_includes_cargo_feature_and_cfg_envs() {
         let temp = GuardedPath::tempdir().expect("tempdir");
         let root = temp.as_guarded_path().clone();
         let _guard = manifest_env_guard(&root, true);
-        let _env_guard_a = EnvGuard::set("CARGO_FEATURE_OXDOCK_TEST", "1");
-        let _env_guard_b = EnvGuard::set("CARGO_CFG_OXDOCK_TEST", "enabled");
+        let _env_guard_a = TestEnvGuard::set("CARGO_FEATURE_OXDOCK_TEST", "1");
+        let _env_guard_b = TestEnvGuard::set("CARGO_CFG_OXDOCK_TEST", "enabled");
         let env = BuiltinEnv::collect(&root).into_envs();
         assert_eq!(env.get("CARGO_FEATURE_OXDOCK_TEST"), Some(&"1".into()));
         assert_eq!(env.get("CARGO_CFG_OXDOCK_TEST"), Some(&"enabled".into()));

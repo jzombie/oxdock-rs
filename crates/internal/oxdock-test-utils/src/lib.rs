@@ -3,12 +3,12 @@
 /// Keep functionality here minimal and test-only.
 use std::env;
 
-pub struct EnvGuard {
+pub struct TestEnvGuard {
     key: &'static str,
     value: Option<String>,
 }
 
-impl EnvGuard {
+impl TestEnvGuard {
     pub fn set(key: &'static str, value: &str) -> Self {
         let prev = env::var(key).ok();
         unsafe { env::set_var(key, value) };
@@ -16,7 +16,7 @@ impl EnvGuard {
     }
 }
 
-impl Drop for EnvGuard {
+impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         match &self.value {
             Some(value) => unsafe { env::set_var(self.key, value) },
