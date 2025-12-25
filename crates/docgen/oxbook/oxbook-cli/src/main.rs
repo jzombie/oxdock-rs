@@ -807,6 +807,7 @@ fn spawn_cli_child(
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
     cmd.env("NO_COLOR", "0");
+    cmd.env("OXBOOK_STREAM_STDOUT", "1");
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("spawn oxbook-cli child")?;
