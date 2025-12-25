@@ -1,0 +1,17 @@
+INHERIT_ENV [TESTKEY]
+
+ECHO OUTER:{{ env:TESTKEY }}
+
+[env:TESTKEY] {
+  ENV TESTKEY=inner
+  ECHO INNER:{{ env:TESTKEY }}
+
+  [env:TESTKEY] {
+    ENV TESTKEY=inner2
+    ECHO INNER2:{{ env:TESTKEY }}
+  }
+
+  ECHO INNER_AFTER:{{ env:TESTKEY }}
+}
+
+ECHO OUTER_AFTER:{{ env:TESTKEY }}
