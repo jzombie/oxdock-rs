@@ -1121,7 +1121,7 @@ fn scan_and_register_runners(workspace_root: &GuardedPath) {
                 }
                 if let Ok(rel) = path.strip_prefix(root) {
                     if let Some(rel_str) = rel.to_str() {
-                        let rel_str = rel_str.replace('\\', "/");
+                        let rel_str = to_forward_slashes(rel_str);
                         register_language_oxfile(lang, &rel_str);
                     }
                 }
@@ -1530,8 +1530,9 @@ fn code_hash(script: &str, spec: &RunnerSpec) -> String {
 mod tests {
     use super::*;
     use anyhow::{Context, Result};
+    use indoc::indoc;
 
-    fn run_probe_runner(script: &str) -> Result<(Option<String>, Option<String>)> {
+    fn run_probe_runner(script: &str) -> Result<(GuardedPath, Option<String>, Option<String>)> {
         let temp = GuardedPath::tempdir().context("probe workspace tempdir")?;
         let workspace = temp.as_guarded_path().clone();
         let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
@@ -1563,6 +1564,7 @@ mod tests {
         let leak_dir_file = env.root.join("leak-dir.txt")?;
 
         Ok((
+            workspace,
             read_if_exists(&leak_path_file)?,
             read_if_exists(&leak_dir_file)?,
         ))
@@ -1580,14 +1582,16 @@ mod tests {
 
     #[test]
     fn snippet_env_hidden_without_inherit() -> Result<()> {
-        let script = r#"
-        [env:OXBOOK_SNIPPET_PATH]
-        WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
-        [env:OXBOOK_SNIPPET_DIR]
-        WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
-        "#;
+        let script = indoc! {
+            r#"
+            [env:OXBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
+            [env:OXBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            "#
+        };
 
-        let (path_value, dir_value) = run_probe_runner(script)?;
+        let (_workspace, path_value, dir_value) = run_probe_runner(script)?;
         assert!(
             path_value.is_none() && dir_value.is_none(),
             "snippet env should not be visible without INHERIT_ENV"
@@ -1597,25 +1601,44 @@ mod tests {
 
     #[test]
     fn snippet_env_available_with_inherit() -> Result<()> {
-        let script = r#"
-        INHERIT_ENV [OXBOOK_SNIPPET_PATH, OXBOOK_SNIPPET_DIR]
-        [env:OXBOOK_SNIPPET_PATH]
-        WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
-        [env:OXBOOK_SNIPPET_DIR]
-        WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
-        "#;
+        let script = indoc! {
+            r#"
+            INHERIT_ENV [OXBOOK_SNIPPET_PATH, OXBOOK_SNIPPET_DIR]
+            [env:OXBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
+            [env:OXBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            "#
+        };
 
-        let (path_value, dir_value) = run_probe_runner(script)?;
+        let (workspace, path_value, dir_value) = run_probe_runner(script)?;
         let path_value = path_value.expect("snippet path should be inherited");
-        assert!(
-            path_value.contains("oxbook-snippet"),
-            "leaked path should point at generated snippet file"
-        );
         let dir_value = dir_value.expect("snippet dir should be inherited");
-        assert!(
-            dir_value.ends_with("target/oxbook/snippets")
-                || dir_value.contains("target/oxbook/snippets"),
-            "snippet dir should reference snippets staging directory"
+
+        // Parse env-provided paths using the workspace resolver so platform
+        // specific quirks (backslashes, file://) are handled consistently.
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("create resolver for snippet env parse")?;
+        let dir_raw = dir_value.trim_start_matches("dir=");
+        let parsed_dir = resolver.parse_env_path(resolver.root(), dir_raw)?;
+        let expected_dir = resolver
+            .root()
+            .join("target")?
+            .join("oxbook")?
+            .join("snippets")?;
+        assert_eq!(
+            parsed_dir.as_path(),
+            expected_dir.as_path(),
+            "snippet dir should resolve to snippets staging directory"
+        );
+
+        let path_raw = path_value.trim_start_matches("path=");
+        let parsed_path = resolver.parse_env_path(resolver.root(), path_raw)?;
+        let expected_path = expected_dir.join("oxbook-snippet.probe")?;
+        assert_eq!(
+            parsed_path.as_path(),
+            expected_path.as_path(),
+            "snippet path should resolve to generated snippet file"
         );
         Ok(())
     }

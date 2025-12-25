@@ -98,5 +98,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
 
 #[allow(clippy::disallowed_types)]
 fn path_to_toml(path: &Path) -> String {
+    // Note: This is an expection to the rule for adhoc string replacements
+    // because this crate is currently isolated from the rest of the workspace.
     path.to_string_lossy().replace('\\', "/")
 }

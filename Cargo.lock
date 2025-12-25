@@ -431,6 +431,7 @@ name = "oxbook-cli"
 version = "0.5.0-alpha"
 dependencies = [
  "anyhow",
+ "indoc",
  "notify",
  "once_cell",
  "os_pipe",
