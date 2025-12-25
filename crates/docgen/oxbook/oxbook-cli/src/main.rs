@@ -14,11 +14,11 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 fn main() -> Result<()> {
     let mut use_tui = false;
@@ -63,6 +63,12 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     trim_logs(&mut guard, MAX_LOG_LINES);
                     child = None;
                     status = String::from("Idle");
+                }
+            }
+
+            if let UiMode::Editor(editor) = &mut mode {
+                if let Some(message) = editor.sync_with_disk()? {
+                    status = message;
                 }
             }
 
@@ -240,29 +246,13 @@ struct EditorState {
     cursor_col: usize,
     scroll_row: usize,
     dirty: bool,
+    last_disk_mtime: Option<SystemTime>,
     pending_status: Option<String>,
 }
 
 impl EditorState {
     fn load(path: PathBuf) -> Result<Self> {
-        let contents = match fs::read_to_string(&path) {
-            Ok(buf) => buf,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(err.into()),
-        };
-
-        let mut lines: Vec<String> = if contents.is_empty() {
-            vec![String::new()]
-        } else {
-            contents
-                .lines()
-                .map(|line| line.to_string())
-                .collect()
-        };
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-
+        let (lines, last_disk_mtime) = Self::read_disk_snapshot(&path)?;
         Ok(Self {
             path,
             lines,
@@ -270,8 +260,76 @@ impl EditorState {
             cursor_col: 0,
             scroll_row: 0,
             dirty: false,
+            last_disk_mtime,
             pending_status: None,
         })
+    }
+
+    fn read_disk_snapshot(path: &Path) -> Result<(Vec<String>, Option<SystemTime>)> {
+        let contents = match fs::read_to_string(path) {
+            Ok(buf) => buf,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err.into()),
+        };
+        let lines = Self::split_into_lines(contents);
+        let modified = Self::disk_mtime(path);
+        Ok((lines, modified))
+    }
+
+    fn split_into_lines(contents: String) -> Vec<String> {
+        let mut lines: Vec<String> = if contents.is_empty() {
+            vec![String::new()]
+        } else {
+            contents.lines().map(|line| line.to_string()).collect()
+        };
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
+    }
+
+    fn disk_mtime(path: &Path) -> Option<SystemTime> {
+        fs::metadata(path).ok().and_then(|meta| meta.modified().ok())
+    }
+
+    fn sync_with_disk(&mut self) -> Result<Option<String>> {
+        if self.dirty {
+            return Ok(None);
+        }
+
+        let modified = Self::disk_mtime(&self.path);
+        if modified == self.last_disk_mtime {
+            return Ok(None);
+        }
+
+        let contents = match fs::read_to_string(&self.path) {
+            Ok(buf) => buf,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err.into()),
+        };
+        let new_lines = Self::split_into_lines(contents);
+        if new_lines == self.lines {
+            self.last_disk_mtime = modified;
+            return Ok(None);
+        }
+
+        self.lines = new_lines;
+        self.clamp_cursor();
+        self.last_disk_mtime = modified;
+        Ok(Some(format!("Reloaded {}", self.short_path())))
+    }
+
+    fn clamp_cursor(&mut self) {
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        if self.cursor_row >= self.lines.len() {
+            self.cursor_row = self.lines.len().saturating_sub(1);
+        }
+        let len = self.current_line_len();
+        if self.cursor_col > len {
+            self.cursor_col = len;
+        }
     }
 
     fn short_path(&self) -> String {
@@ -314,10 +372,12 @@ impl EditorState {
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<EditorAction> {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char('s' | 'S') = key.code {
-                self.save()?;
-                self.pending_status = Some(format!("Saved {}", self.short_path()));
-                return Ok(EditorAction::Continue);
+            if let KeyCode::Char(ch) = key.code {
+                if matches!(ch, 's' | 'S') {
+                    self.save()?;
+                    self.pending_status = Some(format!("Saved {}", self.short_path()));
+                    return Ok(EditorAction::Continue);
+                }
             }
         }
 
@@ -359,6 +419,7 @@ impl EditorState {
         let contents = self.lines.join("\n");
         fs::write(&self.path, contents)?;
         self.dirty = false;
+        self.last_disk_mtime = Self::disk_mtime(&self.path);
         Ok(())
     }
 
