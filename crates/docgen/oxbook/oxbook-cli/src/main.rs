@@ -511,7 +511,15 @@ struct VisibleLines {
 struct CodeBlockMeta {
     fence_line: usize,
     end_line: usize,
-    _info: String,
+    info: String,
+}
+
+impl CodeBlockMeta {
+    fn is_generated_output(&self) -> bool {
+        self.info
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("oxbook"))
+    }
 }
 
 struct EditorRenderInfo {
@@ -989,6 +997,9 @@ impl EditorState {
     fn compute_block_hashes(lines: &[String], blocks: &[CodeBlockMeta]) -> HashMap<usize, u64> {
         let mut hashes = HashMap::new();
         for block in blocks {
+            if block.is_generated_output() {
+                continue;
+            }
             let mut hasher = DefaultHasher::new();
             let mut idx = block.fence_line;
             while idx <= block.end_line && idx < lines.len() {
@@ -1008,7 +1019,7 @@ impl EditorState {
     fn is_code_block_start(&self, line_idx: usize) -> bool {
         self.code_blocks
             .iter()
-            .any(|block| block.fence_line == line_idx)
+            .any(|block| block.fence_line == line_idx && !block.is_generated_output())
     }
 
     fn compute_code_blocks(lines: &[String]) -> Vec<CodeBlockMeta> {
@@ -1034,7 +1045,7 @@ impl EditorState {
                         blocks.push(CodeBlockMeta {
                             fence_line: open.start,
                             end_line: idx,
-                            _info: open.info.clone(),
+                            info: open.info.clone(),
                         });
                         current = None;
                         continue;
@@ -1058,7 +1069,7 @@ impl EditorState {
             blocks.push(CodeBlockMeta {
                 fence_line: open.start,
                 end_line: lines.len().saturating_sub(1),
-                _info: open.info,
+                info: open.info,
             });
         }
 
