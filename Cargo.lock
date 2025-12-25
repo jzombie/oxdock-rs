@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "oxbook-cli"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-buildtime-helpers"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-buildtime-macros"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fixture"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fs"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "libc",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-logic-tests"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-parser"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-process"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-sys-test-utils"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 
 [[package]]
 name = "pest"

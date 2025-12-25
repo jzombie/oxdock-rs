@@ -1,6 +1,6 @@
 [package]
 name = "fixture-buildtime-helpers-cfg-env-detection"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
