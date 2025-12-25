@@ -7,13 +7,14 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans, Text},
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -50,7 +51,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
     terminal.clear()?;
 
     let result = (|| -> Result<()> {
-        let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut status = String::from("Idle");
         let mut child: Option<Child> = None;
         let mut mode = UiMode::Dashboard;
@@ -59,7 +60,10 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
             if let Some(proc) = child.as_mut() {
                 if let Some(exit) = proc.try_wait()? {
                     let mut guard = logs.lock().unwrap();
-                    guard.push_back(format!("process exited: {}\n", exit));
+                    guard.push_back(LogRecord::new(
+                        LogSource::Stdout,
+                        format!("process exited: {}\n", exit),
+                    ));
                     trim_logs(&mut guard, MAX_LOG_LINES);
                     child = None;
                     status = String::from("Idle");
@@ -129,16 +133,16 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     }
                 }
 
-                let log_snapshot = {
+                let log_text = {
                     let guard = logs.lock().unwrap();
                     if guard.is_empty() {
-                        String::from("(no logs yet)")
+                        Text::from("(no logs yet)")
                     } else {
                         let inner_height = mid[1].height.saturating_sub(2) as usize;
-                        log_tail(&guard, inner_height.max(1))
+                        logs_to_text(&guard, inner_height.max(1))
                     }
                 };
-                let logs_widget = Paragraph::new(log_snapshot)
+                let logs_widget = Paragraph::new(log_text)
                     .block(Block::default().borders(Borders::ALL).title("Logs"));
                 f.render_widget(logs_widget, mid[1]);
 
@@ -171,7 +175,10 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     }
                                     Err(err) => {
                                         let mut guard = logs.lock().unwrap();
-                                        guard.push_back(format!("spawn error: {err}\n"));
+                                        guard.push_back(LogRecord::new(
+                                            LogSource::Stderr,
+                                            format!("spawn error: {err}\n"),
+                                        ));
                                         trim_logs(&mut guard, MAX_LOG_LINES);
                                         status = String::from("Spawn failed");
                                     }
@@ -184,7 +191,10 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                                 Err(err) => {
                                     let mut guard = logs.lock().unwrap();
-                                    guard.push_back(format!("editor load error: {err}\n"));
+                                    guard.push_back(LogRecord::new(
+                                        LogSource::Stderr,
+                                        format!("editor load error: {err}\n"),
+                                    ));
                                     trim_logs(&mut guard, MAX_LOG_LINES);
                                     status = String::from("Editor failed");
                                 }
@@ -527,32 +537,266 @@ impl EditorState {
     }
 }
 
-fn trim_logs(logs: &mut VecDeque<String>, max: usize) {
+fn trim_logs(logs: &mut VecDeque<LogRecord>, max: usize) {
     while logs.len() > max {
         logs.pop_front();
     }
 }
 
-fn log_tail(entries: &VecDeque<String>, max_lines: usize) -> String {
+fn logs_to_text(entries: &VecDeque<LogRecord>, max_lines: usize) -> Text<'static> {
     if max_lines == 0 {
-        return String::new();
+        return Text::from("");
     }
-    let mut buffer = Vec::new();
-    let mut remaining = max_lines;
-    for entry in entries.iter().rev() {
-        buffer.push(entry.as_str());
-        remaining = remaining.saturating_sub(1);
-        if remaining == 0 {
-            break;
+    let start = entries.len().saturating_sub(max_lines);
+    let mut lines = Vec::new();
+    for record in entries.iter().skip(start) {
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            record.source.label(),
+            record.source.style(),
+        ));
+        spans.push(Span::raw(" "));
+        let content = record.content.trim_end_matches(['\n', '\r']);
+        spans.extend(parse_ansi_spans(content));
+        lines.push(Spans::from(spans));
+    }
+    if lines.is_empty() {
+        lines.push(Spans::from(""));
+    }
+    Text::from(lines)
+}
+
+fn parse_ansi_spans(input: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut buffer = String::new();
+    let mut style = Style::default();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if let Some('[') = chars.peek() {
+                chars.next();
+                flush_span(&mut buffer, &mut spans, style);
+                let mut seq = String::new();
+                while let Some(next) = chars.next() {
+                    if next.is_ascii_alphabetic() {
+                        if next == 'm' {
+                            apply_sgr_sequence(&seq, &mut style);
+                        }
+                        break;
+                    } else {
+                        seq.push(next);
+                    }
+                }
+            }
+            continue;
+        }
+        if ch == '\r' {
+            continue;
+        }
+        buffer.push(ch);
+    }
+
+    flush_span(&mut buffer, &mut spans, style);
+    if spans.is_empty() {
+        spans.push(Span::raw(""));
+    }
+    spans
+}
+
+fn flush_span(buffer: &mut String, spans: &mut Vec<Span<'static>>, style: Style) {
+    if buffer.is_empty() {
+        return;
+    }
+    let text = std::mem::take(buffer);
+    spans.push(Span::styled(text, style));
+}
+
+fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
+    let mut numbers: Vec<i32> = sequence
+        .split(';')
+        .map(|part| if part.is_empty() { 0 } else { part.parse().unwrap_or(0) })
+        .collect();
+    if numbers.is_empty() {
+        numbers.push(0);
+    }
+
+    let mut iter = numbers.into_iter();
+    while let Some(code) = iter.next() {
+        match code {
+            0 => *style = Style::default(),
+            1 => *style = style.add_modifier(Modifier::BOLD),
+            2 => *style = style.add_modifier(Modifier::DIM),
+            3 => *style = style.add_modifier(Modifier::ITALIC),
+            4 => *style = style.add_modifier(Modifier::UNDERLINED),
+            5 => *style = style.add_modifier(Modifier::SLOW_BLINK),
+            6 => *style = style.add_modifier(Modifier::RAPID_BLINK),
+            7 => *style = style.add_modifier(Modifier::REVERSED),
+            8 => *style = style.add_modifier(Modifier::HIDDEN),
+            9 => *style = style.add_modifier(Modifier::CROSSED_OUT),
+            22 => *style = style.remove_modifier(Modifier::BOLD | Modifier::DIM),
+            23 => *style = style.remove_modifier(Modifier::ITALIC),
+            24 => *style = style.remove_modifier(Modifier::UNDERLINED),
+            25 => *style = style.remove_modifier(Modifier::SLOW_BLINK | Modifier::RAPID_BLINK),
+            27 => *style = style.remove_modifier(Modifier::REVERSED),
+            28 => *style = style.remove_modifier(Modifier::HIDDEN),
+            29 => *style = style.remove_modifier(Modifier::CROSSED_OUT),
+            30..=37 => {
+                if let Some(color) = ansi_basic_color((code - 30) as u8, false) {
+                    *style = style.fg(color);
+                }
+            }
+            90..=97 => {
+                if let Some(color) = ansi_basic_color((code - 90) as u8, true) {
+                    *style = style.fg(color);
+                }
+            }
+            39 => *style = style.fg(Color::Reset),
+            40..=47 => {
+                if let Some(color) = ansi_basic_color((code - 40) as u8, false) {
+                    *style = style.bg(color);
+                }
+            }
+            100..=107 => {
+                if let Some(color) = ansi_basic_color((code - 100) as u8, true) {
+                    *style = style.bg(color);
+                }
+            }
+            49 => *style = style.bg(Color::Reset),
+            38 | 48 => {
+                let is_fg = code == 38;
+                if let Some(mode) = iter.next() {
+                    match mode {
+                        5 => {
+                            if let Some(idx) = iter.next() {
+                                let color = Color::Indexed(idx as u8);
+                                *style = if is_fg { style.fg(color) } else { style.bg(color) };
+                            }
+                        }
+                        2 => {
+                            let r = iter.next().unwrap_or(0) as u8;
+                            let g = iter.next().unwrap_or(0) as u8;
+                            let b = iter.next().unwrap_or(0) as u8;
+                            let color = Color::Rgb(r, g, b);
+                            *style = if is_fg { style.fg(color) } else { style.bg(color) };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    buffer.reverse();
-    buffer.concat()
+}
+
+fn ansi_basic_color(code: u8, bright: bool) -> Option<Color> {
+    let color = match code {
+        0 => if bright { Color::DarkGray } else { Color::Black },
+        1 => if bright { Color::LightRed } else { Color::Red },
+        2 => if bright { Color::LightGreen } else { Color::Green },
+        3 => if bright { Color::LightYellow } else { Color::Yellow },
+        4 => if bright { Color::LightBlue } else { Color::Blue },
+        5 => if bright { Color::LightMagenta } else { Color::Magenta },
+        6 => if bright { Color::LightCyan } else { Color::Cyan },
+        7 => if bright { Color::White } else { Color::Gray },
+        _ => return None,
+    };
+    Some(color)
+}
+
+#[derive(Clone)]
+struct LogRecord {
+    source: LogSource,
+    content: String,
+}
+
+impl LogRecord {
+    fn new(source: LogSource, content: String) -> Self {
+        Self { source, content }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LogSource {
+    Stdout,
+    Stderr,
+}
+
+impl LogSource {
+    fn label(self) -> &'static str {
+        match self {
+            LogSource::Stdout => "[out]",
+            LogSource::Stderr => "[err]",
+        }
+    }
+
+    fn style(self) -> Style {
+        match self {
+            LogSource::Stdout => Style::default().fg(Color::LightGreen),
+            LogSource::Stderr => Style::default().fg(Color::LightRed),
+        }
+    }
+}
+
+fn spawn_log_reader<R: Read + Send + 'static>(
+    stream: R,
+    source: LogSource,
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+) {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut buffer = [0u8; 1024];
+        let mut pending = String::new();
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => {
+                    if !pending.is_empty() {
+                        push_log_line(&logs, source, &pending, max_logs);
+                        pending.clear();
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    pending.push_str(&String::from_utf8_lossy(&buffer[..n]));
+                    while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
+                        let line = pending[..idx].to_string();
+                        push_log_line(&logs, source, &line, max_logs);
+                        let delim = pending.as_bytes()[idx];
+                        let mut consume = idx + 1;
+                        if delim == b'\r' {
+                            if pending.as_bytes().get(consume) == Some(&b'\n') {
+                                consume += 1;
+                            }
+                        } else if delim == b'\n' {
+                            if pending.as_bytes().get(consume) == Some(&b'\r') {
+                                consume += 1;
+                            }
+                        }
+                        pending.drain(..consume);
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn push_log_line(
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    source: LogSource,
+    line: &str,
+    max_logs: usize,
+) {
+    let mut guard = logs.lock().unwrap();
+    guard.push_back(LogRecord::new(source, format!("{line}\n")));
+    trim_logs(&mut guard, max_logs);
 }
 
 fn spawn_cli_child(
     cli_args: &[String],
-    logs: Arc<Mutex<VecDeque<String>>>,
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
     max_logs: usize,
 ) -> Result<Child> {
     let exe = std::env::current_exe().context("locate current executable")?;
@@ -560,36 +804,19 @@ fn spawn_cli_child(
     if !cli_args.is_empty() {
         cmd.args(cli_args);
     }
+    cmd.env("CLICOLOR_FORCE", "1");
+    cmd.env("FORCE_COLOR", "1");
+    cmd.env("NO_COLOR", "0");
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("spawn oxbook-cli child")?;
 
     if let Some(stdout) = child.stdout.take() {
-        let stdout_logs = logs.clone();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                let mut guard = stdout_logs.lock().unwrap();
-                guard.push_back(line.clone());
-                trim_logs(&mut guard, max_logs);
-                line.clear();
-            }
-        });
+        spawn_log_reader(stdout, LogSource::Stdout, logs.clone(), max_logs);
     }
 
     if let Some(stderr) = child.stderr.take() {
-        let stderr_logs = logs.clone();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stderr);
-            let mut line = String::new();
-            while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                let mut guard = stderr_logs.lock().unwrap();
-                guard.push_back(line.clone());
-                trim_logs(&mut guard, max_logs);
-                line.clear();
-            }
-        });
+        spawn_log_reader(stderr, LogSource::Stderr, logs.clone(), max_logs);
     }
 
     Ok(child)
