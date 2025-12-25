@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+
+# TODO: Change to true once finalized
+publish = false
+
 default-run = "oxbook-cli"
 
 [dependencies]
