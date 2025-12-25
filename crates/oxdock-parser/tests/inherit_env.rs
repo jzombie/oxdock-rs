@@ -8,7 +8,9 @@ fn inherit_env_step_parses_leading_directive() {
         panic!("expected INHERIT_ENV step");
     };
     assert_eq!(keys, &vec!["FOO".to_string(), "BAR".to_string()]);
-    assert!(matches!(steps.get(1).map(|step| &step.kind), Some(StepKind::Env { key, .. }) if key == "BAZ"));
+    assert!(
+        matches!(steps.get(1).map(|step| &step.kind), Some(StepKind::Env { key, .. }) if key == "BAZ")
+    );
 }
 
 #[test]
@@ -43,7 +45,10 @@ fn inherit_env_cannot_appear_inside_with_io() {
 fn inherit_env_cannot_be_inside_guard_block_braces() {
     let script = "[env:FOO] { INHERIT_ENV [BAR] }";
     let err = parse_script(script).expect_err("INHERIT_ENV inside guard block must fail");
-    assert!(err.to_string().contains("cannot be guarded") || err.to_string().contains("cannot be nested"));
+    assert!(
+        err.to_string().contains("cannot be guarded")
+            || err.to_string().contains("cannot be nested")
+    );
 }
 
 #[test]
@@ -57,5 +62,8 @@ fn inherit_env_cannot_be_inside_with_io_block_braces() {
 fn inherit_env_cannot_be_deeply_nested_under_guards_and_io() {
     let script = "[env:FOO] { WITH_IO [stdout=pipe:cap] { INHERIT_ENV [BAR] } }";
     let err = parse_script(script).expect_err("deeply nested INHERIT_ENV must fail");
-    assert!(err.to_string().contains("cannot be guarded") || err.to_string().contains("cannot be nested"));
+    assert!(
+        err.to_string().contains("cannot be guarded")
+            || err.to_string().contains("cannot be nested")
+    );
 }
