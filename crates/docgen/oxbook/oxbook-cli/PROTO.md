@@ -15,8 +15,6 @@ fn main() {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input).unwrap();
     println!("rust saw: {}, {ws:?}", input.trim());
-
-    eprintln!("test stderr");
 }
 ```
 

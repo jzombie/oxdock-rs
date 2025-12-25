@@ -69,11 +69,11 @@ fn parse_mkdir_ls_write() {
 
 #[test]
 fn parse_cat() {
-    let script = "CAT path/to/file.txt";
+    let script = "READ path/to/file.txt";
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 1);
     if let Step {
-        kind: StepKind::Cat(Some(ref p)),
+        kind: StepKind::Read(Some(ref p)),
         ..
     } = steps[0]
     {
@@ -143,14 +143,14 @@ fn parse_semicolon_splits_multiple_instructions() {
     match &steps[0].kind {
         StepKind::Write { path, contents } => {
             assert_eq!(path, "one.txt");
-            assert_eq!(contents, "1");
+            assert_eq!(contents.as_deref(), Some("1"));
         }
         _ => panic!("expected first WRITE"),
     }
     match &steps[1].kind {
         StepKind::Write { path, contents } => {
             assert_eq!(path, "two.txt");
-            assert_eq!(contents, "2");
+            assert_eq!(contents.as_deref(), Some("2"));
         }
         _ => panic!("expected second WRITE"),
     }

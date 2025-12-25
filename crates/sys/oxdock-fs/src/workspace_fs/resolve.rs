@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 
-use super::{AccessMode, PathResolver};
+use super::{AccessMode, PathResolver, to_forward_slashes};
 use crate::GuardedPath;
 
 // Path resolution helpers (WORKDIR, READ/WRITE, COPY sources).
@@ -140,6 +140,32 @@ impl PathResolver {
 
         let candidate = cwd.as_path().join(rel);
         self.check_access(&candidate, mode)
+    }
+
+    /// Parse a string that may originate from an environment variable or
+    /// external input and resolve it to a guarded path. This normalizes common
+    /// forms such as `file://` prefixes, surrounding quotes, and backslashes
+    /// before delegating to the resolver's `resolve_read` logic.
+    pub fn parse_env_path(&self, cwd: &GuardedPath, input: &str) -> Result<GuardedPath> {
+        let mut s = input.trim();
+        // Strip surrounding quotes if present
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+            s = &s[1..s.len() - 1];
+        }
+
+        // Strip common file:// URI prefix
+        if let Some(stripped) = s.strip_prefix("file:///") {
+            s = stripped;
+        } else if let Some(stripped) = s.strip_prefix("file://") {
+            s = stripped;
+        }
+
+        // Normalize backslashes to forward slashes using the shared helper.
+        let normalized = to_forward_slashes(s);
+
+        // Delegate to resolve_read which handles absolute vs relative and
+        // workspace/build-context fallbacks.
+        self.resolve_read(cwd, &normalized)
     }
 }
 

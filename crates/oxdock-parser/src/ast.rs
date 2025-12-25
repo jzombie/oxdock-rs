@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
+    InheritEnv,
     Workdir,
     Workspace,
     Env,
@@ -9,7 +10,6 @@ pub enum Command {
     Run,
     RunBg,
     Copy,
-    CaptureToFile,
     WithIo,
     CopyGit,
     HashSha256,
@@ -17,12 +17,13 @@ pub enum Command {
     Mkdir,
     Ls,
     Cwd,
-    Cat,
+    Read,
     Write,
     Exit,
 }
 
 pub const COMMANDS: &[Command] = &[
+    Command::InheritEnv,
     Command::Workdir,
     Command::Workspace,
     Command::Env,
@@ -30,7 +31,6 @@ pub const COMMANDS: &[Command] = &[
     Command::Run,
     Command::RunBg,
     Command::Copy,
-    Command::CaptureToFile,
     Command::WithIo,
     Command::CopyGit,
     Command::HashSha256,
@@ -38,7 +38,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Mkdir,
     Command::Ls,
     Command::Cwd,
-    Command::Cat,
+    Command::Read,
     Command::Write,
     Command::Exit,
 ];
@@ -46,6 +46,7 @@ pub const COMMANDS: &[Command] = &[
 impl Command {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Command::InheritEnv => "INHERIT_ENV",
             Command::Workdir => "WORKDIR",
             Command::Workspace => "WORKSPACE",
             Command::Env => "ENV",
@@ -53,7 +54,6 @@ impl Command {
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
-            Command::CaptureToFile => "CAPTURE_TO_FILE",
             Command::WithIo => "WITH_IO",
             Command::CopyGit => "COPY_GIT",
             Command::HashSha256 => "HASH_SHA256",
@@ -61,18 +61,19 @@ impl Command {
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
             Command::Cwd => "CWD",
-            Command::Cat => "CAT",
+            Command::Read => "READ",
             Command::Write => "WRITE",
             Command::Exit => "EXIT",
         }
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::CaptureToFile | Command::WithIo)
+        matches!(self, Command::WithIo)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "INHERIT_ENV" => Some(Command::InheritEnv),
             "WORKDIR" => Some(Command::Workdir),
             "WORKSPACE" => Some(Command::Workspace),
             "ENV" => Some(Command::Env),
@@ -80,7 +81,6 @@ impl Command {
             "RUN" => Some(Command::Run),
             "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
-            "CAPTURE_TO_FILE" => Some(Command::CaptureToFile),
             "WITH_IO" => Some(Command::WithIo),
             "COPY_GIT" => Some(Command::CopyGit),
             "HASH_SHA256" => Some(Command::HashSha256),
@@ -88,7 +88,7 @@ impl Command {
             "MKDIR" => Some(Command::Mkdir),
             "LS" => Some(Command::Ls),
             "CWD" => Some(Command::Cwd),
-            "CAT" => Some(Command::Cat),
+            "READ" => Some(Command::Read),
             "WRITE" => Some(Command::Write),
             "EXIT" => Some(Command::Exit),
             _ => None,
@@ -189,6 +189,11 @@ pub enum StepKind {
         key: String,
         value: TemplateString,
     },
+    /// Directive to inherit a selective list of environment variables from the host.
+    /// This is intended to be declared in the prelude/top-level only.
+    InheritEnv {
+        keys: Vec<String>,
+    },
     Run(TemplateString),
     Echo(TemplateString),
     RunBg(TemplateString),
@@ -204,14 +209,10 @@ pub enum StepKind {
     Mkdir(TemplateString),
     Ls(Option<TemplateString>),
     Cwd,
-    Cat(Option<TemplateString>),
+    Read(Option<TemplateString>),
     Write {
         path: TemplateString,
-        contents: TemplateString,
-    },
-    CaptureToFile {
-        path: TemplateString,
-        cmd: Box<StepKind>,
+        contents: Option<TemplateString>,
     },
     WithIo {
         bindings: Vec<IoBinding>,
@@ -312,9 +313,9 @@ impl fmt::Display for Guard {
         match self {
             Guard::Platform { target, invert } => {
                 if *invert {
-                    write!(f, "!platform:{}", target)
+                    write!(f, "!{}", target)
                 } else {
-                    write!(f, "platform:{}", target)
+                    write!(f, "{}", target)
                 }
             }
             Guard::EnvExists { key, invert } => {
@@ -344,8 +345,8 @@ impl fmt::Display for WorkspaceTarget {
 }
 
 fn quote_arg(s: &str) -> String {
-    // Strict quoting to avoid parser ambiguity, especially with CAPTURE_TO_FILE command
-    // where unquoted args followed by run_args can be consumed greedily.
+    // Strict quoting avoids parser ambiguity when commands accept additional payloads
+    // (e.g. WRITE path <payload>) so arguments are never mistaken for subsequent tokens.
     // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.starts_with(|c: char| c.is_ascii_digit());
@@ -419,6 +420,9 @@ fn format_io_binding(binding: &IoBinding) -> String {
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StepKind::InheritEnv { keys } => {
+                write!(f, "INHERIT_ENV [{}]", keys.join(", "))
+            }
             StepKind::Workdir(arg) => write!(f, "WORKDIR {}", quote_arg(arg)),
             StepKind::Workspace(target) => write!(f, "WORKSPACE {}", target),
             StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value)),
@@ -453,18 +457,19 @@ impl fmt::Display for StepKind {
                 Ok(())
             }
             StepKind::Cwd => write!(f, "CWD"),
-            StepKind::Cat(arg) => {
-                write!(f, "CAT")?;
+            StepKind::Read(arg) => {
+                write!(f, "READ")?;
                 if let Some(a) = arg {
                     write!(f, " {}", quote_arg(a))?;
                 }
                 Ok(())
             }
             StepKind::Write { path, contents } => {
-                write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
-            }
-            StepKind::CaptureToFile { path, cmd } => {
-                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
+                write!(f, "WRITE {}", quote_arg(path))?;
+                if let Some(body) = contents {
+                    write!(f, " {}", quote_msg(body))?;
+                }
+                Ok(())
             }
             StepKind::WithIo { bindings, cmd } => {
                 let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();

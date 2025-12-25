@@ -1,2 +1,2 @@
 WRITE note.txt hello
-CAT note.txt
+READ note.txt

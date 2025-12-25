@@ -14,6 +14,39 @@ fn parse_one(cmd: &str) -> Box<StepKind> {
     Box::new(steps[0].kind.clone())
 }
 
+fn capture_pipeline(pipe: &str, path: &str, cmd: StepKind) -> [Step; 2] {
+    let pipe_name = pipe.to_string();
+    [
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdout,
+                    pipe: Some(pipe_name.clone()),
+                }],
+                cmd: Box::new(cmd),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: Some(pipe_name),
+                }],
+                cmd: Box::new(StepKind::Write {
+                    path: path.into(),
+                    contents: None,
+                }),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ]
+}
+
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
 }
@@ -42,7 +75,7 @@ fn create_dirs(path: &GuardedPath) {
     resolver.create_dir_all(path).unwrap();
 }
 
-use oxdock_sys_test_utils::can_create_symlinks;
+use oxdock_sys_test_utils::{TestEnvGuard, can_create_symlinks};
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.join(rel).map(|p| p.exists()).unwrap_or(false)
@@ -140,7 +173,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "client/dist/hello.txt".into(),
-                contents: "hi".into(),
+                contents: Some("hi".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -207,7 +240,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "nested.txt".into(),
-                contents: "nested".into(),
+                contents: Some("nested".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -228,7 +261,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "local_note.txt".into(),
-                contents: "local".into(),
+                contents: Some("local".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -249,7 +282,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "snap_note.txt".into(),
-                contents: "snap".into(),
+                contents: Some("snap".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -321,6 +354,71 @@ fn commands_behave_cross_platform() {
 }
 
 #[test]
+fn inherit_env_reads_exec_io_override() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
+    );
+}
+
+#[test]
+fn inherit_env_override_precedes_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
+    );
+}
+
+#[test]
+fn inherit_env_removal_blocks_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.remove_inherit_env("SPECIAL_TOKEN");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(read_trimmed(&root.join("seen.txt").unwrap()), "");
+}
+
+#[test]
 fn exit_stops_pipeline_and_reports_code() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
@@ -329,7 +427,7 @@ fn exit_stops_pipeline_and_reports_code() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "before.txt".into(),
-                contents: "ok".into(),
+                contents: Some("ok".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -344,7 +442,7 @@ fn exit_stops_pipeline_and_reports_code() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "after.txt".into(),
-                contents: "nope".into(),
+                contents: Some("nope".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -382,15 +480,8 @@ fn write_cmd_captures_output() {
     } else {
         "RUN printf %s \"hello\""
     };
-    let steps = vec![Step {
-        guards: Vec::new(),
-        kind: StepKind::CaptureToFile {
-            path: "out.txt".into(),
-            cmd: parse_one(cmd),
-        },
-        scope_enter: 0,
-        scope_exit: 0,
-    }];
+    let capture = capture_pipeline("cap-write", "out.txt", *parse_one(cmd));
+    let steps = capture.into_iter().collect::<Vec<_>>();
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
 }
@@ -399,26 +490,21 @@ fn write_cmd_captures_output() {
 fn capture_echo_interpolates_env() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Env {
-                key: "FOO".into(),
-                value: "hi".into(),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Env {
+            key: "FOO".into(),
+            value: "hi".into(),
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "echo.txt".into(),
-                cmd: parse_one("ECHO value={{ env:FOO }}"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-    ];
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline(
+        "cap-echo",
+        "echo.txt",
+        *parse_one("ECHO value={{ env:FOO }}"),
+    ));
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
@@ -433,23 +519,14 @@ fn capture_ls_lists_entries_with_header() {
     write_text(&dir.join("a.txt").unwrap(), "a");
     write_text(&dir.join("b.txt").unwrap(), "b");
 
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Workdir("items".into()),
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "ls.txt".into(),
-                cmd: parse_one("LS"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-    ];
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("items".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-ls", "ls.txt", *parse_one("LS")));
 
     run_steps(&root, &steps).unwrap();
 
@@ -473,15 +550,7 @@ fn capture_cat_emits_file_contents() {
     let root = guard_root(&temp);
     write_text(&root.join("note.txt").unwrap(), "hello note");
 
-    let steps = vec![Step {
-        guards: Vec::new(),
-        kind: StepKind::CaptureToFile {
-            path: "out.txt".into(),
-            cmd: parse_one("CAT note.txt"),
-        },
-        scope_enter: 0,
-        scope_exit: 0,
-    }];
+    let steps = capture_pipeline("cap-cat", "out.txt", *parse_one("READ note.txt"));
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
@@ -491,23 +560,14 @@ fn capture_cat_emits_file_contents() {
 fn capture_cwd_canonicalizes_and_writes() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Workdir("a/b".into()),
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "pwd.txt".into(),
-                cmd: parse_one("CWD"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-    ];
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("a/b".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-cwd", "pwd.txt", *parse_one("CWD")));
 
     run_steps(&root, &steps).unwrap();
 
@@ -723,9 +783,13 @@ fn env_exposes_git_commit_hash() {
         .expect("git rev-parse failed");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
-    let steps =
-        oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO {{ env:WORKSPACE_GIT_COMMIT }}")
-            .unwrap();
+    let steps = oxdock_parser::parse_script(indoc!(
+        r#"
+        WITH_IO [stdout=pipe:commit_capture] ECHO {{ env:WORKSPACE_GIT_COMMIT }}
+        WITH_IO [stdin=pipe:commit_capture] WRITE out.txt
+        "#
+    ))
+    .unwrap();
     run_steps(&repo, &steps).unwrap();
 
     assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
@@ -759,7 +823,7 @@ fn write_cannot_escape_root() {
         guards: Vec::new(),
         kind: StepKind::Write {
             path: "../escape.txt".into(),
-            contents: "nope".into(),
+            contents: Some("nope".into()),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -796,15 +860,15 @@ fn read_cannot_escape_root() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("../secret.txt".into())),
+        kind: StepKind::Read(Some("../secret.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
     assert!(
-        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
-        "expected CAT escape error, got {}",
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ escape error, got {}",
         err
     );
 
@@ -850,15 +914,15 @@ fn read_symlink_escape_is_blocked() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("leak.txt".into())),
+        kind: StepKind::Read(Some("leak.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
     assert!(
-        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
-        "expected CAT symlink escape error, got {}",
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ symlink escape error, got {}",
         err
     );
 
@@ -906,16 +970,14 @@ fn workdir_accepts_symlink_into_workspace_root() {
             scope_enter: 0,
             scope_exit: 0,
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "seen.txt".into(),
-                cmd: parse_one("CAT version.txt"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
     ];
+
+    let mut steps = steps;
+    steps.extend(capture_pipeline(
+        "cap-workspace-version",
+        "seen.txt",
+        *parse_one("READ version.txt"),
+    ));
 
     if can_create_symlinks(workspace_root.as_path()) {
         run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap();
@@ -957,7 +1019,7 @@ fn write_missing_path_cannot_escape_root() {
         kind: StepKind::Write {
             // Ancestor exists inside root, but remaining components attempt to climb out.
             path: "a/b/../../../../outside.txt".into(),
-            contents: "nope".into(),
+            contents: Some("nope".into()),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -994,7 +1056,7 @@ fn cat_reads_file_contents_without_error() {
     write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("file.txt".into())),
+        kind: StepKind::Read(Some("file.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -1041,7 +1103,7 @@ fn cat_reads_stdin_with_io() {
                 stream: IoStream::Stdin,
                 pipe: None,
             }],
-            cmd: Box::new(StepKind::Cat(None)),
+            cmd: Box::new(StepKind::Read(None)),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -1078,4 +1140,26 @@ fn with_io_block_applies_defaults() {
 
     let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     assert_eq!(contents, "alpha\nbeta\n");
+}
+
+#[test]
+fn with_io_routes_stdout_into_later_stdin() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let script = indoc! {r#"
+        WITH_IO [stdout=pipe:relay] ECHO streamed
+        WITH_IO [stdin=pipe:relay] READ
+    "#};
+    let steps = oxdock_parser::parse_script(script).expect("parse WITH_IO pipe script");
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(captured.clone()));
+
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("run WITH_IO pipe script");
+
+    let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert_eq!(contents, "streamed\n");
 }

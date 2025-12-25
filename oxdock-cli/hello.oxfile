@@ -12,15 +12,15 @@
 ECHO "This runs unconditionally"
 
 # --- Platform-specific guarded RUNs (inline guards) ---
-[platform:mac] ECHO "Hello from Mac"
-[platform:linux] ECHO "Hello from Linux"
-[platform:windows] ECHO "Hello from Windows"
+[mac] ECHO "Hello from Mac"
+[linux] ECHO "Hello from Linux"
+[windows] ECHO "Hello from Windows"
 
 # Negation: run when NOT on Windows
 [!windows] ECHO "Not on Windows"
 
 # OR: run on mac OR linux
-[platform:mac|platform:linux] ECHO "mac or linux"
+[mac|linux] ECHO "mac or linux"
 
 # --- ENV and env-guards ---
 # Set an environment variable for subsequent RUN commands
@@ -34,7 +34,7 @@ ENV FOO=1
 ECHO "(previous-line) Foo is set"
 
 # Example mixing AND/OR: (FOO and linux) OR mac
-[env:FOO,platform:linux|platform:mac] ECHO "Foo on linux, or any mac"
+[env:FOO,linux|mac] ECHO "Foo on linux, or any mac"
 
 # Show that ECHO can print the ENV we set earlier (cross-platform)
 ECHO {{ env:FOO }}
@@ -48,12 +48,12 @@ ECHO {{ env:FOO }}
 # Use `ECHO` for cross-platform DSL output. Use `RUN` when you need to execute
 # native shell/OS commands; these are often platform-specific so guard them.
 # Example: list the current directory using the native command on each platform.
-[platform:unix] RUN ls -la
-[platform:windows] RUN dir
+[unix] RUN ls -la
+[windows] RUN dir
 
 # Example: show the `FOO` env using native commands (guarded per-platform).
-[platform:unix] RUN env | grep FOO
-[platform:windows] RUN cmd /C "echo %FOO%"
+[unix] RUN env | grep FOO
+[windows] RUN cmd /C "echo %FOO%"
 
 # Note: The LS command is also a built-in command
 # LS

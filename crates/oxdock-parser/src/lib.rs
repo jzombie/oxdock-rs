@@ -341,14 +341,14 @@ mod tests {
         cases.push((
             indoc! {r#"
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             "#}
             .trim()
             .to_string(),
             quote! {
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             },
         ));
@@ -372,16 +372,16 @@ mod tests {
 
         cases.push((
             indoc! {r#"
-                [env:TEST==1] CAPTURE_TO_FILE out.txt RUN echo hi
-                [env:FOO] WRITE foo.txt "bar"
-                SYMLINK link target
+                [env:TEST==1]
+                WITH_IO [stdout=pipe:capture_case] RUN echo hi
+                WITH_IO [stdin=pipe:capture_case] WRITE out.txt
             "#}
             .trim()
             .to_string(),
             quote! {
-                [env:TEST==1] CAPTURE_TO_FILE out.txt RUN echo hi
-                [env:FOO] WRITE foo.txt "bar"
-                SYMLINK link target
+                [env:TEST==1]
+                WITH_IO [stdout=pipe:capture_case] RUN echo hi
+                WITH_IO [stdin=pipe:capture_case] WRITE out.txt
             },
         ));
 

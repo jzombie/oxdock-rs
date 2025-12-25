@@ -35,7 +35,7 @@ const OXDOCK_TEMP_LOCK: &str = ".oxdock-tempdir.lock";
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
 /// guard explicitly.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub struct GuardedPath {
     root: PathBuf,
@@ -182,6 +182,16 @@ impl GuardedPath {
 impl std::fmt::Display for GuardedPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         command_path(self).display().fmt(f)
+    }
+}
+
+impl std::fmt::Debug for GuardedPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let root = GuardedPath::from_guarded_parts(self.root.clone(), self.root.clone());
+        f.debug_struct("GuardedPath")
+            .field("root", &normalized_path(&root))
+            .field("path", &normalized_path(self))
+            .finish()
     }
 }
 

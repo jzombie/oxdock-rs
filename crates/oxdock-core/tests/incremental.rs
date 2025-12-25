@@ -25,7 +25,7 @@ fn incremental_execution_persists_filesystem_state() {
         guards: Vec::new(),
         kind: StepKind::Write {
             path: "state.txt".into(),
-            contents: "initial".into(),
+            contents: Some("initial".into()),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -69,7 +69,7 @@ fn incremental_execution_persists_cwd() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "subdir/marker.txt".into(),
-                contents: "here".into(),
+                contents: Some("here".into()),
             },
             scope_enter: 0,
             scope_exit: 0,

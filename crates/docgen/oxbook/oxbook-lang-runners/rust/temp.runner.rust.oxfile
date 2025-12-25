@@ -2,11 +2,15 @@
 # Rust Runner Setup
 # ==========================================
 
-[!env:OXBOOK_SNIPPET_PATH] {
-    WORKDIR /
+INHERIT_ENV [
+    OXBOOK_RUNNER_DIR,
+    OXBOOK_SNIPPET_PATH,
+    OXBOOK_SNIPPET_DIR
+]
 
+[!env:OXBOOK_SNIPPET_PATH] {
     # 1. Prepare the workspace
-    WORKDIR ws
+    WORKDIR /oxbook-runner
 
     ECHO Proceeding to snapshot workspace with potentially uncommitted artifacts, which can take a while.
     COPY_GIT --include-dirty HEAD . .
@@ -22,7 +26,7 @@
     COPY "{{ env:OXBOOK_RUNNER_DIR }}/oxbook-snippet-tool" oxbook-snippet-tool
     WITH_IO [stdout=pipe:setup, stderr=pipe:setup] {
         ENV CARGO_TARGET_DIR="target"
-        RUN cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "ws" --out "ws/snippet/Cargo.toml"
+        RUN cargo run --manifest-path "oxbook-snippet-tool/Cargo.toml" -- --workspace "oxbook-runner" --out "oxbook-runner/snippet/Cargo.toml"
     }
 }
 
@@ -31,16 +35,22 @@
 # ==========================================
 
 [env:OXBOOK_SNIPPET_PATH] {
+    WORKDIR /
+
+    ENV CARGO_TARGET_DIR="oxbook-runner/target"
+
     # 3. Build the Snippet
     #    Stream build output to terminal via setup pipe
     WITH_IO [stdout=pipe:setup, stderr=pipe:setup] {
-        COPY --from-current-workspace "{{ env:OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
-        RUN CARGO_TARGET_DIR="ws/target" cargo build --manifest-path "ws/snippet/Cargo.toml"
+        COPY --from-current-workspace "{{ env:OXBOOK_SNIPPET_PATH }}" "oxbook-runner/snippet/src/main.rs"
+        RUN cargo build --manifest-path "oxbook-runner/snippet/Cargo.toml"
     }
 
     # 4. Run the Snippet
     #    Capture stdout/stderr for markdown via snippet pipe
     WITH_IO [stdin, stdout=pipe:snippet, stderr=pipe:snippet] {
-        RUN CARGO_TARGET_DIR="ws/target" ws/target/debug/oxbook-snippet
+        WORKDIR /oxbook-runner/target/debug
+        [unix] RUN ./oxbook-snippet
+        [windows] RUN oxbook-snippet.exe
     }
 }

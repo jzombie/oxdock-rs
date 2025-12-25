@@ -13,8 +13,10 @@ embed! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+        WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+        WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
@@ -31,8 +33,10 @@ prepare! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+        WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+        WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
@@ -47,8 +51,10 @@ const SCRIPT: &str = r#"
     MKDIR data/inner
     WRITE data/inner/a.txt alpha
     WRITE data/b.txt beta
-    CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-    CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+    WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+    WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+    WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+    WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
     // Double-check the hash matches on unix system
     // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
