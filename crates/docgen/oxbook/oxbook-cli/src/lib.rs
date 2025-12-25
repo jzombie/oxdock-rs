@@ -454,7 +454,7 @@ fn render_shell_outputs(
     only_missing_outputs: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
-    use comrak::{nodes::NodeValue, Arena, parse_document};
+    use comrak::{Arena, nodes::NodeValue, parse_document};
 
     let arena = Arena::new();
     let mut options = comrak::Options::default();
@@ -514,7 +514,11 @@ fn render_shell_outputs(
 
         // Determine existing output block after the fence
         let next_index = fence_end + 1;
-        let existing = if next_index <= lines.len() { parse_output_block(&lines, next_index) } else { None };
+        let existing = if next_index <= lines.len() {
+            parse_output_block(&lines, next_index)
+        } else {
+            None
+        };
 
         if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
             let code_hash = code_hash(&script, &spec);
@@ -528,15 +532,20 @@ fn render_shell_outputs(
                     } else {
                         let stdout_norm = normalize_output(&block.stdout);
                         let stderr_norm = normalize_output(&block.stderr);
-                        let expected_combined_hash = combined_output_hash(&stdout_norm, &stderr_norm);
+                        let expected_combined_hash =
+                            combined_output_hash(&stdout_norm, &stderr_norm);
                         let expected_combined_short = short_hash(&expected_combined_hash);
-                        let matches_output = if let Some(meta_hash) = block.combined_hash.as_deref() {
-                            meta_hash == expected_combined_hash || meta_hash == expected_combined_short
+                        let matches_output = if let Some(meta_hash) = block.combined_hash.as_deref()
+                        {
+                            meta_hash == expected_combined_hash
+                                || meta_hash == expected_combined_short
                         } else {
                             let expected_stdout_hash = sha256_hex(&stdout_norm);
                             let expected_stderr_hash = sha256_hex(&stderr_norm);
-                            let matches_stdout = block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
-                            let matches_stderr = block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
+                            let matches_stdout =
+                                block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
+                            let matches_stderr =
+                                block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
                             matches_stdout && matches_stderr
                         };
                         !(matches_code && matches_output)
@@ -549,9 +558,11 @@ fn render_shell_outputs(
                 // Prepare stdin from previous fence
                 let stdin_stream = prev_reader.take();
 
-                let (reader, writer) = pipe().with_context(|| "create pipe for piping stdout to next fence")?;
+                let (reader, writer) =
+                    pipe().with_context(|| "create pipe for piping stdout to next fence")?;
                 let reader_shared: SharedInput = Arc::new(Mutex::new(reader));
-                let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> = Arc::new(Mutex::new(writer));
+                let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> =
+                    Arc::new(Mutex::new(writer));
 
                 let capture_stdout: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
                 let capture_stderr: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -599,9 +610,14 @@ fn render_shell_outputs(
                     }
                 }
 
-                let tee = TeeWriter { cap: capture_stdout.clone(), pipe: writer_shared.clone() };
+                let tee = TeeWriter {
+                    cap: capture_stdout.clone(),
+                    pipe: writer_shared.clone(),
+                };
                 let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
-                let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter { cap: capture_stderr.clone() }));
+                let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter {
+                    cap: capture_stderr.clone(),
+                }));
 
                 let run_res = run_runner(
                     resolver,
@@ -620,7 +636,8 @@ fn render_shell_outputs(
                 match run_res {
                     Ok(run_output) => {
                         prev_reader = Some(reader_shared);
-                        let output_block = format_output_block(&code_hash, &run_output.stdout, &run_output.stderr);
+                        let output_block =
+                            format_output_block(&code_hash, &run_output.stdout, &run_output.stderr);
                         out_lines.extend(output_block);
                         // advance cursor past any existing output if present
                         cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
@@ -651,13 +668,18 @@ fn render_shell_outputs(
                         } else {
                             stderr_output = err_msg.clone();
                         }
-                        let output_block = format_output_block(&code_hash, &stdout_output, &stderr_output);
+                        let output_block =
+                            format_output_block(&code_hash, &stdout_output, &stderr_output);
                         out_lines.extend(output_block);
                         cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
                     }
                 }
             } else if let Some(block) = existing {
-                out_lines.extend(lines[block.start_index..block.end_index].iter().map(|l| (*l).to_string()));
+                out_lines.extend(
+                    lines[block.start_index..block.end_index]
+                        .iter()
+                        .map(|l| (*l).to_string()),
+                );
                 let prev_buf = block.stdout.clone();
                 let cursor_reader = Cursor::new(prev_buf.into_bytes());
                 prev_reader = Some(Arc::new(Mutex::new(cursor_reader)));
