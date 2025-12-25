@@ -59,7 +59,7 @@ pub fn tokenize(input: &str) -> Result<Vec<RawToken<'_>>> {
             | Rule::mkdir_command
             | Rule::ls_command
             | Rule::cwd_command
-            | Rule::cat_command
+            | Rule::read_command
             | Rule::write_command
             | Rule::exit_command => tokens.push(RawToken::Command { pair, line_no }),
             other => bail!("unexpected parser rule {:?}", other),

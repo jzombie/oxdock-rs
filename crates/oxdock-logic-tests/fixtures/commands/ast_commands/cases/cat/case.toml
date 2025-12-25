@@ -1,4 +1,4 @@
-name = "cat"
+name = "read"
 
 [expect]
 files = { "out.txt" = "hello" }

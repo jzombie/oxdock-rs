@@ -905,14 +905,14 @@ fn execute_steps<P: ProcessManager>(
                     })?;
                     Ok(())
                 }
-                StepKind::Cat(path_opt) => {
+                StepKind::Read(path_opt) => {
                     let data = if let Some(path) = path_opt {
                         let ctx = state.command_ctx();
                         let rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
                             .resolve_read(&state.cwd, &rendered)
-                            .with_context(|| format!("step {}: CAT {}", idx + 1, rendered))?;
+                            .with_context(|| format!("step {}: READ {}", idx + 1, rendered))?;
                         state
                             .fs
                             .read_file(&target)
@@ -1632,7 +1632,7 @@ mod tests {
             },
             Step {
                 guards: Vec::new(),
-                kind: StepKind::Cat(Some("out.txt".into())),
+                kind: StepKind::Read(Some("out.txt".into())),
                 scope_enter: 0,
                 scope_exit: 0,
             },
@@ -1727,7 +1727,7 @@ mod tests {
                         stream: IoStream::Stdout,
                         pipe: Some("cap-cat".to_string()),
                     }],
-                    cmd: Box::new(StepKind::Cat(Some("{{ env:SNIPPET }}".into()))),
+                    cmd: Box::new(StepKind::Read(Some("{{ env:SNIPPET }}".into()))),
                 },
                 scope_enter: 0,
                 scope_exit: 0,

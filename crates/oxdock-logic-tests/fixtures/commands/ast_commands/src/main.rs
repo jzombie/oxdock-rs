@@ -1054,7 +1054,7 @@ fn step_kind_name(kind: &StepKind) -> &'static str {
         StepKind::Mkdir(_) => "Mkdir",
         StepKind::Ls(_) => "Ls",
         StepKind::Cwd => "Cwd",
-        StepKind::Cat(_) => "Cat",
+        StepKind::Read(_) => "Read",
         StepKind::Write { .. } => "Write",
         StepKind::CopyGit { .. } => "CopyGit",
         StepKind::HashSha256 { .. } => "HashSha256",

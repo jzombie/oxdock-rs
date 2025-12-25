@@ -536,9 +536,9 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             StepKind::Ls(args.into_iter().next().map(Into::into))
         }
         Rule::cwd_command => StepKind::Cwd,
-        Rule::cat_command => {
+        Rule::read_command => {
             let args = parse_args(pair)?;
-            StepKind::Cat(args.into_iter().next().map(Into::into))
+            StepKind::Read(args.into_iter().next().map(Into::into))
         }
         Rule::write_command => {
             let mut path = None;

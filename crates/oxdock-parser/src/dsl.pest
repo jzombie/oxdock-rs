@@ -74,7 +74,7 @@ command = _{
     mkdir_command |
     ls_command |
     cwd_command |
-    cat_command |
+    read_command |
     write_command |
     exit_command
 }
@@ -95,7 +95,7 @@ symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }
 mkdir_command = ${ "MKDIR" ~ sep ~ argument }
 ls_command = ${ "LS" ~ (sep ~ argument)? }
 cwd_command = ${ "CWD" }
-cat_command = ${ "CAT" ~ (sep ~ argument)? }
+read_command = ${ "READ" ~ (sep ~ argument)? }
 write_command = ${ "WRITE" ~ sep ~ argument ~ (sep ~ message)? }
 exit_command = ${ "EXIT" ~ sep ~ exit_code }
 

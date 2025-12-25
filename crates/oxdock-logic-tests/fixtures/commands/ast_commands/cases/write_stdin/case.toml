@@ -1,4 +1,4 @@
-name = "capture_to_file"
+name = "write_stdin"
 
 [expect]
 files = { "out.txt" = "hello" }

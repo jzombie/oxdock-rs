@@ -141,7 +141,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(|s| StepKind::Mkdir(s.into())),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
-        prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
+        prop::option::of(safe_string()).prop_map(|s| StepKind::Read(s.map(Into::into))),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
             path: path.into(),
             contents: Some(contents.into())

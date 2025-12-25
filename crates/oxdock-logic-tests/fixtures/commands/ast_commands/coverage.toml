@@ -16,7 +16,7 @@ Symlink = ["symlink"]
 Mkdir = ["mkdir"]
 Ls = ["ls"]
 Cwd = ["cwd"]
-Cat = ["cat"]
+Read = ["read"]
 Write = ["write"]
 WithIo = ["with_io"]
 CopyGit = ["copy_git"]
@@ -41,4 +41,5 @@ cases = [
   "copy_complex",
   "copy_broken_symlink",
   "with_io_block",
+  "write_stdin"
 ]

@@ -15,7 +15,7 @@ cc bdec93c833efd5e39d9cc85ddad6dd523f6f5459ce95cf1f98bed5a3afbf9228 # shrinks to
 cc cd7e281044efac8ea4cdfbd74ca15585a5c3eed852c8500ae5806fc24a209978 # shrinks to step = Step { guards: [], kind: RunBg("_//"), scope_enter: 0, scope_exit: 0 }
 cc 1d64716caae924e7a42af865ad5dcab9186578524f2c2982cbc8b6c2eb290972 # shrinks to step = Step { guards: [], kind: Run("-a a"), scope_enter: 0, scope_exit: 0 }
 cc 06ccc9db8177bc5e5f964a299af1043361c4e772c954427b5c29189ed725c81e # shrinks to step = Step { guards: [], kind: CaptureToFile { path: "0", cmd: "-A A" }, scope_enter: 0, scope_exit: 0 }
-cc 0fb39ec7ea013cedb7b9f23258483ff8223db7ef9db86410c77d87d56daeb48e # shrinks to step = Step { guards: [], kind: Cat("0o8"), scope_enter: 0, scope_exit: 0 }
+cc 0fb39ec7ea013cedb7b9f23258483ff8223db7ef9db86410c77d87d56daeb48e # shrinks to step = Step { guards: [], kind: Read("0o8"), scope_enter: 0, scope_exit: 0 }
 cc 3d26e2a85361cc6db9b17d51d0395a7826a01a5a2fa33c6484ee0b7d42d84055 # shrinks to step = Step { guards: [[EnvEquals { key: "A", value: "0oA", invert: false }]], kind: Workdir("a"), scope_enter: 0, scope_exit: 0 }
 cc fc16d40cece3f55720ec7240cd77cfdc5f1d26fae45d0a4833b5579b7070bbd0 # shrinks to step = Step { guards: [], kind: CaptureToFile { path: "_", cmd: "A-" }, scope_enter: 0, scope_exit: 0 }
 cc 225a844a8ed42b724d00ef3518f7d4c06f27ba1b37d6be839ce2d23f44d0daae # shrinks to step = Step { guards: [], kind: RunBg("A-"), scope_enter: 0, scope_exit: 0 }

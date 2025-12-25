@@ -488,7 +488,7 @@ fn capture_cat_emits_file_contents() {
     let root = guard_root(&temp);
     write_text(&root.join("note.txt").unwrap(), "hello note");
 
-    let steps = capture_pipeline("cap-cat", "out.txt", *parse_one("CAT note.txt"));
+    let steps = capture_pipeline("cap-cat", "out.txt", *parse_one("READ note.txt"));
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
@@ -798,15 +798,15 @@ fn read_cannot_escape_root() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("../secret.txt".into())),
+        kind: StepKind::Read(Some("../secret.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
     assert!(
-        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
-        "expected CAT escape error, got {}",
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ escape error, got {}",
         err
     );
 
@@ -852,15 +852,15 @@ fn read_symlink_escape_is_blocked() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("leak.txt".into())),
+        kind: StepKind::Read(Some("leak.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
 
     let err = run_steps(&root, &steps).unwrap_err();
     assert!(
-        err.to_string().contains("CAT") && err.to_string().contains("escapes"),
-        "expected CAT symlink escape error, got {}",
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ symlink escape error, got {}",
         err
     );
 
@@ -914,7 +914,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
     steps.extend(capture_pipeline(
         "cap-workspace-version",
         "seen.txt",
-        *parse_one("CAT version.txt"),
+        *parse_one("READ version.txt"),
     ));
 
     if can_create_symlinks(workspace_root.as_path()) {
@@ -994,7 +994,7 @@ fn cat_reads_file_contents_without_error() {
     write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Cat(Some("file.txt".into())),
+        kind: StepKind::Read(Some("file.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -1041,7 +1041,7 @@ fn cat_reads_stdin_with_io() {
                 stream: IoStream::Stdin,
                 pipe: None,
             }],
-            cmd: Box::new(StepKind::Cat(None)),
+            cmd: Box::new(StepKind::Read(None)),
         },
         scope_enter: 0,
         scope_exit: 0,
@@ -1087,7 +1087,7 @@ fn with_io_routes_stdout_into_later_stdin() {
 
     let script = indoc! {r#"
         WITH_IO [stdout=pipe:relay] ECHO streamed
-        WITH_IO [stdin=pipe:relay] CAT
+        WITH_IO [stdin=pipe:relay] READ
     "#};
     let steps = oxdock_parser::parse_script(script).expect("parse WITH_IO pipe script");
 

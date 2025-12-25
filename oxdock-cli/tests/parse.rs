@@ -69,11 +69,11 @@ fn parse_mkdir_ls_write() {
 
 #[test]
 fn parse_cat() {
-    let script = "CAT path/to/file.txt";
+    let script = "READ path/to/file.txt";
     let steps = parse_script(script).expect("parse should succeed");
     assert_eq!(steps.len(), 1);
     if let Step {
-        kind: StepKind::Cat(Some(ref p)),
+        kind: StepKind::Read(Some(ref p)),
         ..
     } = steps[0]
     {

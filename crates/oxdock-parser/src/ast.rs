@@ -16,7 +16,7 @@ pub enum Command {
     Mkdir,
     Ls,
     Cwd,
-    Cat,
+    Read,
     Write,
     Exit,
 }
@@ -36,7 +36,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Mkdir,
     Command::Ls,
     Command::Cwd,
-    Command::Cat,
+    Command::Read,
     Command::Write,
     Command::Exit,
 ];
@@ -58,7 +58,7 @@ impl Command {
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
             Command::Cwd => "CWD",
-            Command::Cat => "CAT",
+            Command::Read => "READ",
             Command::Write => "WRITE",
             Command::Exit => "EXIT",
         }
@@ -84,7 +84,7 @@ impl Command {
             "MKDIR" => Some(Command::Mkdir),
             "LS" => Some(Command::Ls),
             "CWD" => Some(Command::Cwd),
-            "CAT" => Some(Command::Cat),
+            "READ" => Some(Command::Read),
             "WRITE" => Some(Command::Write),
             "EXIT" => Some(Command::Exit),
             _ => None,
@@ -200,7 +200,7 @@ pub enum StepKind {
     Mkdir(TemplateString),
     Ls(Option<TemplateString>),
     Cwd,
-    Cat(Option<TemplateString>),
+    Read(Option<TemplateString>),
     Write {
         path: TemplateString,
         contents: Option<TemplateString>,
@@ -445,8 +445,8 @@ impl fmt::Display for StepKind {
                 Ok(())
             }
             StepKind::Cwd => write!(f, "CWD"),
-            StepKind::Cat(arg) => {
-                write!(f, "CAT")?;
+            StepKind::Read(arg) => {
+                write!(f, "READ")?;
                 if let Some(a) = arg {
                     write!(f, " {}", quote_arg(a))?;
                 }
