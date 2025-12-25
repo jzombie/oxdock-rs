@@ -31,16 +31,22 @@
 # ==========================================
 
 [env:OXBOOK_SNIPPET_PATH] {
+    WORKDIR /
+
+    ENV CARGO_TARGET_DIR="ws/target"
+
     # 3. Build the Snippet
     #    Stream build output to terminal via setup pipe
     WITH_IO [stdout=pipe:setup, stderr=pipe:setup] {
         COPY --from-current-workspace "{{ env:OXBOOK_SNIPPET_PATH }}" "ws/snippet/src/main.rs"
-        RUN CARGO_TARGET_DIR="ws/target" cargo build --manifest-path "ws/snippet/Cargo.toml"
+        RUN cargo build --manifest-path "ws/snippet/Cargo.toml"
     }
 
     # 4. Run the Snippet
     #    Capture stdout/stderr for markdown via snippet pipe
     WITH_IO [stdin, stdout=pipe:snippet, stderr=pipe:snippet] {
-        RUN CARGO_TARGET_DIR="ws/target" ws/target/debug/oxbook-snippet
+        WORKDIR /ws/target/debug
+        [unix] RUN ./oxbook-snippet
+        [windows] RUN oxbook-snippet.exe
     }
 }

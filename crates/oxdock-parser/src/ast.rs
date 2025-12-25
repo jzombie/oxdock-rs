@@ -304,9 +304,9 @@ impl fmt::Display for Guard {
         match self {
             Guard::Platform { target, invert } => {
                 if *invert {
-                    write!(f, "!platform:{}", target)
+                    write!(f, "!{}", target)
                 } else {
-                    write!(f, "platform:{}", target)
+                    write!(f, "{}", target)
                 }
             }
             Guard::EnvExists { key, invert } => {

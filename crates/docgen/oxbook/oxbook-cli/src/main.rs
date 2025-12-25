@@ -1320,7 +1320,6 @@ fn run_in_default_env(
     };
     run_in_env_with_resolver(
         resolver,
-        resolver,
         &env,
         spec,
         script,
@@ -1344,10 +1343,8 @@ fn run_in_env(
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<RunnerOutput> {
-    let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
     run_in_env_with_resolver(
         workspace_resolver,
-        &resolver,
         env,
         spec,
         script,
@@ -1362,7 +1359,6 @@ fn run_in_env(
 #[allow(clippy::too_many_arguments)]
 fn run_in_env_with_resolver(
     workspace_resolver: &PathResolver,
-    resolver: &PathResolver,
     env: &RunnerEnv,
     spec: &RunnerSpec,
     script: &str,
@@ -1404,15 +1400,22 @@ fn run_in_env_with_resolver(
             })
             .collect();
         let snippet_name = format!("oxbook-snippet.{lang_safe}");
-        let snippet_path = env
-            .root
+        let snippets_dir = workspace_resolver
+            .root()
+            .join("target")?
+            .join("oxbook")?
+            .join("snippets")?;
+        workspace_resolver
+            .create_dir_all(&snippets_dir)
+            .with_context(|| format!("create snippets dir at {}", snippets_dir.display()))?;
+        let snippet_path = snippets_dir
             .join(&snippet_name)
             .with_context(|| format!("snippet path for {}", spec.language))?;
-        resolver
+        workspace_resolver
             .write_file(&snippet_path, script.as_bytes())
             .with_context(|| format!("write {}", snippet_path.display()))?;
 
-        let snippet_dir = snippet_path.parent().unwrap_or_else(|| env.root.clone());
+        let snippet_dir = snippets_dir;
 
         let snippet_env = Step {
             guards: Vec::new(),

@@ -29,7 +29,7 @@ guard_term = { ws? ~ invert? ~ guard_predicate ~ ws? }
 
 invert = { "!" }
 
-guard_predicate = _{ env_guard | platform_guard | bare_platform }
+guard_predicate = _{ env_guard | bare_platform }
 
 env_guard = { env_prefix ~ ws? ~ env_key ~ env_comparison? }
 
@@ -49,7 +49,6 @@ env_value = @{ guard_value_char+ }
 
 guard_value_char = _{ !( "," | "|" | "]" | linebreak | "//" | "/*" ) ~ ANY }
 
-platform_guard = { "platform" ~ ":" ~ ws? ~ platform_tag }
 
 eq_op = { "==" }
 
