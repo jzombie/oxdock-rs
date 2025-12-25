@@ -276,12 +276,11 @@ fn build_assets(
     let workspace_root =
         oxdock_fs::discover_workspace_root().map_err(|e| syn::Error::new(span, e.to_string()))?;
 
-    let final_cwd = oxdock_core::run_steps_with_context_result(
+    let final_cwd = oxdock_core::run_steps_with_context_result_with_io(
         &temp_root_guard,
         &workspace_root,
         &steps,
-        None,
-        None,
+        oxdock_core::ExecIo::new(),
     )
     .map_err(|e| {
         // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
@@ -757,11 +756,8 @@ mod tests {
             StepKind::Write { path, .. } => assert_eq!(path, "leaked_inner.txt"),
             other => panic!("expected leaked inner WRITE, saw {:?}", other),
         }
-        assert!(
-            steps[10].guards.len() == 1,
-            "leaked_inner should be guarded"
-        );
-        assert!(steps[12].guards.len() == 1, "outer leak should be guarded");
+        assert!(steps[10].guard.is_some(), "leaked_inner should be guarded");
+        assert!(steps[12].guard.is_some(), "outer leak should be guarded");
     }
 
     #[test]

@@ -1,0 +1,10 @@
+[package]
+name = "copy_from_workspace_outside_escape"
+version = "0.0.0-dev"
+edition = "2021"
+
+[dependencies]
+oxdock-core.workspace = true
+oxdock-fs.workspace = true
+oxdock-parser.workspace = true
+indoc.workspace = true

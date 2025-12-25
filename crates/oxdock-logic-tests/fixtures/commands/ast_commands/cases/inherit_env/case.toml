@@ -1,0 +1,9 @@
+name = "inherit_env"
+
+[env]
+OXDOCK_AST_INHERIT_ONE = "from-host-1"
+OXDOCK_AST_INHERIT_TWO = "from-host-2"
+OXBOOK_RUNNER_DIR = "/runner"
+
+[expect]
+files = { "one.txt" = "one=from-host-1", "two.txt" = "two=from-host-2", "runner.txt" = "runner=/runner" }

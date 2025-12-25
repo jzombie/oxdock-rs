@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
+    InheritEnv,
     Workdir,
     Workspace,
     Env,
@@ -9,7 +10,6 @@ pub enum Command {
     Run,
     RunBg,
     Copy,
-    CaptureToFile,
     WithIo,
     CopyGit,
     HashSha256,
@@ -17,12 +17,13 @@ pub enum Command {
     Mkdir,
     Ls,
     Cwd,
-    Cat,
+    Read,
     Write,
     Exit,
 }
 
 pub const COMMANDS: &[Command] = &[
+    Command::InheritEnv,
     Command::Workdir,
     Command::Workspace,
     Command::Env,
@@ -30,7 +31,6 @@ pub const COMMANDS: &[Command] = &[
     Command::Run,
     Command::RunBg,
     Command::Copy,
-    Command::CaptureToFile,
     Command::WithIo,
     Command::CopyGit,
     Command::HashSha256,
@@ -38,7 +38,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Mkdir,
     Command::Ls,
     Command::Cwd,
-    Command::Cat,
+    Command::Read,
     Command::Write,
     Command::Exit,
 ];
@@ -46,6 +46,7 @@ pub const COMMANDS: &[Command] = &[
 impl Command {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Command::InheritEnv => "INHERIT_ENV",
             Command::Workdir => "WORKDIR",
             Command::Workspace => "WORKSPACE",
             Command::Env => "ENV",
@@ -53,7 +54,6 @@ impl Command {
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
-            Command::CaptureToFile => "CAPTURE_TO_FILE",
             Command::WithIo => "WITH_IO",
             Command::CopyGit => "COPY_GIT",
             Command::HashSha256 => "HASH_SHA256",
@@ -61,18 +61,19 @@ impl Command {
             Command::Mkdir => "MKDIR",
             Command::Ls => "LS",
             Command::Cwd => "CWD",
-            Command::Cat => "CAT",
+            Command::Read => "READ",
             Command::Write => "WRITE",
             Command::Exit => "EXIT",
         }
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::CaptureToFile | Command::WithIo)
+        matches!(self, Command::WithIo)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "INHERIT_ENV" => Some(Command::InheritEnv),
             "WORKDIR" => Some(Command::Workdir),
             "WORKSPACE" => Some(Command::Workspace),
             "ENV" => Some(Command::Env),
@@ -80,7 +81,6 @@ impl Command {
             "RUN" => Some(Command::Run),
             "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
-            "CAPTURE_TO_FILE" => Some(Command::CaptureToFile),
             "WITH_IO" => Some(Command::WithIo),
             "COPY_GIT" => Some(Command::CopyGit),
             "HASH_SHA256" => Some(Command::HashSha256),
@@ -88,7 +88,7 @@ impl Command {
             "MKDIR" => Some(Command::Mkdir),
             "LS" => Some(Command::Ls),
             "CWD" => Some(Command::Cwd),
-            "CAT" => Some(Command::Cat),
+            "READ" => Some(Command::Read),
             "WRITE" => Some(Command::Write),
             "EXIT" => Some(Command::Exit),
             _ => None,
@@ -119,6 +119,70 @@ pub enum Guard {
         value: String,
         invert: bool,
     },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum GuardExpr {
+    Predicate(Guard),
+    All(Vec<GuardExpr>),
+    Or(Vec<GuardExpr>),
+    Not(Box<GuardExpr>),
+}
+
+impl GuardExpr {
+    pub fn all(exprs: Vec<GuardExpr>) -> GuardExpr {
+        let mut flat = Vec::new();
+        for expr in exprs {
+            match expr {
+                GuardExpr::All(children) => flat.extend(children),
+                other => flat.push(other),
+            }
+        }
+        match flat.len() {
+            0 => panic!("GuardExpr::all requires at least one expression"),
+            1 => flat.into_iter().next().unwrap(),
+            _ => GuardExpr::All(flat),
+        }
+    }
+
+    pub fn or(exprs: Vec<GuardExpr>) -> GuardExpr {
+        let mut flat = Vec::new();
+        for expr in exprs {
+            match expr {
+                GuardExpr::Or(children) => flat.extend(children),
+                other => flat.push(other),
+            }
+        }
+        match flat.len() {
+            0 => panic!("GuardExpr::or requires at least one expression"),
+            1 => flat.into_iter().next().unwrap(),
+            _ => GuardExpr::Or(flat),
+        }
+    }
+
+    pub fn invert(expr: GuardExpr) -> GuardExpr {
+        match expr {
+            GuardExpr::Not(inner) => *inner,
+            other => GuardExpr::Not(Box::new(other)),
+        }
+    }
+}
+
+impl std::ops::Not for GuardExpr {
+    type Output = GuardExpr;
+
+    fn not(self) -> GuardExpr {
+        match self {
+            GuardExpr::Not(inner) => *inner,
+            other => GuardExpr::Not(Box::new(other)),
+        }
+    }
+}
+
+impl From<Guard> for GuardExpr {
+    fn from(guard: Guard) -> Self {
+        GuardExpr::Predicate(guard)
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -169,6 +233,19 @@ impl std::ops::Deref for TemplateString {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub enum IoStream {
+    Stdin,
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IoBinding {
+    pub stream: IoStream,
+    pub pipe: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StepKind {
     Workdir(TemplateString),
     Workspace(WorkspaceTarget),
@@ -176,10 +253,16 @@ pub enum StepKind {
         key: String,
         value: TemplateString,
     },
+    /// Directive to inherit a selective list of environment variables from the host.
+    /// This is intended to be declared in the prelude/top-level only.
+    InheritEnv {
+        keys: Vec<String>,
+    },
     Run(TemplateString),
     Echo(TemplateString),
     RunBg(TemplateString),
     Copy {
+        from_current_workspace: bool,
         from: TemplateString,
         to: TemplateString,
     },
@@ -190,18 +273,17 @@ pub enum StepKind {
     Mkdir(TemplateString),
     Ls(Option<TemplateString>),
     Cwd,
-    Cat(Option<TemplateString>),
+    Read(Option<TemplateString>),
     Write {
         path: TemplateString,
-        contents: TemplateString,
-    },
-    CaptureToFile {
-        path: TemplateString,
-        cmd: Box<StepKind>,
+        contents: Option<TemplateString>,
     },
     WithIo {
-        streams: Vec<String>,
+        bindings: Vec<IoBinding>,
         cmd: Box<StepKind>,
+    },
+    WithIoBlock {
+        bindings: Vec<IoBinding>,
     },
     CopyGit {
         rev: TemplateString,
@@ -217,7 +299,7 @@ pub enum StepKind {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Step {
-    pub guards: Vec<Vec<Guard>>,
+    pub guard: Option<GuardExpr>,
     pub kind: StepKind,
     pub scope_enter: usize,
     pub scope_exit: usize,
@@ -266,15 +348,23 @@ pub fn guard_allows(guard: &Guard, script_envs: &HashMap<String, String>) -> boo
     }
 }
 
-pub fn guard_group_allows(group: &[Guard], script_envs: &HashMap<String, String>) -> bool {
-    group.iter().all(|g| guard_allows(g, script_envs))
+pub fn guard_expr_allows(expr: &GuardExpr, script_envs: &HashMap<String, String>) -> bool {
+    match expr {
+        GuardExpr::Predicate(guard) => guard_allows(guard, script_envs),
+        GuardExpr::All(children) => children.iter().all(|g| guard_expr_allows(g, script_envs)),
+        GuardExpr::Or(children) => children.iter().any(|g| guard_expr_allows(g, script_envs)),
+        GuardExpr::Not(child) => !guard_expr_allows(child, script_envs),
+    }
 }
 
-pub fn guards_allow_any(groups: &[Vec<Guard>], script_envs: &HashMap<String, String>) -> bool {
-    if groups.is_empty() {
-        return true;
+pub fn guard_option_allows(
+    expr: Option<&GuardExpr>,
+    script_envs: &HashMap<String, String>,
+) -> bool {
+    match expr {
+        Some(e) => guard_expr_allows(e, script_envs),
+        None => true,
     }
-    groups.iter().any(|g| guard_group_allows(g, script_envs))
 }
 
 use std::fmt;
@@ -295,9 +385,9 @@ impl fmt::Display for Guard {
         match self {
             Guard::Platform { target, invert } => {
                 if *invert {
-                    write!(f, "!platform:{}", target)
+                    write!(f, "!{}", target)
                 } else {
-                    write!(f, "platform:{}", target)
+                    write!(f, "{}", target)
                 }
             }
             Guard::EnvExists { key, invert } => {
@@ -327,11 +417,14 @@ impl fmt::Display for WorkspaceTarget {
 }
 
 fn quote_arg(s: &str) -> String {
-    // Strict quoting to avoid parser ambiguity, especially with CAPTURE_TO_FILE command
-    // where unquoted args followed by run_args can be consumed greedily.
+    // Strict quoting avoids parser ambiguity when commands accept additional payloads
+    // (e.g. WRITE path <payload>) so arguments are never mistaken for subsequent tokens.
     // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit());
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        // Avoid unquoted args that equal command keywords (they would be parsed as commands
+        // when reconstructed from TokenStream). Quote them to preserve intent.
+        && super::Command::parse(s).is_none();
     if is_safe && !s.is_empty() {
         s.to_string()
     } else {
@@ -346,7 +439,9 @@ fn quote_msg(s: &str) -> String {
     // We also quote strings with spaces to be safe, as TokenStream does not preserve whitespace.
     // Also quote if it starts with a digit to avoid invalid Rust tokens.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit());
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        // As with args, avoid leaving bare tokens that match command names.
+        && super::Command::parse(s).is_none();
 
     if is_safe && !s.is_empty() {
         s.to_string()
@@ -386,16 +481,47 @@ fn quote_run(s: &str) -> String {
         .join(" ")
 }
 
+fn format_io_binding(binding: &IoBinding) -> String {
+    let stream = match binding.stream {
+        IoStream::Stdin => "stdin",
+        IoStream::Stdout => "stdout",
+        IoStream::Stderr => "stderr",
+    };
+    if let Some(pipe) = &binding.pipe {
+        format!("{}=pipe:{}", stream, pipe)
+    } else {
+        stream.to_string()
+    }
+}
+
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StepKind::InheritEnv { keys } => {
+                write!(f, "INHERIT_ENV [{}]", keys.join(", "))
+            }
             StepKind::Workdir(arg) => write!(f, "WORKDIR {}", quote_arg(arg)),
             StepKind::Workspace(target) => write!(f, "WORKSPACE {}", target),
             StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value)),
             StepKind::Run(cmd) => write!(f, "RUN {}", quote_run(cmd)),
             StepKind::Echo(msg) => write!(f, "ECHO {}", quote_msg(msg)),
             StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_run(cmd)),
-            StepKind::Copy { from, to } => write!(f, "COPY {} {}", quote_arg(from), quote_arg(to)),
+            StepKind::Copy {
+                from_current_workspace,
+                from,
+                to,
+            } => {
+                if *from_current_workspace {
+                    write!(
+                        f,
+                        "COPY --from-current-workspace {} {}",
+                        quote_arg(from),
+                        quote_arg(to)
+                    )
+                } else {
+                    write!(f, "COPY {} {}", quote_arg(from), quote_arg(to))
+                }
+            }
             StepKind::Symlink { from, to } => {
                 write!(f, "SYMLINK {} {}", quote_arg(from), quote_arg(to))
             }
@@ -408,21 +534,27 @@ impl fmt::Display for StepKind {
                 Ok(())
             }
             StepKind::Cwd => write!(f, "CWD"),
-            StepKind::Cat(arg) => {
-                write!(f, "CAT")?;
+            StepKind::Read(arg) => {
+                write!(f, "READ")?;
                 if let Some(a) = arg {
                     write!(f, " {}", quote_arg(a))?;
                 }
                 Ok(())
             }
             StepKind::Write { path, contents } => {
-                write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
+                write!(f, "WRITE {}", quote_arg(path))?;
+                if let Some(body) = contents {
+                    write!(f, " {}", quote_msg(body))?;
+                }
+                Ok(())
             }
-            StepKind::CaptureToFile { path, cmd } => {
-                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
+            StepKind::WithIo { bindings, cmd } => {
+                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
+                write!(f, "WITH_IO [{}] {}", parts.join(", "), cmd)
             }
-            StepKind::WithIo { streams, cmd } => {
-                write!(f, "WITH_IO [{}] {}", streams.join(", "), cmd)
+            StepKind::WithIoBlock { bindings } => {
+                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
+                write!(f, "WITH_IO [{}] {{...}}", parts.join(", "))
             }
             StepKind::CopyGit {
                 rev,
@@ -454,17 +586,73 @@ impl fmt::Display for StepKind {
     }
 }
 
+enum GuardDisplayContext {
+    Root,
+    InOrArg,
+    InNot,
+    InAll,
+}
+
+impl GuardExpr {
+    fn fmt_with_ctx(&self, f: &mut fmt::Formatter<'_>, ctx: GuardDisplayContext) -> fmt::Result {
+        match self {
+            GuardExpr::Predicate(guard) => write!(f, "{}", guard),
+            GuardExpr::All(children) => {
+                let wrap = matches!(
+                    ctx,
+                    GuardDisplayContext::InOrArg | GuardDisplayContext::InNot
+                ) && children.len() > 1;
+                if wrap {
+                    write!(f, "(")?;
+                }
+                for (i, child) in children.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    child.fmt_with_ctx(f, GuardDisplayContext::InAll)?;
+                }
+                if wrap {
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            GuardExpr::Or(children) => {
+                write!(f, "or(")?;
+                for (i, child) in children.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    child.fmt_with_ctx(f, GuardDisplayContext::InOrArg)?;
+                }
+                write!(f, ")")
+            }
+            GuardExpr::Not(child) => {
+                write!(f, "!")?;
+                let needs_paren =
+                    !matches!(child.as_ref(), GuardExpr::Predicate(_) | GuardExpr::Not(_));
+                if needs_paren {
+                    write!(f, "(")?;
+                }
+                child.fmt_with_ctx(f, GuardDisplayContext::InNot)?;
+                if needs_paren {
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Display for GuardExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_with_ctx(f, GuardDisplayContext::Root)
+    }
+}
+
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for group in &self.guards {
-            write!(f, "[")?;
-            for (i, guard) in group.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?
-                }
-                write!(f, "{}", guard)?;
-            }
-            write!(f, "] ")?;
+        if let Some(expr) = &self.guard {
+            write!(f, "[{}] ", expr)?;
         }
         write!(f, "{}", self.kind)
     }

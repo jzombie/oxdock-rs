@@ -1,4 +1,4 @@
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{GuardedPath, PathResolver, command_path, ensure_git_identity};
 use oxdock_parser::parse_script;
 use oxdock_process::CommandBuilder;
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let script = "COPY_GIT --include-dirty HEAD deep/dir/level/ten output/nested/target";
     let steps = parse_script(script).map_err(|e| format!("parse script: {e}"))?;
-    run_steps_with_context_result(&snapshot_root, &repo, &steps, None, None)
+    run_steps_with_context_result_with_io(&snapshot_root, &repo, &steps, ExecIo::new())
         .map_err(|e| format!("run steps: {e}"))?;
 
     let out_root = snapshot_root.join("output")?;

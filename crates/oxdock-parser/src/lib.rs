@@ -20,6 +20,10 @@ mod tests {
     use quote::quote;
     use std::collections::HashMap;
 
+    fn guard_text(step: &Step) -> Option<String> {
+        step.guard.as_ref().map(|g| g.to_string())
+    }
+
     #[test]
     fn commands_are_case_sensitive() {
         for bad in ["run echo hi", "Run echo hi", "rUn echo hi", "write foo bar"] {
@@ -90,7 +94,7 @@ mod tests {
         let script = "[env:FOO] RUN echo hi";
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].guards.len(), 1);
+        assert_eq!(guard_text(&steps[0]).as_deref(), Some("env:FOO"));
     }
 
     #[test]
@@ -104,8 +108,7 @@ mod tests {
         "#};
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].guards.len(), 1);
-        assert_eq!(steps[0].guards[0].len(), 2);
+        assert_eq!(guard_text(&steps[0]).as_deref(), Some("env:A, env:B"));
     }
 
     #[test]
@@ -115,6 +118,33 @@ mod tests {
             }
         "#};
         parse_script(script).expect_err("empty block should fail");
+    }
+
+    #[test]
+    fn with_io_supports_named_pipes() {
+        let script = "WITH_IO [stdin, stdout=pipe:setup, stderr=pipe:errors] RUN echo hi";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].kind {
+            StepKind::WithIo { bindings, cmd } => {
+                assert_eq!(bindings.len(), 3);
+                assert!(
+                    bindings
+                        .iter()
+                        .any(|b| matches!(b.stream, IoStream::Stdin) && b.pipe.is_none())
+                );
+                assert!(
+                    bindings.iter().any(|b| matches!(b.stream, IoStream::Stdout)
+                        && b.pipe.as_deref() == Some("setup"))
+                );
+                assert!(
+                    bindings.iter().any(|b| matches!(b.stream, IoStream::Stderr)
+                        && b.pipe.as_deref() == Some("errors"))
+                );
+                assert_eq!(cmd.as_ref(), &StepKind::Run("echo hi".into()));
+            }
+            other => panic!("expected WITH_IO, saw {:?}", other),
+        }
     }
 
     #[test]
@@ -138,8 +168,7 @@ mod tests {
         "#};
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].guards.len(), 1);
-        assert_eq!(steps[0].guards[0].len(), 2);
+        assert_eq!(guard_text(&steps[0]).as_deref(), Some("env:A, env:B"));
     }
 
     #[test]
@@ -152,7 +181,7 @@ mod tests {
         "#};
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 2);
-        assert!(steps.iter().all(|s| !s.guards.is_empty()));
+        assert!(steps.iter().all(|s| s.guard.is_some()));
     }
 
     #[test]
@@ -167,8 +196,8 @@ mod tests {
         "#};
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].guards[0].len(), 1);
-        assert_eq!(steps[1].guards[0].len(), 2);
+        assert_eq!(guard_text(&steps[0]).as_deref(), Some("env:A"));
+        assert_eq!(guard_text(&steps[1]).as_deref(), Some("env:A, env:B"));
     }
 
     #[test]
@@ -193,34 +222,76 @@ mod tests {
     }
 
     #[test]
-    fn guards_allow_any_act_as_or_of_ands() {
+    fn guard_or_and_and_compose_as_expected() {
         let script = indoc! {r#"
             [env:A]
-            [env:B | env:C]
+            [or(env:B, env:C)]
             RUN echo complex
         "#};
         let steps = parse_script(script).expect("parse ok");
         assert_eq!(steps.len(), 1);
-        // Should be (A AND B) OR (A AND C)
-        // The parser produces [[A, B], [A, C]]
-        assert_eq!(steps[0].guards.len(), 2);
-        assert_eq!(steps[0].guards[0].len(), 2);
-        assert_eq!(steps[0].guards[1].len(), 2);
+        let guard = steps[0].guard.as_ref().expect("missing guard");
+        assert_eq!(guard.to_string(), "env:A, or(env:B, env:C)");
+
+        let mut env = HashMap::new();
+        env.insert("A".into(), "1".into());
+        env.insert("B".into(), "1".into());
+        assert!(guard_expr_allows(guard, &env), "A && B should pass");
+
+        env.remove("B");
+        env.insert("C".into(), "1".into());
+        assert!(guard_expr_allows(guard, &env), "A && C should pass");
+
+        env.remove("C");
+        assert!(!guard_expr_allows(guard, &env), "A without B/C should fail");
     }
 
     #[test]
-    fn guards_allow_any_falls_back_to_false_when_all_fail() {
-        let groups = vec![
-            vec![Guard::EnvExists {
+    fn guard_or_requires_at_least_one_branch() {
+        let expr = GuardExpr::or(vec![
+            Guard::EnvExists {
                 key: "MISSING".into(),
                 invert: false,
-            }],
-            vec![Guard::EnvExists {
+            }
+            .into(),
+            Guard::EnvExists {
                 key: "ALSO_MISSING".into(),
                 invert: false,
-            }],
-        ];
-        assert!(!guards_allow_any(&groups, &HashMap::new()));
+            }
+            .into(),
+        ]);
+        assert!(!guard_expr_allows(&expr, &HashMap::new()));
+        let mut env = HashMap::new();
+        env.insert("MISSING".into(), "1".into());
+        assert!(guard_expr_allows(&expr, &env));
+    }
+
+    #[test]
+    fn guard_or_can_chain_with_additional_predicates() {
+        let script = "[or(env:A, linux), mac] RUN echo hi";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        let guard = steps[0].guard.as_ref().expect("missing guard");
+        assert_eq!(guard.to_string(), "or(env:A, linux), macos");
+        let GuardExpr::All(children) = guard else {
+            panic!("expected ALL guard");
+        };
+        assert!(matches!(children[0], GuardExpr::Or(_)));
+        match &children[1] {
+            GuardExpr::Predicate(Guard::Platform {
+                target: PlatformGuard::Macos,
+                invert: false,
+            }) => {}
+            other => panic!("unexpected trailing guard: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guard_or_guard_line_parses() {
+        use crate::lexer::{LanguageParser, Rule};
+        use pest::Parser;
+        LanguageParser::parse(Rule::guard_line, "[or(linux, env:FOO)]")
+            .expect("guard guard line should parse");
     }
 
     #[test]
@@ -281,6 +352,19 @@ mod tests {
     }
 
     #[test]
+    fn workdir_allows_templated_argument_with_spaces() {
+        let script = "WORKDIR {{ env:OXBOOK_RUNNER_DIR }}";
+        let steps = parse_script(script).expect("parse ok");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].kind {
+            StepKind::Workdir(path) => {
+                assert_eq!(path, "{{ env:OXBOOK_RUNNER_DIR }}");
+            }
+            other => panic!("expected WORKDIR, saw {:?}", other),
+        }
+    }
+
+    #[test]
     #[cfg(feature = "proc-macro-api")]
     fn string_and_braced_scripts_produce_identical_ast() {
         let mut cases = Vec::new();
@@ -301,14 +385,14 @@ mod tests {
         cases.push((
             indoc! {r#"
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             "#}
             .trim()
             .to_string(),
             quote! {
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             },
         ));
@@ -332,16 +416,16 @@ mod tests {
 
         cases.push((
             indoc! {r#"
-                [env:TEST==1] CAPTURE_TO_FILE out.txt RUN echo hi
-                [env:FOO] WRITE foo.txt "bar"
-                SYMLINK link target
+                [env:TEST==1]
+                WITH_IO [stdout=pipe:capture_case] RUN echo hi
+                WITH_IO [stdin=pipe:capture_case] WRITE out.txt
             "#}
             .trim()
             .to_string(),
             quote! {
-                [env:TEST==1] CAPTURE_TO_FILE out.txt RUN echo hi
-                [env:FOO] WRITE foo.txt "bar"
-                SYMLINK link target
+                [env:TEST==1]
+                WITH_IO [stdout=pipe:capture_case] RUN echo hi
+                WITH_IO [stdin=pipe:capture_case] WRITE out.txt
             },
         ));
 

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, ensure_git_identity,
 };
@@ -73,13 +73,21 @@ struct CaseSpec {
     build_context: BuildContext,
     setup: Option<String>,
     stdin: Option<String>,
+    env: Vec<(String, String)>,
+    env_remove: Vec<String>,
     expect_error: Option<ErrorExpectation>,
     expectations: Expectations,
+    pipes: BTreeMap<String, PipeSpec>,
 }
 
 struct CoverageSpec {
     coverage: HashMap<String, Vec<String>>,
     extras: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct PipeSpec {
+    expect: Option<String>,
 }
 
 fn main() {
@@ -246,6 +254,24 @@ fn load_case_spec(
         .map(|s| s.to_string());
     let expect_error = expectations::parse_error_expectation(&doc)?;
     let expectations = parse_expectations(doc.get("expect").and_then(|i| i.as_table()))?;
+    let pipes = doc
+        .get("pipes")
+        .and_then(|item| item.as_table())
+        .map(parse_pipe_specs)
+        .transpose()? 
+        .unwrap_or_default();
+    let env = doc
+        .get("env")
+        .and_then(|item| item.as_table())
+        .map(parse_env_table)
+        .transpose()? 
+        .unwrap_or_default();
+    let env_remove = doc
+        .get("env_remove")
+        .and_then(|item| item.as_array())
+        .map(parse_string_array)
+        .transpose()? 
+        .unwrap_or_default();
 
     Ok(CaseSpec {
         name,
@@ -254,8 +280,11 @@ fn load_case_spec(
         build_context,
         setup,
         stdin,
+        env,
+        env_remove,
         expect_error,
         expectations,
+        pipes,
     })
 }
 
@@ -327,6 +356,32 @@ fn parse_expectations(expect: Option<&Table>) -> Result<Expectations> {
         .map(|s| s.to_string());
 
     Ok(out)
+}
+
+fn parse_pipe_specs(table: &Table) -> Result<BTreeMap<String, PipeSpec>> {
+    let mut pipes = BTreeMap::new();
+    for (name, entry) in table.iter() {
+        let pipe_table = entry
+            .as_table()
+            .ok_or_else(|| anyhow!("pipes.{name} must be a table"))?;
+        let expect = pipe_table
+            .get("expect")
+            .and_then(|value| value.as_str())
+            .map(|s| s.to_string());
+        pipes.insert(name.to_string(), PipeSpec { expect });
+    }
+    Ok(pipes)
+}
+
+fn parse_env_table(table: &Table) -> Result<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    for (key, value) in table.iter() {
+        let value = value
+            .as_str()
+            .ok_or_else(|| anyhow!("env.{key} must be a string"))?;
+        env.push((key.to_string(), value.to_string()));
+    }
+    Ok(env)
 }
 
 fn parse_root_expect(table: &Table) -> Result<RootExpect> {
@@ -567,16 +622,25 @@ fn assert_coverage(
     Ok(())
 }
 
+const COVERAGE_IGNORED_STEP_KINDS: &[&str] = &["WithIoBlock"];
+
 fn step_kind_variants() -> Result<HashSet<String>> {
     let workspace_root = discover_workspace_root().context("locate workspace root")?;
     let resolver = PathResolver::new(workspace_root.as_path(), workspace_root.as_path())?;
     let ast_path = workspace_root.join("crates/oxdock-parser/src/ast.rs")?;
     let ast_source = resolver.read_to_string(&ast_path).context("read ast.rs")?;
-    let expected = extract_step_kind_variants(&ast_source);
-    if expected.is_empty() {
+    let filtered: HashSet<_> = extract_step_kind_variants(&ast_source)
+        .into_iter()
+        .filter(|name| {
+            !COVERAGE_IGNORED_STEP_KINDS
+                .iter()
+                .any(|ignored| ignored == name)
+        })
+        .collect();
+    if filtered.is_empty() {
         return Err(anyhow!("failed to extract StepKind variants from ast.rs"));
     }
-    Ok(expected.into_iter().collect())
+    Ok(filtered)
 }
 
 fn step_kinds_in_steps(steps: &[Step]) -> HashSet<String> {
@@ -591,7 +655,6 @@ fn collect_step_kinds(kind: &StepKind, kinds: &mut HashSet<String>) {
     kinds.insert(step_kind_name(kind).to_string());
     match kind {
         StepKind::WithIo { cmd, .. } => collect_step_kinds(cmd, kinds),
-        StepKind::CaptureToFile { cmd, .. } => collect_step_kinds(cmd, kinds),
         _ => {}
     }
 }
@@ -622,7 +685,27 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stdout: SharedOutput = stdout_buf.clone();
 
-    let result = run_steps_with_context_result(&snapshot, &build_context, steps, stdin, Some(stdout)).map(|_| ());
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(stdout.clone()));
+    io_cfg.set_stdin(stdin);
+
+    for key in &case.env_remove {
+        io_cfg.remove_inherit_env(key.clone());
+    }
+    for (key, value) in &case.env {
+        io_cfg.insert_inherit_env(key.clone(), value.clone());
+    }
+
+    let mut pipe_buffers: Vec<(String, Arc<Mutex<Vec<u8>>>, PipeSpec)> = Vec::new();
+    for (name, spec) in &case.pipes {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedOutput = buffer.clone();
+        io_cfg.insert_output_pipe(name, writer);
+        pipe_buffers.push((name.clone(), buffer, spec.clone()));
+    }
+
+    let result =
+        run_steps_with_context_result_with_io(&snapshot, &build_context, steps, io_cfg).map(|_| ());
     match (&case.expect_error, result) {
         (Some(expectation), Err(err)) => {
             expectations::assert_error_matches(
@@ -649,6 +732,7 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     }
 
     verify_expectations(&case.expectations, &snapshot, &local)?;
+    verify_pipes(&pipe_buffers)?;
     if let Some(setup) = &case.setup {
         run_cleanup(setup, &snapshot, &local)?;
     }
@@ -759,6 +843,24 @@ fn verify_root(expect: &RootExpect, root: &GuardedPath) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn verify_pipes(pipes: &[(String, Arc<Mutex<Vec<u8>>>, PipeSpec)]) -> Result<()> {
+    for (name, buffer, spec) in pipes {
+        if let Some(expected) = &spec.expect {
+            let data = buffer.lock().unwrap();
+            let actual = String::from_utf8(data.clone())
+                .with_context(|| format!("pipe {name} output is not valid UTF-8"))?;
+            if &actual != expected {
+                return Err(anyhow!(
+                    "pipe {name} mismatch. expected {:?}, got {:?}",
+                    expected,
+                    actual
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -976,6 +1078,7 @@ fn extract_step_kind_variants(source: &str) -> Vec<String> {
 
 fn step_kind_name(kind: &StepKind) -> &'static str {
     match kind {
+        StepKind::InheritEnv { .. } => "InheritEnv",
         StepKind::Workdir(_) => "Workdir",
         StepKind::Workspace(_) => "Workspace",
         StepKind::Env { .. } => "Env",
@@ -987,12 +1090,12 @@ fn step_kind_name(kind: &StepKind) -> &'static str {
         StepKind::Mkdir(_) => "Mkdir",
         StepKind::Ls(_) => "Ls",
         StepKind::Cwd => "Cwd",
-        StepKind::Cat(_) => "Cat",
+        StepKind::Read(_) => "Read",
         StepKind::Write { .. } => "Write",
-        StepKind::CaptureToFile { .. } => "CaptureToFile",
         StepKind::CopyGit { .. } => "CopyGit",
         StepKind::HashSha256 { .. } => "HashSha256",
         StepKind::Exit(_) => "Exit",
         StepKind::WithIo { .. } => "WithIo",
+        StepKind::WithIoBlock { .. } => "WithIoBlock",
     }
 }

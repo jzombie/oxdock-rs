@@ -126,6 +126,7 @@ pub trait WorkspaceFs {
     fn resolve_read(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath>;
     fn resolve_write(&self, cwd: &GuardedPath, rel: &str) -> Result<GuardedPath>;
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath>;
+    fn resolve_copy_source_from_workspace(&self, from: &str) -> Result<GuardedPath>;
 
     fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind>;
     #[allow(clippy::disallowed_types)]
@@ -332,6 +333,10 @@ impl WorkspaceFs for PathResolver {
 
     fn resolve_copy_source(&self, from: &str) -> Result<GuardedPath> {
         PathResolver::resolve_copy_source(self, from)
+    }
+
+    fn resolve_copy_source_from_workspace(&self, from: &str) -> Result<GuardedPath> {
+        PathResolver::resolve_copy_source_from_workspace(self, from)
     }
 
     fn entry_kind(&self, path: &GuardedPath) -> Result<EntryKind> {

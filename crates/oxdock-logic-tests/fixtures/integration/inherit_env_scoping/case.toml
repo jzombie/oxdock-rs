@@ -1,0 +1,7 @@
+name = "inherit_env_scoping"
+
+[env]
+TESTKEY = "outer"
+
+[expect]
+stdout = { contains = ["OUTER:outer", "INNER:inner", "INNER2:inner2", "INNER_AFTER:inner", "OUTER_AFTER:outer"] }

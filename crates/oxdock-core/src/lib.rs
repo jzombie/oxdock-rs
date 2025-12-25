@@ -45,7 +45,7 @@ mod tests {
         };
 
         let steps = vec![Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Run(cmd.to_string().into()),
             scope_enter: 0,
             scope_exit: 0,

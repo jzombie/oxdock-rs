@@ -1,6 +1,6 @@
 use oxdock_buildtime_macros::{embed, prepare};
 use oxdock_cli::{ExecutionResult, Options, ScriptSource, execute_with_result};
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{run_steps_with_context_result_with_io, ExecIo};
 use oxdock_fs::{GuardedPath, PathResolver};
 use oxdock_parser::parse_script;
 use std::error::Error;
@@ -13,8 +13,10 @@ embed! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+        WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+        WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
@@ -31,8 +33,10 @@ prepare! {
         MKDIR data/inner
         WRITE data/inner/a.txt alpha
         WRITE data/b.txt beta
-        CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-        CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+        WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+        WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+        WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
         // Double-check the hash matches on unix system
         // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
@@ -47,8 +51,10 @@ const SCRIPT: &str = r#"
     MKDIR data/inner
     WRITE data/inner/a.txt alpha
     WRITE data/b.txt beta
-    CAPTURE_TO_FILE dir_hash.txt HASH_SHA256 data
-    CAPTURE_TO_FILE file_hash.txt HASH_SHA256 data/inner/a.txt
+    WITH_IO [stdout=pipe:cap_dir_hash] HASH_SHA256 data
+    WITH_IO [stdin=pipe:cap_dir_hash] WRITE dir_hash.txt
+    WITH_IO [stdout=pipe:cap_file_hash] HASH_SHA256 data/inner/a.txt
+    WITH_IO [stdin=pipe:cap_file_hash] WRITE file_hash.txt
 
     // Double-check the hash matches on unix system
     // TODO: Gate system cmd execution based on sha256sum detection: https://github.com/jzombie/oxdock-rs/issues/55
@@ -116,7 +122,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let core_root = core_temp.as_guarded_path().clone();
     let core_resolver = PathResolver::new_guarded(core_root.clone(), workspace_root.clone())?;
     let steps = parse_script(SCRIPT)?;
-    let core_final = run_steps_with_context_result(&core_root, &workspace_root, &steps, None, None)?;
+    let core_final =
+        run_steps_with_context_result_with_io(&core_root, &workspace_root, &steps, ExecIo::new())?;
     let core_hash = read_dir_hash(&core_resolver, &core_final)?;
     let core_file_hash = read_file_hash(&core_resolver, &core_final)?;
 
