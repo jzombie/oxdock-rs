@@ -309,7 +309,7 @@ impl ProcessManager for ShellProcessManager {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     // Use command_path to strip Windows verbatim prefixes (\\?\) before passing to Command.
-    // While Rust's `std::process::Command handles verbatim paths in current_dir correctly,
+    // While Rust's `std::process::Command` handles verbatim paths in current_dir correctly,
     // environment variables are passed as-is. If we pass a verbatim path in `CARGO_TARGET_DIR`,
     // tools that don't understand it (or shell scripts echoing it) might misbehave or produce
     // unexpected output. Normalizing here ensures consistency.
