@@ -28,6 +28,7 @@ const SHORT_HASH_LEN: usize = 32;
 const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
 const PIPE_SETUP: &str = "setup";
 const PIPE_SNIPPET: &str = "snippet";
+pub const BLOCK_EVENT_ENV: &str = "OXBOOK_EMIT_BLOCK_EVENTS";
 pub const WORKER_EVENT_PREFIX: &str = "@@WORKER:";
 
 #[derive(Debug)]
@@ -103,6 +104,7 @@ pub fn run() -> Result<()> {
 
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
     let mut cache = RunnerCache::default();
+    let emit_block_events = emit_block_events_enabled();
 
     let mut command_rx = None;
     if !std::io::stdin().is_terminal() {
@@ -121,6 +123,7 @@ pub fn run() -> Result<()> {
         true,
         None,
         None,
+        emit_block_events,
     )?;
     if rendered != initial_contents {
         resolver
@@ -137,6 +140,7 @@ pub fn run() -> Result<()> {
         &mut cache,
         &mut last_contents,
         command_rx,
+        emit_block_events,
     )?;
     Ok(())
 }
@@ -361,6 +365,13 @@ fn read_contents(resolver: &PathResolver, path: &GuardedPath) -> Result<String> 
         .with_context(|| format!("read {}", path.display()))
 }
 
+fn emit_block_events_enabled() -> bool {
+    match std::env::var_os(BLOCK_EVENT_ENV) {
+        Some(val) => val != "0",
+        None => false,
+    }
+}
+
 fn read_stable_contents(resolver: &PathResolver, path: &GuardedPath) -> Result<String> {
     let mut last = read_contents(resolver, path)?;
     for _ in 0..STABLE_READ_RETRIES {
@@ -382,6 +393,7 @@ fn run_watch_loop(
     cache: &mut RunnerCache,
     last_contents: &mut String,
     command_rx: Option<mpsc::Receiver<ServerCommand>>,
+    emit_block_events: bool,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
@@ -468,6 +480,7 @@ fn run_watch_loop(
                 false,
                 None,
                 None,
+                emit_block_events,
             )?;
             if rendered != new_contents {
                 resolver
@@ -585,6 +598,7 @@ fn run_block_in_place(
             true,
             Some(&forced_lines),
             Some(&mut callback),
+            false,
         )?;
 
         if rendered != contents {
@@ -855,6 +869,7 @@ fn render_shell_outputs(
     only_missing_outputs: bool,
     forced_lines: Option<&HashSet<usize>>,
     on_block_run: Option<&mut dyn FnMut(BlockExecution)>,
+    emit_block_events: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     use comrak::{Arena, nodes::NodeValue, parse_document};
@@ -949,6 +964,7 @@ fn render_shell_outputs(
                         {
                             meta_hash == expected_combined_hash
                                 || meta_hash == expected_combined_short
+
                         } else {
                             let expected_stdout_hash = sha256_hex(&stdout_norm);
                             let expected_stderr_hash = sha256_hex(&stderr_norm);
@@ -969,6 +985,11 @@ fn render_shell_outputs(
             }
 
             if should_run {
+                if emit_block_events {
+                    println!("{WORKER_EVENT_PREFIX} START {block_start_line}");
+                    io::stdout().flush().ok();
+                }
+
                 // Prepare stdin from previous fence
                 let stdin_stream = prev_reader.take();
 
@@ -1047,6 +1068,7 @@ fn render_shell_outputs(
                     Some(capture_stderr.clone()),
                 );
 
+                let mut block_success = false;
                 match run_res {
                     Ok(run_output) => {
                         prev_reader = Some(reader_shared);
@@ -1055,6 +1077,7 @@ fn render_shell_outputs(
                         out_lines.extend(output_block);
                         // advance cursor past any existing output if present
                         cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                        block_success = true;
                         if let Some(cb) = on_block_run.as_mut() {
                             cb(BlockExecution {
                                 start_line: block_start_line,
@@ -1105,6 +1128,14 @@ fn render_shell_outputs(
                             });
                         }
                     }
+                }
+
+                if emit_block_events {
+                    println!(
+                        "{WORKER_EVENT_PREFIX} DONE {block_start_line} {}",
+                        if block_success { "OK" } else { "ERR" }
+                    );
+                    io::stdout().flush().ok();
                 }
             } else if let Some(block) = existing {
                 out_lines.extend(

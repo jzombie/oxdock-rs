@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -23,13 +23,19 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
-use oxbook_cli::WORKER_EVENT_PREFIX;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use oxbook_cli::{BLOCK_EVENT_ENV, WORKER_EVENT_PREFIX};
 
-const RUN_INDICATOR_READY: &str = "○[>]";
-const RUN_INDICATOR_RUNNING: &str = "●[X]";
-const RUN_INDICATOR_DISABLED: &str = "◌[ ]";
-const RUN_INDICATOR_BLANK: &str = "    ";
-const RUN_INDICATOR_WIDTH: usize = 4;
+const STATUS_ICON_READY: &str = "○";
+const STATUS_ICON_RUNNING: &str = "●";
+const STATUS_ICON_DISABLED: &str = "◌";
+const STATUS_ICON_BLANK: &str = " ";
+const RUN_BUTTON_READY: &str = "▶";
+const RUN_BUTTON_RUNNING: &str = "■";
+const RUN_BUTTON_DISABLED: &str = "·";
+const RUN_BUTTON_BLANK: &str = " ";
+const RUN_BUTTON_WIDTH: usize = 1;
 
 fn main() -> Result<()> {
     enum LaunchMode {
@@ -87,6 +93,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let (worker_event_tx, worker_event_rx) = mpsc::channel();
         let mut running_line: Option<usize> = None;
         let mut server_busy = false;
+        let mut pending_runs: VecDeque<usize> = VecDeque::new();
+        let mut pending_run_set: HashSet<usize> = HashSet::new();
         let mut mode = UiMode::Dashboard;
 
         loop {
@@ -113,6 +121,9 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         status = format!("Running block at line {}...", line);
                     }
                     WorkerEvent::Done { line, success } => {
+                        if let UiMode::Editor(editor) = &mut mode {
+                            editor.mark_disk_stale();
+                        }
                         running_line = None;
                         server_busy = false;
                         status = if success {
@@ -120,6 +131,47 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         } else {
                             format!("Block at line {} failed", line)
                         };
+                    }
+                }
+            }
+
+            if !server_busy {
+                if let Some(proc) = server.as_mut() {
+                    if let Some(&line) = pending_runs.front() {
+                        match proc.send_run_command(line) {
+                            Ok(()) => {
+                                let _ = pending_runs.pop_front();
+                                pending_run_set.remove(&line);
+                                server_busy = true;
+                                running_line = Some(line.saturating_sub(1));
+                                status = format!("Running block at line {}...", line);
+                                let mut guard = logs.lock().unwrap();
+                                guard.push_back(LogRecord::new(
+                                    LogSource::Stdout,
+                                    format!("auto-run started for block at line {}\n", line),
+                                ));
+                                trim_logs(&mut guard, MAX_LOG_LINES);
+                            }
+                            Err(err) => {
+                                let mut guard = logs.lock().unwrap();
+                                guard.push_back(LogRecord::new(
+                                    LogSource::Stderr,
+                                    format!(
+                                        "failed to auto-run block at line {}: {}\n",
+                                        line, err
+                                    ),
+                                ));
+                                trim_logs(&mut guard, MAX_LOG_LINES);
+                                status = String::from(
+                                    "Auto-run failed; restart the server with 'r'",
+                                );
+                                server_busy = false;
+                                if let Some(mut proc) = server.take() {
+                                    let _ = proc.child.kill();
+                                    let _ = proc.child.wait();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -162,7 +214,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             format!("Target: {}", cli_args.join(" "))
                         };
                         let mut controls_view = ControlsView::new(format!(
-                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session.\nIn the editor view, click ( ) to run a code block."
+                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session.\nIn the editor view, click ▶ beside a code block to run it."
                         ));
                         controls_view.render(f, mid[0]);
                     }
@@ -223,6 +275,20 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                 );
                                                 continue;
                                             }
+                                            let saved_blocks = editor.take_recently_saved_blocks();
+                                            let other_blocks: Vec<usize> = saved_blocks
+                                                .into_iter()
+                                                .filter(|line| *line != line_number)
+                                                .collect();
+                                            if !other_blocks.is_empty() {
+                                                enqueue_pending_runs(
+                                                    &mut pending_runs,
+                                                    &mut pending_run_set,
+                                                    &logs,
+                                                    MAX_LOG_LINES,
+                                                    &other_blocks,
+                                                );
+                                            }
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stdout,
@@ -234,6 +300,11 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             ));
                                             trim_logs(&mut guard, MAX_LOG_LINES);
                                         }
+                                        remove_pending_run(
+                                            &mut pending_runs,
+                                            &mut pending_run_set,
+                                            line_number,
+                                        );
                                         if let Err(err) = server_proc.send_run_command(line_number) {
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
@@ -309,6 +380,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     ) {
                                         Ok(new_child) => {
                                             status = String::from("Running...");
+                                            server_busy = true;
                                             server = Some(new_child);
                                         }
                                         Err(err) => {
@@ -342,6 +414,16 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             UiMode::Editor(editor) => {
                                 let action = editor.handle_key(key_event)?;
                                 let message = editor.take_status_message();
+                                let changed_blocks = editor.take_recently_saved_blocks();
+                                if !changed_blocks.is_empty() {
+                                    enqueue_pending_runs(
+                                        &mut pending_runs,
+                                        &mut pending_run_set,
+                                        &logs,
+                                        MAX_LOG_LINES,
+                                        &changed_blocks,
+                                    );
+                                }
                                 if matches!(action, EditorAction::Exit) {
                                     let closed = editor.short_path();
                                     status = if let Some(msg) = message {
@@ -410,6 +492,8 @@ struct EditorState {
     code_blocks: Vec<CodeBlockMeta>,
     code_blocks_dirty: bool,
     render_info: Option<EditorRenderInfo>,
+    saved_block_hashes: HashMap<usize, u64>,
+    recently_saved_blocks: Vec<usize>,
 }
 
 struct LineRender {
@@ -419,14 +503,14 @@ struct LineRender {
 
 struct VisibleLines {
     lines: Vec<LineRender>,
-    digits_width: usize,
     arrow_width: usize,
+    arrow_offset: usize,
 }
 
 #[derive(Clone)]
 struct CodeBlockMeta {
     fence_line: usize,
-    _close_line: usize,
+    end_line: usize,
     _info: String,
 }
 
@@ -436,8 +520,8 @@ struct EditorRenderInfo {
     inner_width: u16,
     inner_height: u16,
     prefix_width: usize,
-    digits_width: usize,
     arrow_width: usize,
+    arrow_offset: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -469,6 +553,7 @@ impl EditorState {
     fn load(path: PathBuf) -> Result<Self> {
         let (lines, last_disk_mtime) = Self::read_disk_snapshot(&path)?;
         let code_blocks = Self::compute_code_blocks(&lines);
+        let saved_block_hashes = Self::compute_block_hashes(&lines, &code_blocks);
         Ok(Self {
             path,
             lines,
@@ -481,6 +566,8 @@ impl EditorState {
             code_blocks,
             code_blocks_dirty: false,
             render_info: None,
+            saved_block_hashes,
+            recently_saved_blocks: Vec::new(),
         })
     }
 
@@ -538,6 +625,8 @@ impl EditorState {
         self.code_blocks = Self::compute_code_blocks(&self.lines);
         self.code_blocks_dirty = false;
         self.render_info = None;
+        self.saved_block_hashes = Self::compute_block_hashes(&self.lines, &self.code_blocks);
+        self.recently_saved_blocks.clear();
         Ok(Some(format!("Reloaded {}", self.short_path())))
     }
 
@@ -597,8 +686,8 @@ impl EditorState {
         if viewport_height == 0 {
             return VisibleLines {
                 lines: Vec::new(),
-                digits_width: digits(self.lines.len().max(1)),
-                arrow_width: RUN_INDICATOR_WIDTH,
+                arrow_width: RUN_BUTTON_WIDTH,
+                arrow_offset: 0,
             };
         }
 
@@ -606,34 +695,51 @@ impl EditorState {
 
         let total_lines = self.lines.len().max(1);
         let digits_width = digits(total_lines);
-        let prefix_display_width = digits_width + 1 + RUN_INDICATOR_WIDTH + 3;
+        let status_icon_width = STATUS_ICON_READY.chars().count();
+        let run_button_width = RUN_BUTTON_WIDTH;
+        let run_button_offset = status_icon_width + 1 + digits_width + 1;
         let end = (self.scroll_row + viewport_height).min(self.lines.len());
         let mut rendered = Vec::with_capacity(end.saturating_sub(self.scroll_row));
         for idx in self.scroll_row..end {
             let number = idx + 1;
             let arrow = if self.is_code_block_start(idx) {
                 if Some(idx) == running_block {
-                    RUN_INDICATOR_RUNNING
+                    STATUS_ICON_RUNNING
                 } else if can_run_blocks {
-                    RUN_INDICATOR_READY
+                    STATUS_ICON_READY
                 } else {
-                    RUN_INDICATOR_DISABLED
+                    STATUS_ICON_DISABLED
                 }
             } else {
-                RUN_INDICATOR_BLANK
+                STATUS_ICON_BLANK
             };
-            let prefix = format!("{:>width$} {} | ", number, arrow, width = digits_width);
+            let run_button = if self.is_code_block_start(idx) {
+                if Some(idx) == running_block {
+                    RUN_BUTTON_RUNNING
+                } else if can_run_blocks {
+                    RUN_BUTTON_READY
+                } else {
+                    RUN_BUTTON_DISABLED
+                }
+            } else {
+                RUN_BUTTON_BLANK
+            };
+            let prefix = format!(
+                "{arrow} {:>width$} {run_button} │ ",
+                number,
+                width = digits_width
+            );
             let display = format!("{prefix}{}", self.lines[idx]);
             rendered.push(LineRender {
                 display,
-                prefix_width: prefix_display_width,
+                prefix_width: prefix.chars().count(),
             });
         }
 
         VisibleLines {
             lines: rendered,
-            digits_width,
-            arrow_width: RUN_INDICATOR_WIDTH,
+            arrow_width: run_button_width,
+            arrow_offset: run_button_offset,
         }
     }
 
@@ -682,11 +788,30 @@ impl EditorState {
         self.pending_status.take()
     }
 
+    fn mark_disk_stale(&mut self) {
+        if self.dirty {
+            return;
+        }
+        self.last_disk_mtime = None;
+    }
+
     fn save(&mut self) -> Result<()> {
         let contents = self.lines.join("\n");
         fs::write(&self.path, contents)?;
         self.dirty = false;
         self.last_disk_mtime = Self::disk_mtime(&self.path);
+        self.ensure_code_blocks();
+        let new_hashes = Self::compute_block_hashes(&self.lines, &self.code_blocks);
+        let mut changed = Vec::new();
+        for (line, hash) in &new_hashes {
+            if self.saved_block_hashes.get(line) != Some(hash) {
+                changed.push(*line);
+            }
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        self.recently_saved_blocks = changed;
+        self.saved_block_hashes = new_hashes;
         Ok(())
     }
 
@@ -820,8 +945,9 @@ impl EditorState {
             return None;
         }
 
-        let arrow_start = info.digits_width + 1;
-        if rel_x < arrow_start || rel_x >= arrow_start + info.arrow_width {
+        let arrow_start = info.arrow_offset;
+        let arrow_end = arrow_start + info.arrow_width;
+        if rel_x < arrow_start || rel_x >= arrow_end {
             return None;
         }
 
@@ -846,6 +972,25 @@ impl EditorState {
             self.code_blocks = Self::compute_code_blocks(&self.lines);
             self.code_blocks_dirty = false;
         }
+    }
+
+    fn compute_block_hashes(lines: &[String], blocks: &[CodeBlockMeta]) -> HashMap<usize, u64> {
+        let mut hashes = HashMap::new();
+        for block in blocks {
+            let mut hasher = DefaultHasher::new();
+            let mut idx = block.fence_line;
+            while idx <= block.end_line && idx < lines.len() {
+                lines[idx].hash(&mut hasher);
+                '\n'.hash(&mut hasher);
+                idx += 1;
+            }
+            hashes.insert(block.fence_line + 1, hasher.finish());
+        }
+        hashes
+    }
+
+    fn take_recently_saved_blocks(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.recently_saved_blocks)
     }
 
     fn is_code_block_start(&self, line_idx: usize) -> bool {
@@ -876,7 +1021,7 @@ impl EditorState {
                     {
                         blocks.push(CodeBlockMeta {
                             fence_line: open.start,
-                            _close_line: idx,
+                            end_line: idx,
                             _info: open.info.clone(),
                         });
                         current = None;
@@ -900,7 +1045,7 @@ impl EditorState {
         if let Some(open) = current {
             blocks.push(CodeBlockMeta {
                 fence_line: open.start,
-                _close_line: lines.len().saturating_sub(1),
+                end_line: lines.len().saturating_sub(1),
                 _info: open.info,
             });
         }
@@ -1039,8 +1184,8 @@ impl<'a> FramedView for EditorView<'a> {
                 .first()
                 .map(|line| line.prefix_width)
                 .unwrap_or(0),
-            digits_width: visible.digits_width,
             arrow_width: visible.arrow_width,
+            arrow_offset: visible.arrow_offset,
         });
 
         let cursor_row = self
@@ -1338,6 +1483,44 @@ fn push_log_line(
     trim_logs(&mut guard, max_logs);
 }
 
+fn enqueue_pending_runs(
+    queue: &mut VecDeque<usize>,
+    set: &mut HashSet<usize>,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+    lines: &[usize],
+) {
+    if lines.is_empty() {
+        return;
+    }
+    let mut guard_opt: Option<std::sync::MutexGuard<'_, VecDeque<LogRecord>>> = None;
+    for &line in lines {
+        if line == 0 {
+            continue;
+        }
+        if set.insert(line) {
+            queue.push_back(line);
+            if guard_opt.is_none() {
+                guard_opt = Some(logs.lock().unwrap());
+            }
+            if let Some(ref mut guard) = guard_opt {
+                guard.push_back(LogRecord::new(
+                    LogSource::Stdout,
+                    format!("queued auto-run for block at line {}\n", line),
+                ));
+                trim_logs(guard, max_logs);
+            }
+        }
+    }
+}
+
+fn remove_pending_run(queue: &mut VecDeque<usize>, set: &mut HashSet<usize>, line: usize) {
+    if !set.remove(&line) {
+        return;
+    }
+    queue.retain(|&value| value != line);
+}
+
 fn spawn_cli_child(
     cli_args: &[String],
     logs: Arc<Mutex<VecDeque<LogRecord>>>,
@@ -1362,6 +1545,7 @@ fn spawn_cli_command(
     cmd.env("FORCE_COLOR", "1");
     cmd.env("NO_COLOR", "0");
     cmd.env("OXBOOK_STREAM_STDOUT", "1");
+    cmd.env(BLOCK_EVENT_ENV, "1");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
