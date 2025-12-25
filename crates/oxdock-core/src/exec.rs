@@ -32,9 +32,7 @@ impl PipeEndpoint {
     fn to_stream_handle(&self) -> StreamHandle {
         match self {
             PipeEndpoint::Stream(writer) => StreamHandle::Stream(writer.clone()),
-            PipeEndpoint::Script(endpoint) => {
-                StreamHandle::Stream(endpoint.stream_handle())
-            }
+            PipeEndpoint::Script(endpoint) => StreamHandle::Stream(endpoint.stream_handle()),
             PipeEndpoint::Inherit => StreamHandle::Inherit,
         }
     }
@@ -145,9 +143,7 @@ impl PipeInner {
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, PipeState> {
-        self.state
-            .lock()
-            .expect("script pipe state poisoned")
+        self.state.lock().expect("script pipe state poisoned")
     }
 }
 
@@ -1896,5 +1892,4 @@ mod tests {
         assert_eq!(runs[0].script, "cat");
         assert_eq!(runs[0].stdin, Some(b"hello world".to_vec()));
     }
-
 }

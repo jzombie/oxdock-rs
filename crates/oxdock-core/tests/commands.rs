@@ -173,7 +173,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "client/dist/hello.txt".into(),
-                    contents: Some("hi".into()),
+                contents: Some("hi".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -240,7 +240,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "nested.txt".into(),
-                    contents: Some("nested".into()),
+                contents: Some("nested".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -261,7 +261,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "local_note.txt".into(),
-                    contents: Some("local".into()),
+                contents: Some("local".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -282,7 +282,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "snap_note.txt".into(),
-                    contents: Some("snap".into()),
+                contents: Some("snap".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -425,17 +425,15 @@ fn write_cmd_captures_output() {
 fn capture_echo_interpolates_env() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Env {
-                key: "FOO".into(),
-                value: "hi".into(),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Env {
+            key: "FOO".into(),
+            value: "hi".into(),
         },
-    ];
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
     let mut steps = steps;
     steps.extend(
         capture_pipeline(
@@ -459,14 +457,12 @@ fn capture_ls_lists_entries_with_header() {
     write_text(&dir.join("a.txt").unwrap(), "a");
     write_text(&dir.join("b.txt").unwrap(), "b");
 
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Workdir("items".into()),
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-    ];
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("items".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
     let mut steps = steps;
     steps.extend(capture_pipeline("cap-ls", "ls.txt", *parse_one("LS")));
 
@@ -502,14 +498,12 @@ fn capture_cat_emits_file_contents() {
 fn capture_cwd_canonicalizes_and_writes() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
-    let steps = vec![
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::Workdir("a/b".into()),
-            scope_enter: 0,
-            scope_exit: 0,
-        },
-    ];
+    let steps = vec![Step {
+        guards: Vec::new(),
+        kind: StepKind::Workdir("a/b".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
     let mut steps = steps;
     steps.extend(capture_pipeline("cap-cwd", "pwd.txt", *parse_one("CWD")));
 
@@ -765,10 +759,10 @@ fn write_cannot_escape_root() {
     let root = guard_root(&temp);
     let steps = vec![Step {
         guards: Vec::new(),
-            kind: StepKind::Write {
-                path: "../escape.txt".into(),
-                contents: Some("nope".into()),
-            },
+        kind: StepKind::Write {
+            path: "../escape.txt".into(),
+            contents: Some("nope".into()),
+        },
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -960,11 +954,11 @@ fn write_missing_path_cannot_escape_root() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-            kind: StepKind::Write {
-                // Ancestor exists inside root, but remaining components attempt to climb out.
-                path: "a/b/../../../../outside.txt".into(),
-                contents: Some("nope".into()),
-            },
+        kind: StepKind::Write {
+            // Ancestor exists inside root, but remaining components attempt to climb out.
+            path: "a/b/../../../../outside.txt".into(),
+            contents: Some("nope".into()),
+        },
         scope_enter: 0,
         scope_exit: 0,
     }];
