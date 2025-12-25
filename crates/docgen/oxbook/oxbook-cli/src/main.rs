@@ -25,10 +25,11 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use oxbook_cli::WORKER_EVENT_PREFIX;
 
-const RUN_GLYPH_IDLE: &str = "[>]";
-const RUN_GLYPH_RUNNING: &str = "[X]";
-const RUN_GLYPH_BLANK: &str = "   ";
-const RUN_GLYPH_WIDTH: usize = RUN_GLYPH_IDLE.len();
+const RUN_INDICATOR_READY: &str = "○[>]";
+const RUN_INDICATOR_RUNNING: &str = "●[X]";
+const RUN_INDICATOR_DISABLED: &str = "◌[ ]";
+const RUN_INDICATOR_BLANK: &str = "    ";
+const RUN_INDICATOR_WIDTH: usize = 4;
 
 fn main() -> Result<()> {
     enum LaunchMode {
@@ -85,6 +86,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let mut server: Option<ServerProcess> = None;
         let (worker_event_tx, worker_event_rx) = mpsc::channel();
         let mut running_line: Option<usize> = None;
+        let mut server_busy = false;
         let mut mode = UiMode::Dashboard;
 
         loop {
@@ -99,6 +101,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     server = None;
                     status = String::from("Idle");
                     running_line = None;
+                    server_busy = false;
                 }
             }
 
@@ -106,10 +109,12 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                 match event {
                     WorkerEvent::Started(line) => {
                         running_line = Some(line.saturating_sub(1));
+                        server_busy = true;
                         status = format!("Running block at line {}...", line);
                     }
                     WorkerEvent::Done { line, success } => {
                         running_line = None;
+                        server_busy = false;
                         status = if success {
                             format!("Block at line {} completed", line)
                         } else {
@@ -157,12 +162,14 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             format!("Target: {}", cli_args.join(" "))
                         };
                         let mut controls_view = ControlsView::new(format!(
-                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session.\nIn the editor view, click [>] to run a code block."
+                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session.\nIn the editor view, click ( ) to run a code block."
                         ));
                         controls_view.render(f, mid[0]);
                     }
                     UiMode::Editor(editor) => {
-                        let mut editor_view = EditorView::new(editor, running_line);
+                        let can_run_blocks = server.is_some() && !server_busy;
+                        let mut editor_view =
+                            EditorView::new(editor, running_line, can_run_blocks);
                         editor_view.render(f, mid[0]);
                     }
                 }
@@ -184,6 +191,21 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 {
                                     let line_number = line_idx + 1;
                                     if let Some(server_proc) = server.as_mut() {
+                                        if server_busy {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stdout,
+                                                format!(
+                                                    "server busy; wait for the current run before executing line {}\n",
+                                                    line_number
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = String::from(
+                                                "Server busy; wait for current run to finish",
+                                            );
+                                            continue;
+                                        }
                                         if editor.is_dirty() {
                                             if let Err(err) = editor.save() {
                                                 let mut guard = logs.lock().unwrap();
@@ -227,6 +249,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                 line_number
                                             );
                                         } else {
+                                            server_busy = true;
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stdout,
@@ -569,12 +592,13 @@ impl EditorState {
         &mut self,
         viewport_height: usize,
         running_block: Option<usize>,
+        can_run_blocks: bool,
     ) -> VisibleLines {
         if viewport_height == 0 {
             return VisibleLines {
                 lines: Vec::new(),
                 digits_width: digits(self.lines.len().max(1)),
-                arrow_width: RUN_GLYPH_WIDTH,
+                arrow_width: RUN_INDICATOR_WIDTH,
             };
         }
 
@@ -582,31 +606,34 @@ impl EditorState {
 
         let total_lines = self.lines.len().max(1);
         let digits_width = digits(total_lines);
+        let prefix_display_width = digits_width + 1 + RUN_INDICATOR_WIDTH + 3;
         let end = (self.scroll_row + viewport_height).min(self.lines.len());
         let mut rendered = Vec::with_capacity(end.saturating_sub(self.scroll_row));
         for idx in self.scroll_row..end {
             let number = idx + 1;
             let arrow = if self.is_code_block_start(idx) {
                 if Some(idx) == running_block {
-                    RUN_GLYPH_RUNNING
+                    RUN_INDICATOR_RUNNING
+                } else if can_run_blocks {
+                    RUN_INDICATOR_READY
                 } else {
-                    RUN_GLYPH_IDLE
+                    RUN_INDICATOR_DISABLED
                 }
             } else {
-                RUN_GLYPH_BLANK
+                RUN_INDICATOR_BLANK
             };
             let prefix = format!("{:>width$} {} | ", number, arrow, width = digits_width);
             let display = format!("{prefix}{}", self.lines[idx]);
             rendered.push(LineRender {
                 display,
-                prefix_width: prefix.len(),
+                prefix_width: prefix_display_width,
             });
         }
 
         VisibleLines {
             lines: rendered,
             digits_width,
-            arrow_width: RUN_GLYPH_WIDTH,
+            arrow_width: RUN_INDICATOR_WIDTH,
         }
     }
 
@@ -958,13 +985,19 @@ impl FramedView for ControlsView {
 struct EditorView<'a> {
     editor: &'a mut EditorState,
     running_block: Option<usize>,
+    can_run_blocks: bool,
 }
 
 impl<'a> EditorView<'a> {
-    fn new(editor: &'a mut EditorState, running_block: Option<usize>) -> Self {
+    fn new(
+        editor: &'a mut EditorState,
+        running_block: Option<usize>,
+        can_run_blocks: bool,
+    ) -> Self {
         Self {
             editor,
             running_block,
+            can_run_blocks,
         }
     }
 }
@@ -983,9 +1016,11 @@ impl<'a> FramedView for EditorView<'a> {
 
         let viewport = inner.height as usize;
         self.editor.adjust_scroll(viewport);
-        let visible = self
-            .editor
-            .visible_lines_for_render(viewport, self.running_block);
+        let visible = self.editor.visible_lines_for_render(
+            viewport,
+            self.running_block,
+            self.can_run_blocks,
+        );
         let text = visible
             .lines
             .iter()
