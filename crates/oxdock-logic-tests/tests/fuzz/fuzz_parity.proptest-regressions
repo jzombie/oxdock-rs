@@ -20,3 +20,4 @@ cc 3d26e2a85361cc6db9b17d51d0395a7826a01a5a2fa33c6484ee0b7d42d84055 # shrinks to
 cc fc16d40cece3f55720ec7240cd77cfdc5f1d26fae45d0a4833b5579b7070bbd0 # shrinks to step = Step { guards: [], kind: CaptureToFile { path: "_", cmd: "A-" }, scope_enter: 0, scope_exit: 0 }
 cc 225a844a8ed42b724d00ef3518f7d4c06f27ba1b37d6be839ce2d23f44d0daae # shrinks to step = Step { guards: [], kind: RunBg("A-"), scope_enter: 0, scope_exit: 0 }
 cc ce444b4061a408b04a3f274da866482d4a9d0133e3853a6c8c39bbb60bbddd4e # shrinks to step = Step { guards: [], kind: RunBg("A.0b 0"), scope_enter: 0, scope_exit: 0 }
+cc dd984c57e4e896d57c4c41ddb3b1d70912324255323e74035cf4cc6516cd7468 # shrinks to step = Step { guards: [], kind: InheritEnv { keys: ["_"] }, scope_enter: 0, scope_exit: 0 }

@@ -170,7 +170,10 @@ fn arb_step() -> impl Strategy<Value = Step> {
             scope_enter: 0,
             scope_exit: 0,
         })
-        .prop_filter("Avoids ambiguous inputs", |_step| true)
+        .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
+            StepKind::InheritEnv { .. } => step.guards.is_empty(),
+            _ => true,
+        })
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {

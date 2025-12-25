@@ -564,11 +564,11 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                     Rule::inherit_list => {
                         for key in inner.into_inner() {
                             if key.as_rule() == Rule::env_key {
-                                keys.push(key.as_str().to_string());
+                                keys.push(key.as_str().trim().to_string());
                             }
                         }
                     }
-                    Rule::env_key => keys.push(inner.as_str().to_string()),
+                    Rule::env_key => keys.push(inner.as_str().trim().to_string()),
                     _ => {}
                 }
             }
