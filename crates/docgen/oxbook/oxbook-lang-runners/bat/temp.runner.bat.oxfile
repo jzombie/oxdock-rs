@@ -1,7 +1,12 @@
-[platform==windows, env:OXBOOK_SNIPPET_PATH]
+INHERIT_ENV [
+    OXBOOK_SNIPPET_PATH,
+    OXBOOK_SNIPPET_DIR
+]
+
+[windows, env:OXBOOK_SNIPPET_PATH]
 WITH_IO [stdin] RUN "{{ env:OXBOOK_SNIPPET_PATH }}"
 
-[platform==unix] {
+[unix] {
     ECHO Batch commands only available on Windows.
     EXIT 1
 }

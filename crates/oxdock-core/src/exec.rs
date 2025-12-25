@@ -214,6 +214,7 @@ pub struct ExecIo {
     stderr: Option<SharedOutput>,
     input_pipes: HashMap<String, SharedInput>,
     output_pipes: HashMap<String, PipeOutputs>,
+    inherit_env_overrides: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -271,6 +272,14 @@ impl ExecIo {
 
     pub fn set_stderr(&mut self, stderr: Option<SharedOutput>) {
         self.stderr = stderr;
+    }
+
+    pub fn insert_inherit_env<S: Into<String>, V: Into<String>>(&mut self, key: S, value: V) {
+        self.inherit_env_overrides.insert(key.into(), value.into());
+    }
+
+    pub fn inherit_env_value(&self, key: &str) -> Option<&String> {
+        self.inherit_env_overrides.get(key)
     }
 
     pub fn insert_input_pipe<S: Into<String>>(&mut self, name: S, reader: SharedInput) {
@@ -597,7 +606,12 @@ fn execute_steps<P: ProcessManager>(
             match &step.kind {
                 StepKind::InheritEnv { keys } => {
                     for key in keys {
-                        if let Ok(value) = std::env::var(key) {
+                        if let Some(value) = state
+                            .io
+                            .inherit_env_value(key)
+                            .cloned()
+                            .or_else(|| std::env::var(key).ok())
+                        {
                             state.envs.insert(key.clone(), value);
                         }
                     }

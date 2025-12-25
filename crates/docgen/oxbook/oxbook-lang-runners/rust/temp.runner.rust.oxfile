@@ -2,6 +2,12 @@
 # Rust Runner Setup
 # ==========================================
 
+INHERIT_ENV [
+    OXBOOK_RUNNER_DIR,
+    OXBOOK_SNIPPET_PATH,
+    OXBOOK_SNIPPET_DIR
+]
+
 [!env:OXBOOK_SNIPPET_PATH] {
     # 1. Prepare the workspace
     WORKDIR /oxbook-runner

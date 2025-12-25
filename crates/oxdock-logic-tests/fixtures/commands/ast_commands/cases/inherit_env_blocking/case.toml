@@ -2,7 +2,7 @@ name = "inherit_env_blocking"
 
 [env]
 FOO = "foo-val"
-UNLISTED = "leak-val"
+OXBOOK_RUNNER_DIR = "/leak"
 
 [expect]
-files = { "one.txt" = "one=foo-val", "two.txt" = "two=" }
+files = { "one.txt" = "one=foo-val", "runner.txt" = "runner=" }

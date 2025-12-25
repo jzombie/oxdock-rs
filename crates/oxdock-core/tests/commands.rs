@@ -75,7 +75,7 @@ fn create_dirs(path: &GuardedPath) {
     resolver.create_dir_all(path).unwrap();
 }
 
-use oxdock_sys_test_utils::can_create_symlinks;
+use oxdock_sys_test_utils::{TestEnvGuard, can_create_symlinks};
 
 fn exists(root: &GuardedPath, rel: &str) -> bool {
     root.join(rel).map(|p| p.exists()).unwrap_or(false)
@@ -350,6 +350,51 @@ fn commands_behave_cross_platform() {
     assert_eq!(
         read_trimmed(&snapshot.join("snap_note.txt").unwrap()),
         "snap"
+    );
+}
+
+#[test]
+fn inherit_env_reads_exec_io_override() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
+    );
+}
+
+#[test]
+fn inherit_env_override_precedes_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
     );
 }
 
