@@ -612,7 +612,7 @@ fn execute_steps<P: ProcessManager>(
             }
         }
 
-        let should_run = oxdock_parser::guards_allow_any(&step.guards, &state.envs);
+        let should_run = oxdock_parser::guard_option_allows(step.guard.as_ref(), &state.envs);
         let step_result: Result<()> = if !should_run {
             Ok(())
         } else {
@@ -1021,7 +1021,7 @@ fn execute_steps<P: ProcessManager>(
                 }
                 StepKind::WithIo { bindings, cmd } => {
                     let inner_step = Step {
-                        guards: Vec::new(),
+                        guard: None,
                         kind: *cmd.clone(),
                         scope_enter: 0,
                         scope_exit: 0,
@@ -1330,7 +1330,7 @@ fn hash_path(
 mod tests {
     use super::*;
     use oxdock_fs::{GuardedPath, MockFs};
-    use oxdock_parser::{Guard, IoBinding, IoStream};
+    use oxdock_parser::{Guard, GuardExpr, IoBinding, IoStream};
     use oxdock_process::{MockProcessManager, MockRunCall};
     use std::collections::HashMap;
 
@@ -1339,7 +1339,7 @@ mod tests {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "FOO".into(),
                     value: "bar".into(),
@@ -1348,7 +1348,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Run("echo hi".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1380,7 +1380,7 @@ mod tests {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "FOO".into(),
                     value: "bar".into(),
@@ -1389,7 +1389,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Run("echo {{ env:FOO }}".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1408,13 +1408,13 @@ mod tests {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::RunBg("sleep".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Run("echo after".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1438,13 +1438,13 @@ mod tests {
         let root = GuardedPath::new_root_from_str(".").unwrap();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::RunBg("bg-task".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Exit(5),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1467,13 +1467,13 @@ mod tests {
         let root = temp.as_guarded_path().clone();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Mkdir("client".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Symlink {
                     from: "client".into(),
                     to: "client".into(),
@@ -1504,13 +1504,13 @@ mod tests {
         };
         let steps = vec![
             Step {
-                guards: vec![vec![guard.clone()]],
+                guard: Some(guard.clone().into()),
                 kind: StepKind::Run("echo first".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "READY".into(),
                     value: "1".into(),
@@ -1519,7 +1519,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: vec![vec![guard]],
+                guard: Some(guard.into()),
                 kind: StepKind::Run("echo second".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1548,7 +1548,7 @@ mod tests {
         };
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "MODE".into(),
                     value: "beta".into(),
@@ -1557,7 +1557,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: vec![vec![guard_alpha], vec![guard_beta]],
+                guard: Some(GuardExpr::or(vec![guard_alpha.into(), guard_beta.into()])),
                 kind: StepKind::Run("echo guarded".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1575,7 +1575,7 @@ mod tests {
     fn with_io_pipe_routes_stdout_to_run_stdin() {
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::WithIo {
                     bindings: vec![IoBinding {
                         stream: IoStream::Stdout,
@@ -1587,7 +1587,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::WithIo {
                     bindings: vec![IoBinding {
                         stream: IoStream::Stdin,
@@ -1653,19 +1653,19 @@ mod tests {
     fn mock_fs_handles_workdir_and_write() {
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Mkdir("app".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Workdir("app".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Write {
                     path: "out.txt".into(),
                     contents: Some("hi".into()),
@@ -1674,7 +1674,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Read(Some("out.txt".into())),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1692,7 +1692,7 @@ mod tests {
     fn write_interpolates_env_values() {
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "FOO".into(),
                     value: "bar".into(),
@@ -1701,7 +1701,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "BAZ".into(),
                     value: "{{ env:FOO }}-baz".into(),
@@ -1710,7 +1710,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Write {
                     path: "out.txt".into(),
                     contents: Some("val {{ env:BAZ }}".into()),
@@ -1737,7 +1737,7 @@ mod tests {
         let root = temp.as_guarded_path().clone();
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Write {
                     path: "snippet.txt".into(),
                     contents: Some("payload".into()),
@@ -1746,7 +1746,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "SNIPPET".into(),
                     value: "snippet.txt".into(),
@@ -1755,7 +1755,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Env {
                     key: "OUT_FILE".into(),
                     value: "cat-{{ env:SNIPPET }}".into(),
@@ -1764,7 +1764,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::WithIo {
                     bindings: vec![IoBinding {
                         stream: IoStream::Stdout,
@@ -1776,7 +1776,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::WithIo {
                     bindings: vec![IoBinding {
                         stream: IoStream::Stdin,
@@ -1804,7 +1804,7 @@ mod tests {
     fn final_cwd_tracks_last_workdir() {
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Write {
                     path: "temp.txt".into(),
                     contents: Some("123".into()),
@@ -1813,7 +1813,7 @@ mod tests {
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Workdir("sub".into()),
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1837,19 +1837,19 @@ mod tests {
     fn mock_fs_normalizes_backslash_workdir() {
         let steps = vec![
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Mkdir("win\\nested".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Workdir("win\\nested".into()),
                 scope_enter: 0,
                 scope_exit: 0,
             },
             Step {
-                guards: Vec::new(),
+                guard: None,
                 kind: StepKind::Write {
                     path: "inner.txt".into(),
                     contents: Some("ok".into()),
@@ -1877,7 +1877,7 @@ mod tests {
     #[test]
     fn mock_fs_rejects_absolute_windows_paths() {
         let steps = vec![Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir(r"C:\outside".into()),
             scope_enter: 0,
             scope_exit: 0,
@@ -1907,7 +1907,7 @@ mod tests {
     #[test]
     fn with_stdin_passes_content_to_run() {
         let steps = vec![Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::WithIo {
                 bindings: vec![IoBinding {
                     stream: IoStream::Stdin,

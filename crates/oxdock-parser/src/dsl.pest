@@ -19,13 +19,27 @@ block_start = { "{" }
 
 block_end = { "}" }
 
-guard_line = { "[" ~ ws? ~ guard_groups ~ ws? ~ "]" }
+guard_line = { "[" ~ ws? ~ guard_expr ~ ws? ~ "]" }
 
-guard_groups = { guard_conjunction ~ ( "|" ~ guard_conjunction )* }
+guard_expr = { guard_seq }
 
-guard_conjunction = { guard_term ~ ( "," ~ guard_term )* }
+guard_seq = { guard_factor ~ ( ws? ~ "," ~ ws? ~ guard_factor )* }
 
-guard_term = { ws? ~ invert? ~ guard_predicate ~ ws? }
+guard_factor = { guard_not }
+
+guard_not = { (invert ~ ws?)* ~ guard_primary }
+
+guard_primary = _{ guard_group | guard_or_call | guard_term }
+
+guard_group = { "(" ~ ws? ~ guard_expr ~ ws? ~ ")" }
+
+guard_or_call = { or_kw ~ "(" ~ ws? ~ guard_expr_list ~ ws? ~ ")" }
+
+or_kw = _{ "or" }
+
+guard_expr_list = { guard_expr ~ ( ws? ~ "," ~ ws? ~ guard_expr )* }
+
+guard_term = { ws? ~ guard_predicate ~ ws? }
 
 invert = { "!" }
 
@@ -37,7 +51,7 @@ env_prefix = { "env" ~ ":" }
 
 env_key = @{ guard_key_char+ }
 
-guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | "]" | linebreak | "//" | "/*" ) ~ ANY }
+guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | ")" | "]" | linebreak | "//" | "/*" ) ~ ANY }
 
 env_comparison = { not_equals_env | equals_env }
 
@@ -47,7 +61,7 @@ not_equals_env = { neq_op ~ env_value }
 
 env_value = @{ guard_value_char+ }
 
-guard_value_char = _{ !( "," | "|" | "]" | linebreak | "//" | "/*" ) ~ ANY }
+guard_value_char = _{ !( "," | "|" | ")" | "]" | linebreak | "//" | "/*" ) ~ ANY }
 
 
 eq_op = { "==" }

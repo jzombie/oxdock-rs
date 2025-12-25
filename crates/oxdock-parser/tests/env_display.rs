@@ -12,7 +12,7 @@ fn env_equals_display_prefers_not_equals() {
     assert_eq!(guard.to_string(), "env:A!=1");
 
     let step = Step {
-        guards: vec![vec![guard.clone()]],
+        guard: Some(guard.clone().into()),
         kind: StepKind::Workdir("a".into()),
         scope_enter: 0,
         scope_exit: 0,

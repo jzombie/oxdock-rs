@@ -22,7 +22,7 @@ fn incremental_execution_persists_filesystem_state() {
 
     // First execution: Create a file
     let steps1 = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Write {
             path: "state.txt".into(),
             contents: Some("initial".into()),
@@ -37,7 +37,7 @@ fn incremental_execution_persists_filesystem_state() {
     // Second execution: Modify the file
     // This simulates a second command running against the same environment (filesystem)
     let steps2 = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         #[allow(clippy::disallowed_macros)]
         kind: StepKind::Run(if cfg!(windows) {
             "echo updated> state.txt".into()
@@ -60,13 +60,13 @@ fn incremental_execution_persists_cwd() {
     // First execution: Create a directory and file inside it
     let steps1 = vec![
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Mkdir("subdir".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "subdir/marker.txt".into(),
                 contents: Some("here".into()),
@@ -82,7 +82,7 @@ fn incremental_execution_persists_cwd() {
     // Note: run_steps resets CWD to root by default unless we pass a modified context.
     // But here we just want to verify the file exists.
     let steps2 = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         #[allow(clippy::disallowed_macros)]
         kind: StepKind::Run(if cfg!(windows) {
             "type subdir\\marker.txt".into()

@@ -122,6 +122,70 @@ pub enum Guard {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub enum GuardExpr {
+    Predicate(Guard),
+    All(Vec<GuardExpr>),
+    Or(Vec<GuardExpr>),
+    Not(Box<GuardExpr>),
+}
+
+impl GuardExpr {
+    pub fn all(exprs: Vec<GuardExpr>) -> GuardExpr {
+        let mut flat = Vec::new();
+        for expr in exprs {
+            match expr {
+                GuardExpr::All(children) => flat.extend(children),
+                other => flat.push(other),
+            }
+        }
+        match flat.len() {
+            0 => panic!("GuardExpr::all requires at least one expression"),
+            1 => flat.into_iter().next().unwrap(),
+            _ => GuardExpr::All(flat),
+        }
+    }
+
+    pub fn or(exprs: Vec<GuardExpr>) -> GuardExpr {
+        let mut flat = Vec::new();
+        for expr in exprs {
+            match expr {
+                GuardExpr::Or(children) => flat.extend(children),
+                other => flat.push(other),
+            }
+        }
+        match flat.len() {
+            0 => panic!("GuardExpr::or requires at least one expression"),
+            1 => flat.into_iter().next().unwrap(),
+            _ => GuardExpr::Or(flat),
+        }
+    }
+
+    pub fn invert(expr: GuardExpr) -> GuardExpr {
+        match expr {
+            GuardExpr::Not(inner) => *inner,
+            other => GuardExpr::Not(Box::new(other)),
+        }
+    }
+}
+
+impl std::ops::Not for GuardExpr {
+    type Output = GuardExpr;
+
+    fn not(self) -> GuardExpr {
+        match self {
+            GuardExpr::Not(inner) => *inner,
+            other => GuardExpr::Not(Box::new(other)),
+        }
+    }
+}
+
+impl From<Guard> for GuardExpr {
+    fn from(guard: Guard) -> Self {
+        GuardExpr::Predicate(guard)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TemplateString(pub String);
 
 impl From<String> for TemplateString {
@@ -235,7 +299,7 @@ pub enum StepKind {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Step {
-    pub guards: Vec<Vec<Guard>>,
+    pub guard: Option<GuardExpr>,
     pub kind: StepKind,
     pub scope_enter: usize,
     pub scope_exit: usize,
@@ -284,15 +348,23 @@ pub fn guard_allows(guard: &Guard, script_envs: &HashMap<String, String>) -> boo
     }
 }
 
-pub fn guard_group_allows(group: &[Guard], script_envs: &HashMap<String, String>) -> bool {
-    group.iter().all(|g| guard_allows(g, script_envs))
+pub fn guard_expr_allows(expr: &GuardExpr, script_envs: &HashMap<String, String>) -> bool {
+    match expr {
+        GuardExpr::Predicate(guard) => guard_allows(guard, script_envs),
+        GuardExpr::All(children) => children.iter().all(|g| guard_expr_allows(g, script_envs)),
+        GuardExpr::Or(children) => children.iter().any(|g| guard_expr_allows(g, script_envs)),
+        GuardExpr::Not(child) => !guard_expr_allows(child, script_envs),
+    }
 }
 
-pub fn guards_allow_any(groups: &[Vec<Guard>], script_envs: &HashMap<String, String>) -> bool {
-    if groups.is_empty() {
-        return true;
+pub fn guard_option_allows(
+    expr: Option<&GuardExpr>,
+    script_envs: &HashMap<String, String>,
+) -> bool {
+    match expr {
+        Some(e) => guard_expr_allows(e, script_envs),
+        None => true,
     }
-    groups.iter().any(|g| guard_group_allows(g, script_envs))
 }
 
 use std::fmt;
@@ -509,17 +581,73 @@ impl fmt::Display for StepKind {
     }
 }
 
+enum GuardDisplayContext {
+    Root,
+    InOrArg,
+    InNot,
+    InAll,
+}
+
+impl GuardExpr {
+    fn fmt_with_ctx(&self, f: &mut fmt::Formatter<'_>, ctx: GuardDisplayContext) -> fmt::Result {
+        match self {
+            GuardExpr::Predicate(guard) => write!(f, "{}", guard),
+            GuardExpr::All(children) => {
+                let wrap = matches!(
+                    ctx,
+                    GuardDisplayContext::InOrArg | GuardDisplayContext::InNot
+                ) && children.len() > 1;
+                if wrap {
+                    write!(f, "(")?;
+                }
+                for (i, child) in children.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    child.fmt_with_ctx(f, GuardDisplayContext::InAll)?;
+                }
+                if wrap {
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            GuardExpr::Or(children) => {
+                write!(f, "or(")?;
+                for (i, child) in children.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    child.fmt_with_ctx(f, GuardDisplayContext::InOrArg)?;
+                }
+                write!(f, ")")
+            }
+            GuardExpr::Not(child) => {
+                write!(f, "!")?;
+                let needs_paren =
+                    !matches!(child.as_ref(), GuardExpr::Predicate(_) | GuardExpr::Not(_));
+                if needs_paren {
+                    write!(f, "(")?;
+                }
+                child.fmt_with_ctx(f, GuardDisplayContext::InNot)?;
+                if needs_paren {
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Display for GuardExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_with_ctx(f, GuardDisplayContext::Root)
+    }
+}
+
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for group in &self.guards {
-            write!(f, "[")?;
-            for (i, guard) in group.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?
-                }
-                write!(f, "{}", guard)?;
-            }
-            write!(f, "] ")?;
+        if let Some(expr) = &self.guard {
+            write!(f, "[{}] ", expr)?;
         }
         write!(f, "{}", self.kind)
     }

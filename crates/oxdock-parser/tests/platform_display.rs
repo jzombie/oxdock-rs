@@ -11,7 +11,7 @@ fn platform_guard_display_uses_equals() {
     assert_eq!(guard.to_string(), "unix");
 
     let step = Step {
-        guards: vec![vec![guard]],
+        guard: Some(guard.into()),
         kind: StepKind::Workdir("a".into()),
         scope_enter: 0,
         scope_exit: 0,

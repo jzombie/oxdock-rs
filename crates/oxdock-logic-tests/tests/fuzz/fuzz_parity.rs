@@ -1,6 +1,7 @@
 use oxdock_parser::ast::*;
 use oxdock_parser::{parse_braced_tokens, parse_script};
 use proptest::prelude::*;
+use proptest::strategy::BoxedStrategy;
 
 // Strategies
 
@@ -28,8 +29,53 @@ fn arb_guard() -> impl Strategy<Value = Guard> {
     ]
 }
 
-fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
-    prop::collection::vec(prop::collection::vec(arb_guard(), 1..3), 0..2)
+fn arb_guard_expr_with_depth(depth: u32) -> BoxedStrategy<GuardExpr> {
+    let leaf = arb_guard().prop_map(GuardExpr::from).boxed();
+    if depth >= 3 {
+        return leaf;
+    }
+    let deeper = arb_guard_expr_with_depth(depth + 1);
+    prop_oneof![
+        leaf,
+        prop::collection::vec(deeper.clone(), 2..=3)
+            .prop_map(GuardExpr::all)
+            .boxed(),
+        prop::collection::vec(deeper.clone(), 2..=3)
+            .prop_map(GuardExpr::or)
+            .boxed(),
+        deeper.clone().prop_map(canonical_not).boxed(),
+    ]
+    .boxed()
+}
+
+fn arb_guard_expr() -> impl Strategy<Value = GuardExpr> {
+    arb_guard_expr_with_depth(0)
+}
+
+fn canonical_not(expr: GuardExpr) -> GuardExpr {
+    match expr {
+        GuardExpr::Predicate(guard) => GuardExpr::Predicate(invert_guard_predicate(guard)),
+        GuardExpr::Not(inner) => *inner,
+        other => !other,
+    }
+}
+
+fn invert_guard_predicate(guard: Guard) -> Guard {
+    match guard {
+        Guard::Platform { target, invert } => Guard::Platform {
+            target,
+            invert: !invert,
+        },
+        Guard::EnvExists { key, invert } => Guard::EnvExists {
+            key,
+            invert: !invert,
+        },
+        Guard::EnvEquals { key, value, invert } => Guard::EnvEquals {
+            key,
+            value,
+            invert: !invert,
+        },
+    }
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
@@ -163,21 +209,21 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
 }
 
 fn arb_step() -> impl Strategy<Value = Step> {
-    (arb_guards(), arb_step_kind())
-        .prop_map(|(guards, kind)| Step {
-            guards,
+    (prop::option::of(arb_guard_expr()), arb_step_kind())
+        .prop_map(|(guard, kind)| Step {
+            guard,
             kind,
             scope_enter: 0,
             scope_exit: 0,
         })
         .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
-            StepKind::InheritEnv { .. } => step.guards.is_empty(),
+            StepKind::InheritEnv { .. } => step.guard.is_none(),
             _ => true,
         })
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
-    assert_eq!(left.guards, right.guards, "Guards mismatch: {}", msg);
+    assert_eq!(left.guard, right.guard, "Guards mismatch: {}", msg);
     assert_eq!(
         left.scope_enter, right.scope_enter,
         "Scope enter mismatch: {}",
