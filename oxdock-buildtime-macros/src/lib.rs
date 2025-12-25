@@ -756,11 +756,8 @@ mod tests {
             StepKind::Write { path, .. } => assert_eq!(path, "leaked_inner.txt"),
             other => panic!("expected leaked inner WRITE, saw {:?}", other),
         }
-        assert!(
-            steps[10].guards.len() == 1,
-            "leaked_inner should be guarded"
-        );
-        assert!(steps[12].guards.len() == 1, "outer leak should be guarded");
+        assert!(steps[10].guard.is_some(), "leaked_inner should be guarded");
+        assert!(steps[12].guard.is_some(), "outer leak should be guarded");
     }
 
     #[test]

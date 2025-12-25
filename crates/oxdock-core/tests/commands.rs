@@ -18,7 +18,7 @@ fn capture_pipeline(pipe: &str, path: &str, cmd: StepKind) -> [Step; 2] {
     let pipe_name = pipe.to_string();
     [
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::WithIo {
                 bindings: vec![IoBinding {
                     stream: IoStream::Stdout,
@@ -30,7 +30,7 @@ fn capture_pipeline(pipe: &str, path: &str, cmd: StepKind) -> [Step; 2] {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::WithIo {
                 bindings: vec![IoBinding {
                     stream: IoStream::Stdin,
@@ -152,25 +152,25 @@ fn commands_behave_cross_platform() {
 
     let steps = vec![
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("/".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Mkdir("client".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Mkdir("client/dist".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "client/dist/hello.txt".into(),
                 contents: Some("hi".into()),
@@ -179,7 +179,7 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Env {
                 key: "FOO".into(),
                 value: "bar".into(),
@@ -188,19 +188,19 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Run(run_cmd.into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::RunBg(bg_cmd.into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Copy {
                 from_current_workspace: false,
                 from: "./source.txt".into(),
@@ -210,7 +210,7 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Symlink {
                 from: "./target_dir".into(),
                 to: "./client/dist-link".into(),
@@ -219,25 +219,25 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Ls(Some("client".into())),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("client/dist".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Echo("echo from workdir".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "nested.txt".into(),
                 contents: Some("nested".into()),
@@ -246,19 +246,19 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workspace(WorkspaceTarget::Local),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("/".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "local_note.txt".into(),
                 contents: Some("local".into()),
@@ -267,19 +267,19 @@ fn commands_behave_cross_platform() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workspace(WorkspaceTarget::Snapshot),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("/".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "snap_note.txt".into(),
                 contents: Some("snap".into()),
@@ -424,7 +424,7 @@ fn exit_stops_pipeline_and_reports_code() {
     let root = guard_root(&temp);
     let steps = vec![
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "before.txt".into(),
                 contents: Some("ok".into()),
@@ -433,13 +433,13 @@ fn exit_stops_pipeline_and_reports_code() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Exit(9),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Write {
                 path: "after.txt".into(),
                 contents: Some("nope".into()),
@@ -491,7 +491,7 @@ fn capture_echo_interpolates_env() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Env {
             key: "FOO".into(),
             value: "hi".into(),
@@ -520,7 +520,7 @@ fn capture_ls_lists_entries_with_header() {
     write_text(&dir.join("b.txt").unwrap(), "b");
 
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Workdir("items".into()),
         scope_enter: 0,
         scope_exit: 0,
@@ -561,7 +561,7 @@ fn capture_cwd_canonicalizes_and_writes() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Workdir("a/b".into()),
         scope_enter: 0,
         scope_exit: 0,
@@ -801,7 +801,7 @@ fn workdir_cannot_escape_root() {
     let root = guard_root(&temp);
     // Attempt to switch to parent of root which should be disallowed
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Workdir("../".into()),
         scope_enter: 0,
         scope_exit: 0,
@@ -820,7 +820,7 @@ fn write_cannot_escape_root() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Write {
             path: "../escape.txt".into(),
             contents: Some("nope".into()),
@@ -859,7 +859,7 @@ fn read_cannot_escape_root() {
     parent_fs.write_file(&secret, b"nope").unwrap();
 
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Read(Some("../secret.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
@@ -913,7 +913,7 @@ fn read_symlink_escape_is_blocked() {
     std::os::windows::fs::symlink_file(secret.as_path(), &link_path).unwrap();
 
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Read(Some("leak.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
@@ -950,13 +950,13 @@ fn workdir_accepts_symlink_into_workspace_root() {
 
     let steps = vec![
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("/".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Symlink {
                 from: "client".into(),
                 to: "client".into(),
@@ -965,7 +965,7 @@ fn workdir_accepts_symlink_into_workspace_root() {
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("client".into()),
             scope_enter: 0,
             scope_exit: 0,
@@ -1015,7 +1015,7 @@ fn write_missing_path_cannot_escape_root() {
     create_dirs(&root.join("a/b").unwrap());
 
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Write {
             // Ancestor exists inside root, but remaining components attempt to climb out.
             path: "a/b/../../../../outside.txt".into(),
@@ -1038,7 +1038,7 @@ fn workdir_creates_missing_dirs_within_root() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Workdir("a/b/c".into()),
         scope_enter: 0,
         scope_exit: 0,
@@ -1055,7 +1055,7 @@ fn cat_reads_file_contents_without_error() {
     let root = guard_root(&temp);
     write_text(&root.join("file.txt").unwrap(), "hello cat");
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::Read(Some("file.txt".into())),
         scope_enter: 0,
         scope_exit: 0,
@@ -1071,13 +1071,13 @@ fn cwd_prints_to_stdout() {
     let root = guard_root(&temp);
     let steps = vec![
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Workdir("a/b".into()),
             scope_enter: 0,
             scope_exit: 0,
         },
         Step {
-            guards: Vec::new(),
+            guard: None,
             kind: StepKind::Cwd,
             scope_enter: 0,
             scope_exit: 0,
@@ -1097,7 +1097,7 @@ fn cat_reads_stdin_with_io() {
     let output = Arc::new(Mutex::new(Vec::new()));
 
     let steps = vec![Step {
-        guards: Vec::new(),
+        guard: None,
         kind: StepKind::WithIo {
             bindings: vec![IoBinding {
                 stream: IoStream::Stdin,
