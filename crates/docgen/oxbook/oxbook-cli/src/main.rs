@@ -184,6 +184,34 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 {
                                     let line_number = line_idx + 1;
                                     if let Some(server_proc) = server.as_mut() {
+                                        if editor.is_dirty() {
+                                            if let Err(err) = editor.save() {
+                                                let mut guard = logs.lock().unwrap();
+                                                guard.push_back(LogRecord::new(
+                                                    LogSource::Stderr,
+                                                    format!(
+                                                        "save failed before running block at line {}: {}\n",
+                                                        line_number, err
+                                                    ),
+                                                ));
+                                                trim_logs(&mut guard, MAX_LOG_LINES);
+                                                status = format!(
+                                                    "Save failed before running block (line {})",
+                                                    line_number
+                                                );
+                                                continue;
+                                            }
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stdout,
+                                                format!(
+                                                    "saved {} before running block at line {}\n",
+                                                    editor.short_path(),
+                                                    line_number
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                        }
                                         if let Err(err) = server_proc.send_run_command(line_number) {
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
@@ -510,6 +538,10 @@ impl EditorState {
             }
         }
         self.path.display().to_string()
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn cursor_col(&self) -> usize {
