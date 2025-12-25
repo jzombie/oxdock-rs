@@ -35,16 +35,6 @@ const OXDOCK_TEMP_LOCK: &str = ".oxdock-tempdir.lock";
 /// Path guaranteed to stay within a guard root. The root is stored alongside the
 /// resolved absolute path so consumers cannot escape without constructing a new
 /// guard explicitly.
-///
-/// ### Why the `\\?\` verbatim prefixes?
-/// On Windows we intentionally keep the canonical verbatim path (e.g. `\\?\C:\\repo`)
-/// inside every `GuardedPath`. This avoids MAX_PATH truncation and prevents subtle
-/// `PathBuf` casing/drive-letter surprises when the guard is later joined, copied,
-/// or passed through `std::fs`. When you need a human-readable path, call
-/// [`command_path`] (native separators, prefix stripped) or [`normalized_path`]
-/// (forward slashes) or use the `Display` impl, which already defers to
-/// `command_path`. Keep the debug view raw so diagnostics can show the exact path
-/// we are guarding.
 #[derive(Clone, Eq, PartialEq)]
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub struct GuardedPath {
