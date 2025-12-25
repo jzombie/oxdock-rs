@@ -45,7 +45,7 @@ Every internal command is engineered to run the same way across platforms, excep
 ... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor.  
 ... TODO: Show example
 
-... TODO: Note that OxDock guard expressions borrow TOML-like syntax for single-line conditions, and support multi-line guarded blocks using `{ ... }` braces.
+... TODO: Describe Oxfile (which is a script which runs in the OxDock interpreter or is embedded in Rust compile-time macros). Note that guard expressions borrow TOML-like syntax for single-line conditions, gates are loosely inspired by Rust's derive macros, and support multi-line guarded blocks using `{ ... }` braces.
 
 ## Testing & Coverage
 
