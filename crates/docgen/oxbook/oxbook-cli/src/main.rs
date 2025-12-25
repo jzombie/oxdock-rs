@@ -5,12 +5,12 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    backend::{Backend, CrosstermBackend},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, Borders, Paragraph},
-    Terminal,
+    Frame, Terminal,
 };
 use std::collections::VecDeque;
 use std::fs;
@@ -80,7 +80,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                 let size = f.size();
                 let layout = Layout::default()
                     .direction(Direction::Vertical)
-                    .margin(2)
+                    .margin(0)
                     .constraints([
                         Constraint::Length(3),
                         Constraint::Min(1),
@@ -92,10 +92,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     UiMode::Dashboard => "Oxbook TUI — 'r' run • 'e' edit • 'q' quit",
                     UiMode::Editor(_) => "Editor — Esc close • Ctrl-S save • arrows move",
                 };
-                let header = Paragraph::new(header_text)
-                    .block(Block::default().borders(Borders::ALL).title("oxbook-cli"))
-                    .alignment(Alignment::Center);
-                f.render_widget(header, layout[0]);
+                let mut header_view = HeaderView::new(header_text);
+                header_view.render(f, layout[0]);
 
                 let mid = Layout::default()
                     .direction(Direction::Vertical)
@@ -109,47 +107,22 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         } else {
                             format!("Target: {}", cli_args.join(" "))
                         };
-                        let body = Paragraph::new(format!(
+                        let mut controls_view = ControlsView::new(format!(
                             "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session."
-                        ))
-                        .block(Block::default().borders(Borders::ALL).title("Controls"));
-                        f.render_widget(body, mid[0]);
+                        ));
+                        controls_view.render(f, mid[0]);
                     }
                     UiMode::Editor(editor) => {
-                        let inner_height = mid[0].height.saturating_sub(2) as usize;
-                        let viewport = inner_height.max(1);
-                        editor.adjust_scroll(viewport);
-                        let text = editor.visible_text(viewport);
-                        let title = format!("Editing {}", editor.short_path());
-                        let editor_widget = Paragraph::new(text)
-                            .block(Block::default().borders(Borders::ALL).title(title));
-                        f.render_widget(editor_widget, mid[0]);
-
-                        let inner_width = mid[0].width.saturating_sub(2) as usize;
-                        let cursor_x = mid[0].x + 1 + editor.cursor_col().min(inner_width) as u16;
-                        let cursor_row = editor.relative_cursor_row().min(viewport - 1);
-                        let cursor_y = mid[0].y + 1 + cursor_row as u16;
-                        f.set_cursor(cursor_x, cursor_y);
+                        let mut editor_view = EditorView::new(editor);
+                        editor_view.render(f, mid[0]);
                     }
                 }
 
-                let log_text = {
-                    let guard = logs.lock().unwrap();
-                    if guard.is_empty() {
-                        Text::from("(no logs yet)")
-                    } else {
-                        let inner_height = mid[1].height.saturating_sub(2) as usize;
-                        logs_to_text(&guard, inner_height.max(1))
-                    }
-                };
-                let logs_widget = Paragraph::new(log_text)
-                    .block(Block::default().borders(Borders::ALL).title("Logs"));
-                f.render_widget(logs_widget, mid[1]);
+                let mut logs_view = LogsView::new(&logs);
+                logs_view.render(f, mid[1]);
 
-                let footer = Paragraph::new(status.clone())
-                    .block(Block::default().borders(Borders::ALL).title("Status"))
-                    .style(Style::default().add_modifier(Modifier::BOLD));
-                f.render_widget(footer, layout[2]);
+                let mut status_view = StatusView::new(status.clone());
+                status_view.render(f, layout[2]);
             })?;
 
             if event::poll(Duration::from_millis(120))? {
@@ -247,6 +220,18 @@ enum UiMode {
 enum EditorAction {
     Continue,
     Exit,
+}
+
+trait FramedView {
+    fn block<'a>(&'a self) -> Block<'a>;
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect);
+
+    fn render<B: Backend>(&mut self, frame: &mut Frame<'_, B>, area: Rect) {
+        let block = self.block();
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        self.render_inner(frame, inner);
+    }
 }
 
 struct EditorState {
@@ -537,6 +522,136 @@ impl EditorState {
 
     fn move_line_end(&mut self) {
         self.cursor_col = self.current_line_len();
+    }
+}
+
+struct HeaderView<'a> {
+    text: &'a str,
+}
+
+impl<'a> HeaderView<'a> {
+    fn new(text: &'a str) -> Self {
+        Self { text }
+    }
+}
+
+impl<'a> FramedView for HeaderView<'a> {
+    fn block<'b>(&'b self) -> Block<'b> {
+        Block::default().borders(Borders::ALL).title("oxbook-cli")
+    }
+
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
+        let widget = Paragraph::new(self.text).alignment(Alignment::Center);
+        frame.render_widget(widget, inner);
+    }
+}
+
+struct ControlsView {
+    body: String,
+}
+
+impl ControlsView {
+    fn new(body: String) -> Self {
+        Self { body }
+    }
+}
+
+impl FramedView for ControlsView {
+    fn block<'a>(&'a self) -> Block<'a> {
+        Block::default().borders(Borders::ALL).title("Controls")
+    }
+
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
+        let widget = Paragraph::new(self.body.as_str());
+        frame.render_widget(widget, inner);
+    }
+}
+
+struct EditorView<'a> {
+    editor: &'a mut EditorState,
+}
+
+impl<'a> EditorView<'a> {
+    fn new(editor: &'a mut EditorState) -> Self {
+        Self { editor }
+    }
+}
+
+impl<'a> FramedView for EditorView<'a> {
+    fn block<'b>(&'b self) -> Block<'b> {
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!("Editing {}", self.editor.short_path()))
+    }
+
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let viewport = inner.height as usize;
+        self.editor.adjust_scroll(viewport);
+        let text = self.editor.visible_text(viewport);
+        frame.render_widget(Paragraph::new(text), inner);
+
+        let max_col = inner.width.saturating_sub(1) as usize;
+        let cursor_col = self.editor.cursor_col().min(max_col);
+        let cursor_row = self
+            .editor
+            .relative_cursor_row()
+            .min(viewport.saturating_sub(1));
+        frame.set_cursor(inner.x + cursor_col as u16, inner.y + cursor_row as u16);
+    }
+}
+
+struct LogsView<'a> {
+    logs: &'a Arc<Mutex<VecDeque<LogRecord>>>,
+}
+
+impl<'a> LogsView<'a> {
+    fn new(logs: &'a Arc<Mutex<VecDeque<LogRecord>>>) -> Self {
+        Self { logs }
+    }
+}
+
+impl<'a> FramedView for LogsView<'a> {
+    fn block<'b>(&'b self) -> Block<'b> {
+        Block::default().borders(Borders::ALL).title("Logs")
+    }
+
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
+        let text = {
+            let guard = self.logs.lock().unwrap();
+            if guard.is_empty() {
+                Text::from("(no logs yet)")
+            } else {
+                let height = inner.height as usize;
+                logs_to_text(&guard, height.max(1))
+            }
+        };
+        frame.render_widget(Paragraph::new(text), inner);
+    }
+}
+
+struct StatusView {
+    message: String,
+}
+
+impl StatusView {
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl FramedView for StatusView {
+    fn block<'a>(&'a self) -> Block<'a> {
+        Block::default().borders(Borders::ALL).title("Status")
+    }
+
+    fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
+        let widget = Paragraph::new(self.message.clone())
+            .style(Style::default().add_modifier(Modifier::BOLD));
+        frame.render_widget(widget, inner);
     }
 }
 
