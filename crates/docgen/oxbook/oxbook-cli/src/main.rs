@@ -25,7 +25,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use oxbook_cli::{BLOCK_EVENT_ENV, WORKER_EVENT_PREFIX};
+use oxbook_cli::WORKER_EVENT_PREFIX;
 
 const STATUS_ICON_READY: &str = "○";
 const STATUS_ICON_RUNNING: &str = "●";
@@ -539,6 +539,18 @@ impl ServerProcess {
     fn send_run_command(&mut self, line: usize) -> io::Result<()> {
         if let Some(stdin) = &mut self.stdin {
             writeln!(stdin, "RUN {line}")?;
+            stdin.flush()
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "server stdin unavailable",
+            ))
+        }
+    }
+
+    fn enable_worker_events(&mut self) -> io::Result<()> {
+        if let Some(stdin) = &mut self.stdin {
+            writeln!(stdin, "EVENTS ON")?;
             stdin.flush()
         } else {
             Err(io::Error::new(
@@ -1545,7 +1557,6 @@ fn spawn_cli_command(
     cmd.env("FORCE_COLOR", "1");
     cmd.env("NO_COLOR", "0");
     cmd.env("OXBOOK_STREAM_STDOUT", "1");
-    cmd.env(BLOCK_EVENT_ENV, "1");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1571,10 +1582,18 @@ fn spawn_cli_command(
         .take()
         .context("obtain stdin for oxbook-cli child")?;
 
-    Ok(ServerProcess {
+    let mut process = ServerProcess {
         child,
         stdin: Some(stdin),
-    })
+    };
+
+    if event_tx.is_some() {
+        process
+            .enable_worker_events()
+            .context("enable worker events")?;
+    }
+
+    Ok(process)
 }
 
 fn spawn_log_reader<R: Read + Send + 'static>(

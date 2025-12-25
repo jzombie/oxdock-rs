@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Cursor, IsTerminal, Stdout, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -104,12 +105,12 @@ pub fn run() -> Result<()> {
 
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
     let mut cache = RunnerCache::default();
-    let emit_block_events = emit_block_events_enabled();
+    let emit_block_events = Arc::new(AtomicBool::new(emit_block_events_enabled()));
 
     let mut command_rx = None;
     if !std::io::stdin().is_terminal() {
         let (tx, rx) = mpsc::channel();
-        spawn_command_listener(tx);
+        spawn_command_listener(tx, emit_block_events.clone());
         command_rx = Some(rx);
     }
 
@@ -123,7 +124,7 @@ pub fn run() -> Result<()> {
         true,
         None,
         None,
-        emit_block_events,
+        emit_block_events.load(Ordering::Relaxed),
     )?;
     if rendered != initial_contents {
         resolver
@@ -170,6 +171,8 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
         None => std::io::stdout().is_terminal(),
     };
 
+    let emit_block_events = Arc::new(AtomicBool::new(false));
+
     let mut last_contents = String::new();
     let execution = run_block_in_place(
         &resolver,
@@ -179,6 +182,7 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
         &mut cache,
         &mut last_contents,
         target_line,
+        emit_block_events,
     )?;
 
     match execution {
@@ -393,7 +397,7 @@ fn run_watch_loop(
     cache: &mut RunnerCache,
     last_contents: &mut String,
     command_rx: Option<mpsc::Receiver<ServerCommand>>,
-    emit_block_events: bool,
+    emit_block_events: Arc<AtomicBool>,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
@@ -418,6 +422,7 @@ fn run_watch_loop(
             source_dir,
             cache,
             last_contents,
+            &emit_block_events,
         )?;
 
         let mut should_process = false;
@@ -450,6 +455,7 @@ fn run_watch_loop(
                 source_dir,
                 cache,
                 last_contents,
+                &emit_block_events,
             )?;
             match rx.recv_timeout(WATCH_DEBOUNCE_WINDOW) {
                 Ok(Ok(event)) => {
@@ -480,7 +486,7 @@ fn run_watch_loop(
                 false,
                 None,
                 None,
-                emit_block_events,
+                emit_block_events.load(Ordering::Relaxed),
             )?;
             if rendered != new_contents {
                 resolver
@@ -500,6 +506,7 @@ fn drain_server_commands(
     source_dir: &GuardedPath,
     cache: &mut RunnerCache,
     last_contents: &mut String,
+    emit_block_events: &Arc<AtomicBool>,
 ) -> Result<()> {
     if let Some(rx) = command_rx {
         while let Ok(cmd) = rx.try_recv() {
@@ -511,6 +518,7 @@ fn drain_server_commands(
                 source_dir,
                 cache,
                 last_contents,
+                emit_block_events,
             )?;
         }
     }
@@ -525,6 +533,7 @@ fn handle_server_command(
     source_dir: &GuardedPath,
     cache: &mut RunnerCache,
     last_contents: &mut String,
+    emit_block_events: &Arc<AtomicBool>,
 ) -> Result<()> {
     match command {
         ServerCommand::RunBlock { line } => {
@@ -540,6 +549,7 @@ fn handle_server_command(
                 cache,
                 last_contents,
                 target_line,
+                emit_block_events.clone(),
             )?;
 
             if result.is_none() {
@@ -565,6 +575,7 @@ fn run_block_in_place(
     cache: &mut RunnerCache,
     last_contents: &mut String,
     target_line: usize,
+    emit_block_events: Arc<AtomicBool>,
 ) -> Result<Option<BlockExecution>> {
     let contents = read_stable_contents(resolver, watched)?;
     let fences = parse_fences(&contents);
@@ -598,7 +609,7 @@ fn run_block_in_place(
             true,
             Some(&forced_lines),
             Some(&mut callback),
-            false,
+            emit_block_events.load(Ordering::Relaxed),
         )?;
 
         if rendered != contents {
@@ -624,7 +635,7 @@ fn run_block_in_place(
     Ok(matched)
 }
 
-fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>) {
+fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>, emit_block_events: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut reader = io::BufReader::new(stdin.lock());
@@ -646,6 +657,10 @@ fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>) {
                             }
                             Err(_) => eprintln!("invalid RUN command: {trimmed}"),
                         }
+                    } else if trimmed.eq_ignore_ascii_case("EVENTS ON") {
+                        emit_block_events.store(true, Ordering::Relaxed);
+                    } else if trimmed.eq_ignore_ascii_case("EVENTS OFF") {
+                        emit_block_events.store(false, Ordering::Relaxed);
                     } else {
                         eprintln!("unknown command: {trimmed}");
                     }
