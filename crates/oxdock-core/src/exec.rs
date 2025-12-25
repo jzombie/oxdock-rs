@@ -372,14 +372,18 @@ struct ScopeSnapshot {
 }
 
 impl<P: ProcessManager> ExecState<P> {
-    fn command_ctx(&self) -> CommandContext {
-        CommandContext::new(
+    fn command_ctx(&self) -> Result<CommandContext> {
+        // Build a CommandContext snapshot for this step. The `cargo_target_dir`
+        // here is the executor default; if callers want to override it they
+        // must do so via the env map (e.g. ENV CARGO_TARGET_DIR=...), which
+        // apply_ctx respects when spawning processes.
+        Ok(CommandContext::new(
             &self.cwd.clone().into(),
             &self.envs,
             &self.cargo_target_dir,
             self.fs.root(),
             self.fs.build_context(),
-        )
+        ))
     }
 }
 
@@ -592,7 +596,7 @@ fn execute_steps<P: ProcessManager>(
         } else {
             match &step.kind {
                 StepKind::Workdir(path) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(path, &ctx);
                     state.cwd = state
                         .fs
@@ -614,13 +618,13 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::Env { key, value } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(value, &ctx);
                     state.envs.insert(key.clone(), rendered);
                     Ok(())
                 }
                 StepKind::Run(cmd) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(cmd, &ctx);
                     let step_stdin = if expose_stdin { stdin.clone() } else { None };
 
@@ -681,7 +685,7 @@ fn execute_steps<P: ProcessManager>(
                     }
                 }
                 StepKind::Echo(msg) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(msg, &ctx);
                     write_stdout(out.clone(), |writer| {
                         writeln!(writer, "{}", rendered)?;
@@ -690,7 +694,7 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::RunBg(cmd) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(cmd, &ctx);
                     let step_stdin = if expose_stdin { stdin.clone() } else { None };
                     let stdout_mode = out
@@ -734,7 +738,7 @@ fn execute_steps<P: ProcessManager>(
                     from,
                     to,
                 } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let from_rendered = expand_template(from, &ctx);
                     let to_rendered = expand_template(to, &ctx);
                     let from_abs = if *from_current_workspace {
@@ -769,7 +773,7 @@ fn execute_steps<P: ProcessManager>(
                     to,
                     include_dirty,
                 } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rev_rendered = expand_template(rev, &ctx);
                     let from_rendered = expand_template(from, &ctx);
                     let to_rendered = expand_template(to, &ctx);
@@ -800,7 +804,7 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::HashSha256 { path } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(path, &ctx);
                     let target = state
                         .fs
@@ -817,7 +821,7 @@ fn execute_steps<P: ProcessManager>(
                 }
 
                 StepKind::Symlink { from, to } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let from_rendered = expand_template(from, &ctx);
                     let to_rendered = expand_template(to, &ctx);
                     let to_abs = state
@@ -854,7 +858,7 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::Mkdir(path) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let rendered = expand_template(path, &ctx);
                     let target = state
                         .fs
@@ -867,7 +871,7 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::Ls(arg) => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let target_dir = if let Some(p) = arg {
                         let rendered = expand_template(p, &ctx);
                         state
@@ -908,7 +912,7 @@ fn execute_steps<P: ProcessManager>(
                 }
                 StepKind::Read(path_opt) => {
                     let data = if let Some(path) = path_opt {
-                        let ctx = state.command_ctx();
+                        let ctx = state.command_ctx()?;
                         let rendered = expand_template(path, &ctx);
                         let target = state
                             .fs
@@ -939,7 +943,7 @@ fn execute_steps<P: ProcessManager>(
                     Ok(())
                 }
                 StepKind::Write { path, contents } => {
-                    let ctx = state.command_ctx();
+                    let ctx = state.command_ctx()?;
                     let path_rendered = expand_template(path, &ctx);
                     let target = state
                         .fs

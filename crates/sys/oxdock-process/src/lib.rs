@@ -146,13 +146,8 @@ pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
         if let Some(key) = name.strip_prefix("env:") {
-            if key == "CARGO_TARGET_DIR" {
-                return Some(ctx.cargo_target_dir().display().to_string());
-            }
-            if key == "OXBOOK_SNIPPET_PATH" || key == "OXBOOK_SNIPPET_DIR" {
-                return ctx.envs().get(key).cloned();
-            }
-            ctx.envs()
+            ctx
+                .envs()
                 .get(key)
                 .cloned()
                 .or_else(|| std::env::var(key).ok())
@@ -328,10 +323,14 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     };
     command.current_dir(cwd_path);
     command.envs(ctx.envs());
-    command.env(
-        "CARGO_TARGET_DIR",
-        oxdock_fs::command_path(ctx.cargo_target_dir()).into_owned(),
-    );
+    if let Some(val) = ctx.envs().get("CARGO_TARGET_DIR") {
+        command.env("CARGO_TARGET_DIR", val);
+    } else {
+        command.env(
+            "CARGO_TARGET_DIR",
+            oxdock_fs::command_path(ctx.cargo_target_dir()).into_owned(),
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -1189,6 +1188,7 @@ mod tests {
         let mut envs = HashMap::new();
         envs.insert("FOO".into(), "bar".into());
         envs.insert("PCT".into(), "percent".into());
+        envs.insert("CARGO_TARGET_DIR".into(), guard.display().to_string());
         let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
@@ -1198,9 +1198,10 @@ mod tests {
             "{{ env:FOO }}-{{ env:PCT }}-{{ env:HOST_ONLY }}-{{ env:CARGO_TARGET_DIR }}",
             &ctx,
         );
-        let target_dir = guard.display();
-        let expected = format!("bar-percent-host-{}", target_dir);
-        assert_eq!(rendered, expected);
+        assert_eq!(
+            rendered,
+            format!("bar-percent-host-{}", guard.display())
+        );
 
         // Invalid/Legacy syntax: treated as literal text
         // %FOO% -> %FOO%
