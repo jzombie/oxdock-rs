@@ -1320,7 +1320,6 @@ fn run_in_default_env(
     };
     run_in_env_with_resolver(
         resolver,
-        resolver,
         &env,
         spec,
         script,
@@ -1344,10 +1343,8 @@ fn run_in_env(
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
 ) -> Result<RunnerOutput> {
-    let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
     run_in_env_with_resolver(
         workspace_resolver,
-        &resolver,
         env,
         spec,
         script,
@@ -1362,7 +1359,6 @@ fn run_in_env(
 #[allow(clippy::too_many_arguments)]
 fn run_in_env_with_resolver(
     workspace_resolver: &PathResolver,
-    resolver: &PathResolver,
     env: &RunnerEnv,
     spec: &RunnerSpec,
     script: &str,
