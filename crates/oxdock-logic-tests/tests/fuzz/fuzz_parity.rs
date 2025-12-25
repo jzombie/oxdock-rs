@@ -191,7 +191,6 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
             assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
         }
         _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
-        _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
     }
 }
 

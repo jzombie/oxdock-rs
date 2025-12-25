@@ -138,7 +138,7 @@ impl PipeInner {
             state = self
                 .ready
                 .wait(state)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "pipe wait poisoned"))?;
+                .map_err(|_| io::Error::other("pipe wait poisoned"))?;
         }
     }
 
@@ -311,9 +311,10 @@ impl ExecIo {
         let pipe = ScriptPipe::new();
         self.input_pipes.insert(name.to_string(), pipe.reader());
         let endpoint = PipeEndpoint::script(pipe.endpoint());
-        let mut outputs = PipeOutputs::default();
-        outputs.stdout = Some(endpoint.clone());
-        outputs.stderr = Some(endpoint);
+        let outputs = PipeOutputs {
+            stdout: Some(endpoint.clone()),
+            stderr: Some(endpoint),
+        };
         self.output_pipes.insert(name.to_string(), outputs);
     }
 

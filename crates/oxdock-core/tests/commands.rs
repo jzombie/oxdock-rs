@@ -435,14 +435,11 @@ fn capture_echo_interpolates_env() {
         scope_exit: 0,
     }];
     let mut steps = steps;
-    steps.extend(
-        capture_pipeline(
-            "cap-echo",
-            "echo.txt",
-            *parse_one("ECHO value={{ env:FOO }}"),
-        )
-        .into_iter(),
-    );
+    steps.extend(capture_pipeline(
+        "cap-echo",
+        "echo.txt",
+        *parse_one("ECHO value={{ env:FOO }}"),
+    ));
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
