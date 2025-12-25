@@ -9,8 +9,7 @@
     WORKDIR ws
 
     ECHO Proceeding to snapshot workspace with potentially uncommitted artifacts, which can take a while.
-    # COPY_GIT --include-dirty HEAD . .
-    COPY_GIT HEAD . .
+    COPY_GIT --include-dirty HEAD . .
     ECHO Workspace snapshotting completed.
 
     # 2. Generate the snippet manifest by copying the manifest generator source
