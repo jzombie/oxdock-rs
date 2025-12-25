@@ -146,8 +146,7 @@ pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
         if let Some(key) = name.strip_prefix("env:") {
-            ctx
-                .envs()
+            ctx.envs()
                 .get(key)
                 .cloned()
                 .or_else(|| std::env::var(key).ok())
@@ -1198,10 +1197,7 @@ mod tests {
             "{{ env:FOO }}-{{ env:PCT }}-{{ env:HOST_ONLY }}-{{ env:CARGO_TARGET_DIR }}",
             &ctx,
         );
-        assert_eq!(
-            rendered,
-            format!("bar-percent-host-{}", guard.display())
-        );
+        assert_eq!(rendered, format!("bar-percent-host-{}", guard.display()));
 
         // Invalid/Legacy syntax: treated as literal text
         // %FOO% -> %FOO%
