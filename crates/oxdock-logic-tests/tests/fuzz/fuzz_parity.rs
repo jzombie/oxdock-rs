@@ -144,11 +144,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
             path: path.into(),
-            contents: contents.into()
-        }),
-        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
-            path: path.into(),
-            cmd: Box::new(StepKind::Run(cmd.into())),
+            contents: Some(contents.into())
         }),
         (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
             StepKind::CopyGit {
@@ -171,25 +167,7 @@ fn arb_step() -> impl Strategy<Value = Step> {
             scope_enter: 0,
             scope_exit: 0,
         })
-        .prop_filter("Avoids ambiguous CAPTURE_TO_FILE boundary", |step| {
-            if let StepKind::CaptureToFile { path, cmd } = &step.kind {
-                let cmd_str = cmd.to_string();
-                // Check if path ends with something that sticks to cmd start
-                if let (Some(last), Some(first)) = (path.chars().last(), cmd_str.chars().next()) {
-                    let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
-                    // If macro_input.rs would merge them (needs_space returns false)
-                    // needs_space is false if sticky(prev) || sticky(next)
-                    // AND not command/semicolon etc.
-                    if sticky(last) || sticky(first) {
-                        // They will merge.
-                        // But we want them separated (CAPTURE_TO_FILE path cmd).
-                        // So this input is ambiguous for TokenStream.
-                        return false;
-                    }
-                }
-            }
-            true
-        })
+        .prop_filter("Avoids ambiguous inputs", |_step| true)
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
@@ -212,13 +190,7 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
         (StepKind::RunBg(l), StepKind::RunBg(r)) => {
             assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
         }
-        (
-            StepKind::CaptureToFile { path: lp, cmd: lc },
-            StepKind::CaptureToFile { path: rp, cmd: rc },
-        ) => {
-            assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
-            assert_eq!(lc, rc, "Capture cmd mismatch: {}", msg);
-        }
+        _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
         _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
     }
 }

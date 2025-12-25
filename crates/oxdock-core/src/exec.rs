@@ -951,11 +951,33 @@ fn execute_steps<P: ProcessManager>(
                     state.fs.ensure_parent_dir(&target).with_context(|| {
                         format!("failed to create parent for {}", target.display())
                     })?;
-                    let rendered = expand_template(contents, &ctx);
-                    state
-                        .fs
-                        .write_file(&target, rendered.as_bytes())
-                        .with_context(|| format!("failed to write {}", target.display()))?;
+                    if let Some(body) = contents {
+                        let rendered = expand_template(body, &ctx);
+                        state
+                            .fs
+                            .write_file(&target, rendered.as_bytes())
+                            .with_context(|| format!("failed to write {}", target.display()))?;
+                    } else {
+                        let Some(input_stream) = stdin.clone() else {
+                            bail!(
+                                "step {}: WRITE {} requires stdin (use WITH_IO [stdin=...] WRITE)",
+                                idx + 1,
+                                path_rendered
+                            );
+                        };
+                        let mut guard = input_stream
+                            .lock()
+                            .map_err(|_| anyhow!("failed to lock stdin for WRITE"))?;
+                        let mut data = Vec::new();
+                        guard
+                            .read_to_end(&mut data)
+                            .context("failed to read from stdin for WRITE")?;
+                        drop(guard);
+                        state
+                            .fs
+                            .write_file(&target, &data)
+                            .with_context(|| format!("failed to write {}", target.display()))?;
+                    }
                     Ok(())
                 }
                 StepKind::WithIo { bindings, cmd } => {
@@ -1072,74 +1094,6 @@ fn execute_steps<P: ProcessManager>(
                     bail!("WITH_IO block should have been expanded during parsing")
                 }
 
-                StepKind::CaptureToFile { path, cmd } => {
-                    let ctx = state.command_ctx();
-                    let rendered = expand_template(path, &ctx);
-                    let target =
-                        state
-                            .fs
-                            .resolve_write(&state.cwd, &rendered)
-                            .with_context(|| {
-                                format!("step {}: CAPTURE_TO_FILE {}", idx + 1, rendered)
-                            })?;
-                    state.fs.ensure_parent_dir(&target).with_context(|| {
-                        format!("failed to create parent for {}", target.display())
-                    })?;
-                    let inner_step = Step {
-                        guards: Vec::new(),
-                        kind: *cmd.clone(),
-                        scope_enter: 0,
-                        scope_exit: 0,
-                    };
-                    let steps = vec![inner_step];
-                    let mut sub_state = ExecState {
-                        fs: {
-                            let mut resolver = PathResolver::new(
-                                state.fs.root().as_path(),
-                                state.fs.build_context().as_path(),
-                            )?;
-                            resolver.set_workspace_root(state.fs.build_context().clone());
-                            Box::new(resolver)
-                        },
-                        cargo_target_dir: state.cargo_target_dir.clone(),
-                        cwd: state.cwd.clone(),
-                        envs: state.envs.clone(),
-                        bg_children: Vec::new(),
-                        scope_stack: Vec::new(),
-                        io: state.io.clone(),
-                    };
-                    let mut sub_process = process.clone();
-
-                    // We need to capture output to a file.
-                    // We can't easily stream to a file via SharedOutput (which is Arc<Mutex<dyn Write>>).
-                    // But we can create a file writer and wrap it.
-                    // Wait, `state.fs.write_file` is atomic (takes &[u8]).
-                    // If we want to stream to file, we need `state.fs.open_write`?
-                    // `oxdock-fs` doesn't expose open_write directly on WorkspaceFs trait easily?
-                    // It has `write_file`.
-                    // So we must buffer in memory for CAPTURE_TO_FILE unless we change WorkspaceFs.
-                    // For now, we buffer in memory (Vec<u8>).
-
-                    let buf = Arc::new(Mutex::new(Vec::new()));
-
-                    execute_steps(
-                        &mut sub_state,
-                        &mut sub_process,
-                        &steps,
-                        stdin.clone(),
-                        expose_stdin,
-                        Some(StreamHandle::Stream(buf.clone())),
-                        Some(StreamHandle::Stream(buf.clone())),
-                        true,
-                    )?;
-
-                    let data = buf.lock().unwrap();
-                    state
-                        .fs
-                        .write_file(&target, &data)
-                        .with_context(|| format!("failed to write {}", target.display()))?;
-                    Ok(())
-                }
                 StepKind::Exit(code) => {
                     for child in state.bg_children.iter_mut() {
                         if child.try_wait()?.is_none() {
@@ -1675,7 +1629,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "out.txt".into(),
-                    contents: "hi".into(),
+                    contents: Some("hi".into()),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1720,7 +1674,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "out.txt".into(),
-                    contents: "val {{ env:BAZ }}".into(),
+                    contents: Some("val {{ env:BAZ }}".into()),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1747,7 +1701,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "snippet.txt".into(),
-                    contents: "payload".into(),
+                    contents: Some("payload".into()),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1772,9 +1726,27 @@ mod tests {
             },
             Step {
                 guards: Vec::new(),
-                kind: StepKind::CaptureToFile {
-                    path: "{{ env:OUT_FILE }}".into(),
+                kind: StepKind::WithIo {
+                    bindings: vec![IoBinding {
+                        stream: IoStream::Stdout,
+                        pipe: Some("cap-cat".to_string()),
+                    }],
                     cmd: Box::new(StepKind::Cat(Some("{{ env:SNIPPET }}".into()))),
+                },
+                scope_enter: 0,
+                scope_exit: 0,
+            },
+            Step {
+                guards: Vec::new(),
+                kind: StepKind::WithIo {
+                    bindings: vec![IoBinding {
+                        stream: IoStream::Stdin,
+                        pipe: Some("cap-cat".to_string()),
+                    }],
+                    cmd: Box::new(StepKind::Write {
+                        path: "{{ env:OUT_FILE }}".into(),
+                        contents: None,
+                    }),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1796,7 +1768,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "temp.txt".into(),
-                    contents: "123".into(),
+                    contents: Some("123".into()),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1841,7 +1813,7 @@ mod tests {
                 guards: Vec::new(),
                 kind: StepKind::Write {
                     path: "inner.txt".into(),
-                    contents: "ok".into(),
+                    contents: Some("ok".into()),
                 },
                 scope_enter: 0,
                 scope_exit: 0,
@@ -1925,29 +1897,4 @@ mod tests {
         assert_eq!(runs[0].stdin, Some(b"hello world".to_vec()));
     }
 
-    #[cfg_attr(
-        miri,
-        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
-    )]
-    #[test]
-    fn capture_to_file_writes_inner_output() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let root = temp.as_guarded_path().clone();
-        let steps = vec![Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "log.txt".into(),
-                cmd: Box::new(StepKind::Echo("captured".into())),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        }];
-
-        run_steps(&root, &steps).expect("capture_to_file should succeed");
-
-        let resolver = PathResolver::new(root.as_path(), root.as_path()).expect("resolver");
-        let log_path = root.join("log.txt").expect("log path");
-        let contents = resolver.read_to_string(&log_path).expect("read log");
-        assert_eq!(contents, "captured\n");
-    }
 }

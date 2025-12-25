@@ -1,4 +1,5 @@
 WORKDIR /
 SYMLINK client client
 WORKDIR client
-CAPTURE_TO_FILE seen.txt CAT version.txt
+WITH_IO [stdout=pipe:cap_seen_txt] CAT version.txt
+WITH_IO [stdin=pipe:cap_seen_txt] WRITE seen.txt

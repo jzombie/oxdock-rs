@@ -143,14 +143,14 @@ fn parse_semicolon_splits_multiple_instructions() {
     match &steps[0].kind {
         StepKind::Write { path, contents } => {
             assert_eq!(path, "one.txt");
-            assert_eq!(contents, "1");
+            assert_eq!(contents.as_deref(), Some("1"));
         }
         _ => panic!("expected first WRITE"),
     }
     match &steps[1].kind {
         StepKind::Write { path, contents } => {
             assert_eq!(path, "two.txt");
-            assert_eq!(contents, "2");
+            assert_eq!(contents.as_deref(), Some("2"));
         }
         _ => panic!("expected second WRITE"),
     }

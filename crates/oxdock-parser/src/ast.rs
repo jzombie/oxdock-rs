@@ -9,7 +9,6 @@ pub enum Command {
     Run,
     RunBg,
     Copy,
-    CaptureToFile,
     WithIo,
     CopyGit,
     HashSha256,
@@ -30,7 +29,6 @@ pub const COMMANDS: &[Command] = &[
     Command::Run,
     Command::RunBg,
     Command::Copy,
-    Command::CaptureToFile,
     Command::WithIo,
     Command::CopyGit,
     Command::HashSha256,
@@ -53,7 +51,6 @@ impl Command {
             Command::Run => "RUN",
             Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
-            Command::CaptureToFile => "CAPTURE_TO_FILE",
             Command::WithIo => "WITH_IO",
             Command::CopyGit => "COPY_GIT",
             Command::HashSha256 => "HASH_SHA256",
@@ -68,7 +65,7 @@ impl Command {
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::CaptureToFile | Command::WithIo)
+        matches!(self, Command::WithIo)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -80,7 +77,6 @@ impl Command {
             "RUN" => Some(Command::Run),
             "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
-            "CAPTURE_TO_FILE" => Some(Command::CaptureToFile),
             "WITH_IO" => Some(Command::WithIo),
             "COPY_GIT" => Some(Command::CopyGit),
             "HASH_SHA256" => Some(Command::HashSha256),
@@ -207,11 +203,7 @@ pub enum StepKind {
     Cat(Option<TemplateString>),
     Write {
         path: TemplateString,
-        contents: TemplateString,
-    },
-    CaptureToFile {
-        path: TemplateString,
-        cmd: Box<StepKind>,
+        contents: Option<TemplateString>,
     },
     WithIo {
         bindings: Vec<IoBinding>,
@@ -344,8 +336,8 @@ impl fmt::Display for WorkspaceTarget {
 }
 
 fn quote_arg(s: &str) -> String {
-    // Strict quoting to avoid parser ambiguity, especially with CAPTURE_TO_FILE command
-    // where unquoted args followed by run_args can be consumed greedily.
+    // Strict quoting avoids parser ambiguity when commands accept additional payloads
+    // (e.g. WRITE path <payload>) so arguments are never mistaken for subsequent tokens.
     // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.starts_with(|c: char| c.is_ascii_digit());
@@ -461,10 +453,11 @@ impl fmt::Display for StepKind {
                 Ok(())
             }
             StepKind::Write { path, contents } => {
-                write!(f, "WRITE {} {}", quote_arg(path), quote_msg(contents))
-            }
-            StepKind::CaptureToFile { path, cmd } => {
-                write!(f, "CAPTURE_TO_FILE {} {}", quote_arg(path), cmd)
+                write!(f, "WRITE {}", quote_arg(path))?;
+                if let Some(body) = contents {
+                    write!(f, " {}", quote_msg(body))?;
+                }
+                Ok(())
             }
             StepKind::WithIo { bindings, cmd } => {
                 let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();

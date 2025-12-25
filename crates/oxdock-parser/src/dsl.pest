@@ -68,7 +68,6 @@ command = _{
     run_command |
     copy_git_command | // Must come before copy_command
     copy_command |
-    capture_to_file_command |
     with_io_command |
     hash_sha256_command |
     symlink_command |
@@ -89,7 +88,6 @@ run_command = ${ "RUN" ~ sep ~ run_args }
 run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
 from_current_workspace_flag = { "--from-current-workspace" }
 copy_command = ${ "COPY" ~ sep ~ (from_current_workspace_flag ~ sep)? ~ argument ~ sep ~ argument }
-capture_to_file_command = ${ "CAPTURE_TO_FILE" ~ sep ~ argument ~ sep ~ command }
 with_io_command = ${ "WITH_IO" ~ sep ~ io_flags ~ (sep ~ command)? }
 copy_git_command = ${ "COPY_GIT" ~ sep ~ (include_dirty_flag ~ sep)? ~ argument ~ sep ~ argument ~ sep ~ argument }
 hash_sha256_command = ${ "HASH_SHA256" ~ sep ~ argument }
@@ -98,7 +96,7 @@ mkdir_command = ${ "MKDIR" ~ sep ~ argument }
 ls_command = ${ "LS" ~ (sep ~ argument)? }
 cwd_command = ${ "CWD" }
 cat_command = ${ "CAT" ~ (sep ~ argument)? }
-write_command = ${ "WRITE" ~ sep ~ argument ~ sep ~ message }
+write_command = ${ "WRITE" ~ sep ~ argument ~ (sep ~ message)? }
 exit_command = ${ "EXIT" ~ sep ~ exit_code }
 
 // Arguments

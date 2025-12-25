@@ -1,2 +1,3 @@
 ENV FOO=bar
-CAPTURE_TO_FILE env.txt ECHO value={{ env:FOO }}
+WITH_IO [stdout=pipe:cap_env_txt] ECHO value={{ env:FOO }}
+WITH_IO [stdin=pipe:cap_env_txt] WRITE env.txt

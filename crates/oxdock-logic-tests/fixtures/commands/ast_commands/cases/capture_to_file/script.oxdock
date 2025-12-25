@@ -1,1 +1,2 @@
-CAPTURE_TO_FILE out.txt RUN @CAPTURE_RUN_CMD@
+WITH_IO [stdout=pipe:cap_out_txt] RUN @CAPTURE_RUN_CMD@
+WITH_IO [stdin=pipe:cap_out_txt] WRITE out.txt

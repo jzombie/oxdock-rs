@@ -473,22 +473,6 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                 to: args.remove(0).into(),
             }
         }
-        Rule::capture_to_file_command => {
-            let mut path = None;
-            let mut cmd = None;
-            for inner in pair.into_inner() {
-                match inner.as_rule() {
-                    Rule::argument => path = Some(parse_argument(inner)?),
-                    _ => cmd = Some(Box::new(parse_command(inner)?)),
-                }
-            }
-            StepKind::CaptureToFile {
-                path: path
-                    .ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?
-                    .into(),
-                cmd: cmd.ok_or_else(|| anyhow!("missing command in CAPTURE_TO_FILE"))?,
-            }
-        }
         Rule::with_io_command => {
             let mut bindings = Vec::new();
             let mut cmd = None;
@@ -557,11 +541,24 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             StepKind::Cat(args.into_iter().next().map(Into::into))
         }
         Rule::write_command => {
-            let path = parse_single_arg_from_pair(pair.clone())?;
-            let contents = parse_message(pair)?;
+            let mut path = None;
+            let mut contents = None;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::argument if path.is_none() => {
+                        path = Some(parse_argument(inner)?);
+                    }
+                    Rule::message => {
+                        contents = Some(parse_concatenated_string(inner)?);
+                    }
+                    _ => {}
+                }
+            }
             StepKind::Write {
-                path: path.into(),
-                contents: contents.into(),
+                path: path
+                    .ok_or_else(|| anyhow!("WRITE expects a path argument"))?
+                    .into(),
+                contents: contents.map(Into::into),
             }
         }
         Rule::exit_command => {
@@ -574,15 +571,6 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
 }
 
 fn parse_single_arg(pair: Pair<Rule>) -> Result<String> {
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::argument {
-            return parse_argument(inner);
-        }
-    }
-    bail!("missing argument")
-}
-
-fn parse_single_arg_from_pair(pair: Pair<Rule>) -> Result<String> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::argument {
             return parse_argument(inner);

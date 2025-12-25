@@ -627,7 +627,6 @@ fn collect_step_kinds(kind: &StepKind, kinds: &mut HashSet<String>) {
     kinds.insert(step_kind_name(kind).to_string());
     match kind {
         StepKind::WithIo { cmd, .. } => collect_step_kinds(cmd, kinds),
-        StepKind::CaptureToFile { cmd, .. } => collect_step_kinds(cmd, kinds),
         _ => {}
     }
 }
@@ -1057,7 +1056,6 @@ fn step_kind_name(kind: &StepKind) -> &'static str {
         StepKind::Cwd => "Cwd",
         StepKind::Cat(_) => "Cat",
         StepKind::Write { .. } => "Write",
-        StepKind::CaptureToFile { .. } => "CaptureToFile",
         StepKind::CopyGit { .. } => "CopyGit",
         StepKind::HashSha256 { .. } => "HashSha256",
         StepKind::Exit(_) => "Exit",

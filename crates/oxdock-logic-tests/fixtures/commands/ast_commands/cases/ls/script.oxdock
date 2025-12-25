@@ -2,4 +2,5 @@ MKDIR items
 WRITE items/a.txt a
 WRITE items/b.txt b
 LS items
-CAPTURE_TO_FILE ls.txt LS items
+WITH_IO [stdout=pipe:cap_ls_txt] LS items
+WITH_IO [stdin=pipe:cap_ls_txt] WRITE ls.txt

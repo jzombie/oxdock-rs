@@ -14,6 +14,39 @@ fn parse_one(cmd: &str) -> Box<StepKind> {
     Box::new(steps[0].kind.clone())
 }
 
+fn capture_pipeline(pipe: &str, path: &str, cmd: StepKind) -> [Step; 2] {
+    let pipe_name = pipe.to_string();
+    [
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdout,
+                    pipe: Some(pipe_name.clone()),
+                }],
+                cmd: Box::new(cmd),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guards: Vec::new(),
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: Some(pipe_name),
+                }],
+                cmd: Box::new(StepKind::Write {
+                    path: path.into(),
+                    contents: None,
+                }),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ]
+}
+
 fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
     temp.as_guarded_path().clone()
 }
@@ -140,7 +173,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "client/dist/hello.txt".into(),
-                contents: "hi".into(),
+                    contents: Some("hi".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -207,7 +240,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "nested.txt".into(),
-                contents: "nested".into(),
+                    contents: Some("nested".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -228,7 +261,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "local_note.txt".into(),
-                contents: "local".into(),
+                    contents: Some("local".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -249,7 +282,7 @@ fn commands_behave_cross_platform() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "snap_note.txt".into(),
-                contents: "snap".into(),
+                    contents: Some("snap".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -329,7 +362,7 @@ fn exit_stops_pipeline_and_reports_code() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "before.txt".into(),
-                contents: "ok".into(),
+                contents: Some("ok".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -344,7 +377,7 @@ fn exit_stops_pipeline_and_reports_code() {
             guards: Vec::new(),
             kind: StepKind::Write {
                 path: "after.txt".into(),
-                contents: "nope".into(),
+                contents: Some("nope".into()),
             },
             scope_enter: 0,
             scope_exit: 0,
@@ -382,15 +415,8 @@ fn write_cmd_captures_output() {
     } else {
         "RUN printf %s \"hello\""
     };
-    let steps = vec![Step {
-        guards: Vec::new(),
-        kind: StepKind::CaptureToFile {
-            path: "out.txt".into(),
-            cmd: parse_one(cmd),
-        },
-        scope_enter: 0,
-        scope_exit: 0,
-    }];
+    let capture = capture_pipeline("cap-write", "out.txt", *parse_one(cmd));
+    let steps = capture.into_iter().collect::<Vec<_>>();
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
 }
@@ -409,16 +435,16 @@ fn capture_echo_interpolates_env() {
             scope_enter: 0,
             scope_exit: 0,
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "echo.txt".into(),
-                cmd: parse_one("ECHO value={{ env:FOO }}"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
     ];
+    let mut steps = steps;
+    steps.extend(
+        capture_pipeline(
+            "cap-echo",
+            "echo.txt",
+            *parse_one("ECHO value={{ env:FOO }}"),
+        )
+        .into_iter(),
+    );
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
@@ -440,16 +466,9 @@ fn capture_ls_lists_entries_with_header() {
             scope_enter: 0,
             scope_exit: 0,
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "ls.txt".into(),
-                cmd: parse_one("LS"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
     ];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-ls", "ls.txt", *parse_one("LS")));
 
     run_steps(&root, &steps).unwrap();
 
@@ -473,15 +492,7 @@ fn capture_cat_emits_file_contents() {
     let root = guard_root(&temp);
     write_text(&root.join("note.txt").unwrap(), "hello note");
 
-    let steps = vec![Step {
-        guards: Vec::new(),
-        kind: StepKind::CaptureToFile {
-            path: "out.txt".into(),
-            cmd: parse_one("CAT note.txt"),
-        },
-        scope_enter: 0,
-        scope_exit: 0,
-    }];
+    let steps = capture_pipeline("cap-cat", "out.txt", *parse_one("CAT note.txt"));
 
     run_steps(&root, &steps).unwrap();
     assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
@@ -498,16 +509,9 @@ fn capture_cwd_canonicalizes_and_writes() {
             scope_enter: 0,
             scope_exit: 0,
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "pwd.txt".into(),
-                cmd: parse_one("CWD"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
     ];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-cwd", "pwd.txt", *parse_one("CWD")));
 
     run_steps(&root, &steps).unwrap();
 
@@ -723,9 +727,13 @@ fn env_exposes_git_commit_hash() {
         .expect("git rev-parse failed");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
 
-    let steps =
-        oxdock_parser::parse_script("CAPTURE_TO_FILE out.txt ECHO {{ env:WORKSPACE_GIT_COMMIT }}")
-            .unwrap();
+    let steps = oxdock_parser::parse_script(indoc!(
+        r#"
+        WITH_IO [stdout=pipe:commit_capture] ECHO {{ env:WORKSPACE_GIT_COMMIT }}
+        WITH_IO [stdin=pipe:commit_capture] WRITE out.txt
+        "#
+    ))
+    .unwrap();
     run_steps(&repo, &steps).unwrap();
 
     assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
@@ -757,10 +765,10 @@ fn write_cannot_escape_root() {
     let root = guard_root(&temp);
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Write {
-            path: "../escape.txt".into(),
-            contents: "nope".into(),
-        },
+            kind: StepKind::Write {
+                path: "../escape.txt".into(),
+                contents: Some("nope".into()),
+            },
         scope_enter: 0,
         scope_exit: 0,
     }];
@@ -906,16 +914,14 @@ fn workdir_accepts_symlink_into_workspace_root() {
             scope_enter: 0,
             scope_exit: 0,
         },
-        Step {
-            guards: Vec::new(),
-            kind: StepKind::CaptureToFile {
-                path: "seen.txt".into(),
-                cmd: parse_one("CAT version.txt"),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        },
     ];
+
+    let mut steps = steps;
+    steps.extend(capture_pipeline(
+        "cap-workspace-version",
+        "seen.txt",
+        *parse_one("CAT version.txt"),
+    ));
 
     if can_create_symlinks(workspace_root.as_path()) {
         run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap();
@@ -954,11 +960,11 @@ fn write_missing_path_cannot_escape_root() {
 
     let steps = vec![Step {
         guards: Vec::new(),
-        kind: StepKind::Write {
-            // Ancestor exists inside root, but remaining components attempt to climb out.
-            path: "a/b/../../../../outside.txt".into(),
-            contents: "nope".into(),
-        },
+            kind: StepKind::Write {
+                // Ancestor exists inside root, but remaining components attempt to climb out.
+                path: "a/b/../../../../outside.txt".into(),
+                contents: Some("nope".into()),
+            },
         scope_enter: 0,
         scope_exit: 0,
     }];

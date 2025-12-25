@@ -152,7 +152,7 @@ fn line_expects_inner_command(line: &str) -> bool {
 fn line_is_run_context(line: &str) -> bool {
     matches!(
         current_line_command(line),
-        Some(Command::Run | Command::RunBg | Command::CaptureToFile)
+        Some(Command::Run | Command::RunBg)
     )
 }
 
@@ -561,10 +561,10 @@ mod tests {
     }
 
     #[test]
-    fn line_predicates_distinguish_run_and_capture_contexts() {
+    fn line_predicates_distinguish_run_and_with_io_contexts() {
         assert!(line_is_run_context("  RUN something"));
         assert!(!line_is_run_context("ECHO hi"));
-        assert!(line_expects_inner_command("CAPTURE_TO_FILE out"));
+        assert!(line_expects_inner_command("WITH_IO [stdin]"));
         assert!(!line_expects_inner_command("RUN thing"));
     }
 }
