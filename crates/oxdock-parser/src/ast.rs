@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
+    InheritEnv,
     Workdir,
     Workspace,
     Env,
@@ -22,6 +23,7 @@ pub enum Command {
 }
 
 pub const COMMANDS: &[Command] = &[
+    Command::InheritEnv,
     Command::Workdir,
     Command::Workspace,
     Command::Env,
@@ -44,6 +46,7 @@ pub const COMMANDS: &[Command] = &[
 impl Command {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Command::InheritEnv => "INHERIT_ENV",
             Command::Workdir => "WORKDIR",
             Command::Workspace => "WORKSPACE",
             Command::Env => "ENV",
@@ -70,6 +73,7 @@ impl Command {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "INHERIT_ENV" => Some(Command::InheritEnv),
             "WORKDIR" => Some(Command::Workdir),
             "WORKSPACE" => Some(Command::Workspace),
             "ENV" => Some(Command::Env),
@@ -184,6 +188,11 @@ pub enum StepKind {
     Env {
         key: String,
         value: TemplateString,
+    },
+    /// Directive to inherit a selective list of environment variables from the host.
+    /// This is intended to be declared in the prelude/top-level only.
+    InheritEnv {
+        keys: Vec<String>,
     },
     Run(TemplateString),
     Echo(TemplateString),
@@ -411,6 +420,9 @@ fn format_io_binding(binding: &IoBinding) -> String {
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StepKind::InheritEnv { keys } => {
+                write!(f, "INHERIT_ENV [{}]", keys.join(", "))
+            }
             StepKind::Workdir(arg) => write!(f, "WORKDIR {}", quote_arg(arg)),
             StepKind::Workspace(target) => write!(f, "WORKSPACE {}", target),
             StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value)),

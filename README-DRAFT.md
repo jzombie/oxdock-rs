@@ -183,6 +183,21 @@ WRITE linux-release.txt generated
 - Guard-only lines without a block apply to the next command, preserving the existing syntax.
 - Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
 
+## Selective environment inheritance
+
+- Scripts no longer inherit the caller's environment wholesale. Host variables stay private unless you opt in explicitly.
+- Add `INHERIT_ENV [FOO, BAR, BAZ]` at the very top of the script to copy those keys from the process environment before any other command runs.
+- The directive must be top-level—no guards, no surrounding blocks, and no repeats. Trying to nest or guard it triggers a parser error so scripts stay deterministic.
+- Subsequent `ENV` commands can override inherited values, similar to how Docker's `ENV` overrides `--env` flags.
+
+```text
+INHERIT_ENV [AWS_REGION, HTTP_PROXY]
+ENV AWS_REGION=us-west-2 # explicit overrides still win
+RUN aws sts get-caller-identity
+```
+
+Keeping inheritance selective avoids leaking secrets by default while still allowing ergonomics for well-known keys (proxy settings, artifact caches, etc.).
+
 ## WITH_IO defaults and blocks
 
 - The inline form (`WITH_IO [stdin, stdout=pipe:setup] RUN cargo test`) applies only to the next command and lets you mix-and-match stream sources (stdin), sinks (stdout/stderr), and named pipes that UI layers can render elsewhere.

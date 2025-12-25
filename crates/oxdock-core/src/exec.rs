@@ -595,6 +595,14 @@ fn execute_steps<P: ProcessManager>(
             Ok(())
         } else {
             match &step.kind {
+                StepKind::InheritEnv { keys } => {
+                    for key in keys {
+                        if let Ok(value) = std::env::var(key) {
+                            state.envs.insert(key.clone(), value);
+                        }
+                    }
+                    Ok(())
+                }
                 StepKind::Workdir(path) => {
                     let ctx = state.command_ctx()?;
                     let rendered = expand_template(path, &ctx);

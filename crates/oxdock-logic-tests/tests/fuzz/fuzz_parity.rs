@@ -116,6 +116,9 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
+        prop::collection::vec("[A-Z_][A-Z0-9_]*", 1..3).prop_map(|keys| StepKind::InheritEnv {
+            keys: keys.into_iter().map(|k| k.to_string()).collect(),
+        }),
         safe_string().prop_map(|s| StepKind::Workdir(s.into())),
         prop_oneof![
             Just(WorkspaceTarget::Snapshot),
