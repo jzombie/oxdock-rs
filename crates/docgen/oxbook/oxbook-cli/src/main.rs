@@ -17,12 +17,13 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
+use oxbook_cli::WORKER_EVENT_PREFIX;
 
 const RUN_GLYPH_IDLE: &str = "[>]";
 const RUN_GLYPH_RUNNING: &str = "[X]";
@@ -81,34 +82,40 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
     let result = (|| -> Result<()> {
         let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut status = String::from("Idle");
-        let mut child: Option<Child> = None;
-        let mut snippet_run: Option<SnippetRun> = None;
+        let mut server: Option<ServerProcess> = None;
+        let (worker_event_tx, worker_event_rx) = mpsc::channel();
+        let mut running_line: Option<usize> = None;
         let mut mode = UiMode::Dashboard;
 
         loop {
-            if let Some(proc) = child.as_mut() {
-                if let Some(exit) = proc.try_wait()? {
+            if let Some(proc) = server.as_mut() {
+                if let Some(exit) = proc.child.try_wait()? {
                     let mut guard = logs.lock().unwrap();
                     guard.push_back(LogRecord::new(
                         LogSource::Stdout,
                         format!("process exited: {}\n", exit),
                     ));
                     trim_logs(&mut guard, MAX_LOG_LINES);
-                    child = None;
+                    server = None;
                     status = String::from("Idle");
+                    running_line = None;
                 }
             }
 
-            if let Some(run) = snippet_run.as_mut() {
-                if let Some(exit) = run.child.try_wait()? {
-                    let mut guard = logs.lock().unwrap();
-                    guard.push_back(LogRecord::new(
-                        LogSource::Stdout,
-                        format!("block at line {} exited: {}\n", run.line + 1, exit),
-                    ));
-                    trim_logs(&mut guard, MAX_LOG_LINES);
-                    status = format!("Block at line {} exited", run.line + 1);
-                    snippet_run = None;
+            while let Ok(event) = worker_event_rx.try_recv() {
+                match event {
+                    WorkerEvent::Started(line) => {
+                        running_line = Some(line.saturating_sub(1));
+                        status = format!("Running block at line {}...", line);
+                    }
+                    WorkerEvent::Done { line, success } => {
+                        running_line = None;
+                        status = if success {
+                            format!("Block at line {} completed", line)
+                        } else {
+                            format!("Block at line {} failed", line)
+                        };
+                    }
                 }
             }
 
@@ -155,7 +162,6 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         controls_view.render(f, mid[0]);
                     }
                     UiMode::Editor(editor) => {
-                        let running_line = snippet_run.as_ref().map(|run| run.line);
                         let mut editor_view = EditorView::new(editor, running_line);
                         editor_view.render(f, mid[0]);
                     }
@@ -177,65 +183,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     .hit_test_run_glyph(mouse_event.column, mouse_event.row)
                                 {
                                     let line_number = line_idx + 1;
-                                    if let Some(mut running) = snippet_run.take() {
-                                        if running.line == line_idx {
-                                            let _ = running.child.kill();
-                                            let _ = running.child.wait();
-                                            let mut guard = logs.lock().unwrap();
-                                            guard.push_back(LogRecord::new(
-                                                LogSource::Stdout,
-                                                format!(
-                                                    "stopped block at line {}\n",
-                                                    line_number
-                                                ),
-                                            ));
-                                            trim_logs(&mut guard, MAX_LOG_LINES);
-                                            status = format!(
-                                                "Stopped block at line {}",
-                                                line_number
-                                            );
-                                            continue;
-                                        } else {
-                                            let _ = running.child.kill();
-                                            let _ = running.child.wait();
-                                            let mut guard = logs.lock().unwrap();
-                                            guard.push_back(LogRecord::new(
-                                                LogSource::Stderr,
-                                                format!(
-                                                    "aborted block at line {}\n",
-                                                    running.line + 1
-                                                ),
-                                            ));
-                                            trim_logs(&mut guard, MAX_LOG_LINES);
-                                        }
-                                    }
-
-                                    match spawn_run_block_child(
-                                        &target_path,
-                                        line_number,
-                                        logs.clone(),
-                                        MAX_LOG_LINES,
-                                    ) {
-                                        Ok(child_proc) => {
-                                            let mut guard = logs.lock().unwrap();
-                                            guard.push_back(LogRecord::new(
-                                                LogSource::Stdout,
-                                                format!(
-                                                    "running block at line {}\n",
-                                                    line_number
-                                                ),
-                                            ));
-                                            trim_logs(&mut guard, MAX_LOG_LINES);
-                                            status = format!(
-                                                "Running block at line {}...",
-                                                line_number
-                                            );
-                                            snippet_run = Some(SnippetRun {
-                                                line: line_idx,
-                                                child: child_proc,
-                                            });
-                                        }
-                                        Err(err) => {
+                                    if let Some(server_proc) = server.as_mut() {
+                                        if let Err(err) = server_proc.send_run_command(line_number) {
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stderr,
@@ -246,10 +195,38 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             ));
                                             trim_logs(&mut guard, MAX_LOG_LINES);
                                             status = format!(
-                                                "Snippet spawn failed at line {}",
+                                                "Snippet start failed at line {}",
+                                                line_number
+                                            );
+                                        } else {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stdout,
+                                                format!(
+                                                    "running block at line {}\n",
+                                                    line_number
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            running_line = Some(line_idx);
+                                            status = format!(
+                                                "Running block at line {}...",
                                                 line_number
                                             );
                                         }
+                                    } else {
+                                        let mut guard = logs.lock().unwrap();
+                                        guard.push_back(LogRecord::new(
+                                            LogSource::Stdout,
+                                            format!(
+                                                "server not running; cannot run block at line {}\n",
+                                                line_number
+                                            ),
+                                        ));
+                                        trim_logs(&mut guard, MAX_LOG_LINES);
+                                        status = String::from(
+                                            "Start the server (press 'r') before running blocks",
+                                        );
                                     }
                                 }
                             }
@@ -262,25 +239,26 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         match &mut mode {
                             UiMode::Dashboard => match key_event.code {
                                 KeyCode::Char('q') => {
-                                    if let Some(mut proc) = child.take() {
-                                        let _ = proc.kill();
-                                        let _ = proc.wait();
-                                    }
-                                    if let Some(mut run) = snippet_run.take() {
-                                        let _ = run.child.kill();
-                                        let _ = run.child.wait();
+                                    if let Some(mut proc) = server.take() {
+                                        let _ = proc.child.kill();
+                                        let _ = proc.child.wait();
                                     }
                                     break Ok(());
                                 }
                                 KeyCode::Char('r') => {
-                                    if child.is_some() {
+                                    if server.is_some() {
                                         status = String::from("Already running");
                                         continue;
                                     }
-                                    match spawn_cli_child(&cli_args, logs.clone(), MAX_LOG_LINES) {
+                                    match spawn_cli_child(
+                                        &cli_args,
+                                        logs.clone(),
+                                        MAX_LOG_LINES,
+                                        worker_event_tx.clone(),
+                                    ) {
                                         Ok(new_child) => {
                                             status = String::from("Running...");
-                                            child = Some(new_child);
+                                            server = Some(new_child);
                                         }
                                         Err(err) => {
                                             let mut guard = logs.lock().unwrap();
@@ -357,11 +335,6 @@ enum EditorAction {
     Exit,
 }
 
-struct SnippetRun {
-    line: usize,
-    child: Child,
-}
-
 trait FramedView {
     fn block<'a>(&'a self) -> Block<'a>;
     fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect);
@@ -414,6 +387,31 @@ struct EditorRenderInfo {
     prefix_width: usize,
     digits_width: usize,
     arrow_width: usize,
+}
+
+#[derive(Debug, Clone)]
+enum WorkerEvent {
+    Started(usize),
+    Done { line: usize, success: bool },
+}
+
+struct ServerProcess {
+    child: Child,
+    stdin: Option<ChildStdin>,
+}
+
+impl ServerProcess {
+    fn send_run_command(&mut self, line: usize) -> io::Result<()> {
+        if let Some(stdin) = &mut self.stdin {
+            writeln!(stdin, "RUN {line}")?;
+            stdin.flush()
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "server stdin unavailable",
+            ))
+        }
+    }
 }
 
 impl EditorState {
@@ -1262,11 +1260,78 @@ impl LogSource {
     }
 }
 
+fn push_log_line(
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    source: LogSource,
+    line: &str,
+    max_logs: usize,
+) {
+    let mut guard = logs.lock().unwrap();
+    guard.push_back(LogRecord::new(source, format!("{line}\n")));
+    trim_logs(&mut guard, max_logs);
+}
+
+fn spawn_cli_child(
+    cli_args: &[String],
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+    event_tx: mpsc::Sender<WorkerEvent>,
+) -> Result<ServerProcess> {
+    spawn_cli_command(cli_args.to_vec(), logs, max_logs, Some(event_tx))
+}
+
+fn spawn_cli_command(
+    args: Vec<String>,
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+    event_tx: Option<mpsc::Sender<WorkerEvent>>,
+) -> Result<ServerProcess> {
+    let exe = std::env::current_exe().context("locate current executable")?;
+    let mut cmd = Command::new(exe);
+    if !args.is_empty() {
+        cmd.args(&args);
+    }
+    cmd.env("CLICOLOR_FORCE", "1");
+    cmd.env("FORCE_COLOR", "1");
+    cmd.env("NO_COLOR", "0");
+    cmd.env("OXBOOK_STREAM_STDOUT", "1");
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().context("spawn oxbook-cli child")?;
+
+    if let Some(stdout) = child.stdout.take() {
+        spawn_log_reader(
+            stdout,
+            LogSource::Stdout,
+            logs.clone(),
+            max_logs,
+            event_tx.clone(),
+        );
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        spawn_log_reader(stderr, LogSource::Stderr, logs.clone(), max_logs, None);
+    }
+
+    let stdin = child
+        .stdin
+        .take()
+        .context("obtain stdin for oxbook-cli child")?;
+
+    Ok(ServerProcess {
+        child,
+        stdin: Some(stdin),
+    })
+}
+
 fn spawn_log_reader<R: Read + Send + 'static>(
     stream: R,
     source: LogSource,
     logs: Arc<Mutex<VecDeque<LogRecord>>>,
     max_logs: usize,
+    event_tx: Option<mpsc::Sender<WorkerEvent>>,
 ) {
     thread::spawn(move || {
         let mut reader = BufReader::new(stream);
@@ -1276,7 +1341,13 @@ fn spawn_log_reader<R: Read + Send + 'static>(
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     if !pending.is_empty() {
-                        push_log_line(&logs, source, &pending, max_logs);
+                        dispatch_worker_line(
+                            &pending,
+                            &logs,
+                            max_logs,
+                            source,
+                            event_tx.as_ref(),
+                        );
                         pending.clear();
                     }
                     break;
@@ -1285,7 +1356,13 @@ fn spawn_log_reader<R: Read + Send + 'static>(
                     pending.push_str(&String::from_utf8_lossy(&buffer[..n]));
                     while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
                         let line = pending[..idx].to_string();
-                        push_log_line(&logs, source, &line, max_logs);
+                        dispatch_worker_line(
+                            &line,
+                            &logs,
+                            max_logs,
+                            source,
+                            event_tx.as_ref(),
+                        );
                         let delim = pending.as_bytes()[idx];
                         let mut consume = idx + 1;
                         if delim == b'\r' {
@@ -1307,64 +1384,41 @@ fn spawn_log_reader<R: Read + Send + 'static>(
     });
 }
 
-fn push_log_line(
-    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
-    source: LogSource,
+fn dispatch_worker_line(
     line: &str,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
     max_logs: usize,
+    source: LogSource,
+    event_tx: Option<&mpsc::Sender<WorkerEvent>>,
 ) {
-    let mut guard = logs.lock().unwrap();
-    guard.push_back(LogRecord::new(source, format!("{line}\n")));
-    trim_logs(&mut guard, max_logs);
-}
-
-fn spawn_cli_child(
-    cli_args: &[String],
-    logs: Arc<Mutex<VecDeque<LogRecord>>>,
-    max_logs: usize,
-) -> Result<Child> {
-    spawn_cli_command(cli_args.to_vec(), logs, max_logs)
-}
-
-fn spawn_run_block_child(
-    target: &Path,
-    line: usize,
-    logs: Arc<Mutex<VecDeque<LogRecord>>>,
-    max_logs: usize,
-) -> Result<Child> {
-    let mut args = Vec::with_capacity(3);
-    args.push(String::from("--run-block"));
-    args.push(target.to_string_lossy().to_string());
-    args.push(line.to_string());
-    spawn_cli_command(args, logs, max_logs)
-}
-
-fn spawn_cli_command(
-    args: Vec<String>,
-    logs: Arc<Mutex<VecDeque<LogRecord>>>,
-    max_logs: usize,
-) -> Result<Child> {
-    let exe = std::env::current_exe().context("locate current executable")?;
-    let mut cmd = Command::new(exe);
-    if !args.is_empty() {
-        cmd.args(&args);
-    }
-    cmd.env("CLICOLOR_FORCE", "1");
-    cmd.env("FORCE_COLOR", "1");
-    cmd.env("NO_COLOR", "0");
-    cmd.env("OXBOOK_STREAM_STDOUT", "1");
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().context("spawn oxbook-cli child")?;
-
-    if let Some(stdout) = child.stdout.take() {
-        spawn_log_reader(stdout, LogSource::Stdout, logs.clone(), max_logs);
+    if let Some(rest) = line.strip_prefix(WORKER_EVENT_PREFIX) {
+        if let Some(tx) = event_tx {
+            let mut parts = rest.trim_start().split_whitespace();
+            match parts.next() {
+                Some("START") => {
+                    if let Some(line_num) =
+                        parts.next().and_then(|value| value.parse::<usize>().ok())
+                    {
+                        let _ = tx.send(WorkerEvent::Started(line_num));
+                    }
+                }
+                Some("DONE") => {
+                    if let Some(line_num) =
+                        parts.next().and_then(|value| value.parse::<usize>().ok())
+                    {
+                        let success = matches!(parts.next(), Some("OK"));
+                        let _ = tx.send(WorkerEvent::Done {
+                            line: line_num,
+                            success,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        return;
     }
 
-    if let Some(stderr) = child.stderr.take() {
-        spawn_log_reader(stderr, LogSource::Stderr, logs.clone(), max_logs);
-    }
-
-    Ok(child)
+    push_log_line(logs, source, line, max_logs);
 }
 

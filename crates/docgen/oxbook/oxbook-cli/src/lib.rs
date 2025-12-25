@@ -10,9 +10,9 @@ use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::io::{Cursor, IsTerminal, Stdout};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::io::{self, BufRead, Cursor, IsTerminal, Stdout, Write};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const STABLE_READ_RETRIES: usize = 5;
@@ -22,11 +22,13 @@ const OUTPUT_BEGIN: &str = "<!-- oxbook-output:begin -->";
 const OUTPUT_END: &str = "<!-- oxbook-output:end -->";
 const OUTPUT_META_PREFIX: &str = "<!-- oxbook-output:meta";
 const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(75);
 const SHORT_HASH_LEN: usize = 32;
 // If set to "0" disables terminal streaming; otherwise auto-on when stdout is a TTY.
 const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
 const PIPE_SETUP: &str = "setup";
 const PIPE_SNIPPET: &str = "snippet";
+pub const WORKER_EVENT_PREFIX: &str = "@@WORKER:";
 
 #[derive(Debug)]
 struct FenceBlock {
@@ -102,6 +104,13 @@ pub fn run() -> Result<()> {
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
     let mut cache = RunnerCache::default();
 
+    let mut command_rx = None;
+    if !std::io::stdin().is_terminal() {
+        let (tx, rx) = mpsc::channel();
+        spawn_command_listener(tx);
+        command_rx = Some(rx);
+    }
+
     let initial_contents = read_stable_contents(&resolver, &watched)?;
     let rendered = render_shell_outputs(
         &initial_contents,
@@ -110,6 +119,8 @@ pub fn run() -> Result<()> {
         &cwd,
         &mut cache,
         true,
+        None,
+        None,
     )?;
     if rendered != initial_contents {
         resolver
@@ -125,6 +136,7 @@ pub fn run() -> Result<()> {
         &cwd,
         &mut cache,
         &mut last_contents,
+        command_rx,
     )?;
     Ok(())
 }
@@ -149,15 +161,146 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
 
     let source_dir = watched.parent().unwrap_or_else(|| workspace_root.clone());
     let mut cache = RunnerCache::default();
+    let stream_stdout = match std::env::var_os(STREAM_STDOUT_ENV) {
+        Some(val) => val != "0",
+        None => std::io::stdout().is_terminal(),
+    };
 
-    let contents = read_stable_contents(&resolver, &watched)?;
+    let mut last_contents = String::new();
+    let execution = run_block_in_place(
+        &resolver,
+        &workspace_root,
+        &watched,
+        &source_dir,
+        &mut cache,
+        &mut last_contents,
+        target_line,
+    )?;
+
+    match execution {
+        Some(result) => {
+            if !stream_stdout && !result.stdout.is_empty() {
+                print!("{}", result.stdout);
+                io::stdout().flush().ok();
+            }
+            if !result.stderr.is_empty() {
+                eprint!("{}", result.stderr);
+                io::stderr().flush().ok();
+            }
+            if !result.success {
+                println!("Block at line {} finished with errors", target_line);
+            }
+        }
+        None => {
+            println!("No code block covering line {}", target_line);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_block_worker(path: &str) -> Result<()> {
+    const EVENT_PREFIX: &str = "@@WORKER:";
+    let workspace_root = discover_workspace_root().context("resolve workspace root")?;
+    let resolver = PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
+        .context("create workspace path resolver")?;
+
+    scan_and_register_runners(&workspace_root);
+
+    let process_cwd = std::env::current_dir().context("determine current directory")?;
+    let cwd_base = match GuardedPath::new(workspace_root.root(), &process_cwd) {
+        Ok(g) => g,
+        Err(_) => workspace_root.clone(),
+    };
+
+    let watched = resolver
+        .resolve_read(&cwd_base, path)
+        .with_context(|| format!("resolve markdown path {path}"))?;
+
+    let source_dir = watched.parent().unwrap_or_else(|| workspace_root.clone());
+    let mut cache = RunnerCache::default();
+    let stream_stdout = match std::env::var_os(STREAM_STDOUT_ENV) {
+        Some(val) => val != "0",
+        None => std::io::stdout().is_terminal(),
+    };
+
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let mut command = String::new();
+    let mut stdout = io::stdout();
+
+    loop {
+        command.clear();
+        if input.read_line(&mut command)? == 0 {
+            break;
+        }
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("RUN") {
+            let line_value = rest.trim();
+            let Ok(target_line) = line_value.parse::<usize>() else {
+                eprintln!("invalid RUN command: {trimmed}");
+                continue;
+            };
+            writeln!(stdout, "{EVENT_PREFIX} START {target_line}")?;
+            stdout.flush()?;
+            let outcome = run_block_once(
+                &resolver,
+                &watched,
+                &workspace_root,
+                &source_dir,
+                &mut cache,
+                target_line,
+                stream_stdout,
+            );
+            match outcome {
+                Ok(true) => {
+                    writeln!(stdout, "{EVENT_PREFIX} DONE {target_line} OK")?;
+                }
+                Ok(false) => {
+                    writeln!(stdout, "{EVENT_PREFIX} DONE {target_line} ERR")?;
+                }
+                Err(err) => {
+                    eprintln!("run-block error at line {target_line}: {err}");
+                    writeln!(stdout, "{EVENT_PREFIX} DONE {target_line} ERR")?;
+                }
+            }
+            stdout.flush()?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_block_once(
+    resolver: &PathResolver,
+    watched: &GuardedPath,
+    workspace_root: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut RunnerCache,
+    line: usize,
+    stream_stdout: bool,
+) -> Result<bool> {
+    let target_line = line.max(1);
+    let contents = read_stable_contents(resolver, watched)?;
     let fences = parse_fences(&contents);
-    let fence = fences
+    let fence = match fences
         .into_iter()
         .find(|block| block.start_line <= target_line && block.end_line >= target_line)
-        .with_context(|| format!("no code block covering line {}", target_line))?;
+    {
+        Some(fence) => fence,
+        None => {
+            println!(
+                "No code block covering line {}",
+                target_line
+            );
+            return Ok(false);
+        }
+    };
 
-    let spec = match runner_spec(&fence.info, &resolver, &workspace_root, &source_dir, &mut cache)? {
+    let spec = match runner_spec(&fence.info, resolver, workspace_root, source_dir, cache)? {
         Some(spec) => spec,
         None => {
             println!(
@@ -169,20 +312,15 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
                     fence.info.clone()
                 }
             );
-            return Ok(());
+            return Ok(false);
         }
     };
 
-    let stream_stdout = match std::env::var_os(STREAM_STDOUT_ENV) {
-        Some(val) => val != "0",
-        None => std::io::stdout().is_terminal(),
-    };
-
     let output = run_runner(
-        &resolver,
-        &workspace_root,
-        &source_dir,
-        &mut cache,
+        resolver,
+        workspace_root,
+        source_dir,
+        cache,
         &spec,
         &fence.content,
         None,
@@ -194,12 +332,14 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
 
     if !stream_stdout && !output.stdout.is_empty() {
         print!("{}", output.stdout);
+        io::stdout().flush().ok();
     }
     if !output.stderr.is_empty() {
         eprint!("{}", output.stderr);
+        io::stderr().flush().ok();
     }
 
-    Ok(())
+    Ok(true)
 }
 
 fn parse_target_path() -> Result<String> {
@@ -241,8 +381,9 @@ fn run_watch_loop(
     source_dir: &GuardedPath,
     cache: &mut RunnerCache,
     last_contents: &mut String,
+    command_rx: Option<mpsc::Receiver<ServerCommand>>,
 ) -> Result<()> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
         move |result| {
             let _ = tx.send(result);
@@ -257,8 +398,18 @@ fn run_watch_loop(
         .with_context(|| format!("watch {}", watch_root.display()))?;
 
     loop {
+        drain_server_commands(
+            command_rx.as_ref(),
+            resolver,
+            workspace_root,
+            watched,
+            source_dir,
+            cache,
+            last_contents,
+        )?;
+
         let mut should_process = false;
-        match rx.recv() {
+        match rx.recv_timeout(COMMAND_POLL_INTERVAL) {
             Ok(Ok(event)) => {
                 if event_maybe_affects(&event, watched) && is_relevant_kind(&event) {
                     should_process = true;
@@ -268,7 +419,10 @@ fn run_watch_loop(
                 eprintln!("watch error: {err}");
                 continue;
             }
-            Err(err) => return Err(err).context("watcher channel closed"),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(anyhow::anyhow!("watcher channel closed"));
+            }
         }
 
         if !should_process {
@@ -276,6 +430,15 @@ fn run_watch_loop(
         }
 
         loop {
+            drain_server_commands(
+                command_rx.as_ref(),
+                resolver,
+                workspace_root,
+                watched,
+                source_dir,
+                cache,
+                last_contents,
+            )?;
             match rx.recv_timeout(WATCH_DEBOUNCE_WINDOW) {
                 Ok(Ok(event)) => {
                     if event_maybe_affects(&event, watched) && is_relevant_kind(&event) {
@@ -285,8 +448,8 @@ fn run_watch_loop(
                 Ok(Err(err)) => {
                     eprintln!("watch error: {err}");
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(anyhow::anyhow!("watcher channel closed"));
                 }
             }
@@ -303,6 +466,8 @@ fn run_watch_loop(
                 source_dir,
                 cache,
                 false,
+                None,
+                None,
             )?;
             if rendered != new_contents {
                 resolver
@@ -312,6 +477,169 @@ fn run_watch_loop(
             *last_contents = rendered;
         }
     }
+}
+
+fn drain_server_commands(
+    command_rx: Option<&mpsc::Receiver<ServerCommand>>,
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    watched: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut RunnerCache,
+    last_contents: &mut String,
+) -> Result<()> {
+    if let Some(rx) = command_rx {
+        while let Ok(cmd) = rx.try_recv() {
+            handle_server_command(
+                cmd,
+                resolver,
+                workspace_root,
+                watched,
+                source_dir,
+                cache,
+                last_contents,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn handle_server_command(
+    command: ServerCommand,
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    watched: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut RunnerCache,
+    last_contents: &mut String,
+) -> Result<()> {
+    match command {
+        ServerCommand::RunBlock { line } => {
+            let target_line = line.max(1);
+            println!("{WORKER_EVENT_PREFIX} START {target_line}");
+            io::stdout().flush().ok();
+
+            let result = run_block_in_place(
+                resolver,
+                workspace_root,
+                watched,
+                source_dir,
+                cache,
+                last_contents,
+                target_line,
+            )?;
+
+            if result.is_none() {
+                println!("No code block covering line {target_line}");
+            }
+
+            let success = result.as_ref().map(|exec| exec.success).unwrap_or(false);
+            println!(
+                "{WORKER_EVENT_PREFIX} DONE {target_line} {}",
+                if success { "OK" } else { "ERR" }
+            );
+            io::stdout().flush().ok();
+        }
+    }
+    Ok(())
+}
+
+fn run_block_in_place(
+    resolver: &PathResolver,
+    workspace_root: &GuardedPath,
+    watched: &GuardedPath,
+    source_dir: &GuardedPath,
+    cache: &mut RunnerCache,
+    last_contents: &mut String,
+    target_line: usize,
+) -> Result<Option<BlockExecution>> {
+    let contents = read_stable_contents(resolver, watched)?;
+    let fences = parse_fences(&contents);
+    let block = match fences
+        .into_iter()
+        .find(|f| f.start_line <= target_line && f.end_line >= target_line)
+    {
+        Some(block) => block,
+        None => return Ok(None),
+    };
+
+    let mut forced_lines = HashSet::new();
+    for line in block.start_line..=block.end_line {
+        forced_lines.insert(line);
+    }
+
+    let mut matched: Option<BlockExecution> = None;
+    {
+        let mut callback = |exec: BlockExecution| {
+            if exec.start_line <= target_line && exec.end_line >= target_line {
+                matched = Some(exec.clone());
+            }
+        };
+
+        let rendered = render_shell_outputs(
+            &contents,
+            resolver,
+            workspace_root,
+            source_dir,
+            cache,
+            true,
+            Some(&forced_lines),
+            Some(&mut callback),
+        )?;
+
+        if rendered != contents {
+            resolver
+                .write_file(watched, rendered.as_bytes())
+                .with_context(|| format!("write {}", watched.display()))?;
+            *last_contents = rendered;
+        } else {
+            *last_contents = contents;
+        }
+    }
+
+    if matched.is_none() {
+        matched = Some(BlockExecution {
+            start_line: block.start_line,
+            end_line: block.end_line,
+            success: false,
+            stdout: String::new(),
+            stderr: String::from("block execution did not produce a result"),
+        });
+    }
+
+    Ok(matched)
+}
+
+fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>) {
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut reader = io::BufReader::new(stdin.lock());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Some(rest) = trimmed.strip_prefix("RUN") {
+                        let value = rest.trim();
+                        match value.parse::<usize>() {
+                            Ok(line_no) => {
+                                let _ = tx.send(ServerCommand::RunBlock { line: line_no });
+                            }
+                            Err(_) => eprintln!("invalid RUN command: {trimmed}"),
+                        }
+                    } else {
+                        eprintln!("unknown command: {trimmed}");
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
 }
 
 fn is_relevant_kind(event: &Event) -> bool {
@@ -525,6 +853,8 @@ fn render_shell_outputs(
     source_dir: &GuardedPath,
     cache: &mut RunnerCache,
     only_missing_outputs: bool,
+    forced_lines: Option<&HashSet<usize>>,
+    on_block_run: Option<&mut dyn FnMut(BlockExecution)>,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     use comrak::{Arena, nodes::NodeValue, parse_document};
@@ -556,6 +886,7 @@ fn render_shell_outputs(
     let mut out_lines: Vec<String> = Vec::new();
     let mut prev_reader: Option<SharedInput> = None;
     let mut cursor: usize = 0;
+    let mut on_block_run = on_block_run;
 
     for (start, end, info, script) in blocks {
         // If this block ends before the current cursor, it's already been
@@ -593,9 +924,15 @@ fn render_shell_outputs(
             None
         };
 
+        let block_start_line = start + 1;
+        let block_end_line = end + 1;
+        let forced = forced_lines.map_or(false, |set| {
+            (block_start_line..=block_end_line).any(|ln| set.contains(&ln))
+        });
+
         if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
             let code_hash = code_hash(&script, &spec);
-            let should_run = match &existing {
+            let mut should_run = match &existing {
                 Some(block) => {
                     let code_hash_short = short_hash(&code_hash);
                     let matches_code = block.code_hash.as_deref() == Some(&code_hash)
@@ -626,6 +963,10 @@ fn render_shell_outputs(
                 }
                 None => true,
             };
+
+            if forced {
+                should_run = true;
+            }
 
             if should_run {
                 // Prepare stdin from previous fence
@@ -714,6 +1055,15 @@ fn render_shell_outputs(
                         out_lines.extend(output_block);
                         // advance cursor past any existing output if present
                         cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                        if let Some(cb) = on_block_run.as_mut() {
+                            cb(BlockExecution {
+                                start_line: block_start_line,
+                                end_line: block_end_line,
+                                success: true,
+                                stdout: run_output.stdout.clone(),
+                                stderr: run_output.stderr.clone(),
+                            });
+                        }
                     }
                     Err(err) => {
                         let mut chain = Vec::new();
@@ -745,6 +1095,15 @@ fn render_shell_outputs(
                             format_output_block(&code_hash, &stdout_output, &stderr_output);
                         out_lines.extend(output_block);
                         cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                        if let Some(cb) = on_block_run.as_mut() {
+                            cb(BlockExecution {
+                                start_line: block_start_line,
+                                end_line: block_end_line,
+                                success: false,
+                                stdout: stdout_output.clone(),
+                                stderr: stderr_output.clone(),
+                            });
+                        }
                     }
                 }
             } else if let Some(block) = existing {
@@ -771,6 +1130,27 @@ fn render_shell_outputs(
                 let output = format!("error: no runner registered for language '{}'", lang);
                 let output_block = format_output_block(&code_hash, "", &output);
                 out_lines.extend(output_block);
+                if forced {
+                    if let Some(cb) = on_block_run.as_mut() {
+                        cb(BlockExecution {
+                            start_line: block_start_line,
+                            end_line: block_end_line,
+                            success: false,
+                            stdout: String::new(),
+                            stderr: output.clone(),
+                        });
+                    }
+                }
+            } else if forced {
+                if let Some(cb) = on_block_run.as_mut() {
+                    cb(BlockExecution {
+                        start_line: block_start_line,
+                        end_line: block_end_line,
+                        success: false,
+                        stdout: String::new(),
+                        stderr: String::from("no runner configured for anonymous fence"),
+                    });
+                }
             }
             cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
         }
@@ -1328,6 +1708,19 @@ fn build_env_from_oxfile(
 struct RunnerOutput {
     stdout: String,
     stderr: String,
+}
+
+#[derive(Clone)]
+struct BlockExecution {
+    start_line: usize,
+    end_line: usize,
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+enum ServerCommand {
+    RunBlock { line: usize },
 }
 
 #[allow(clippy::too_many_arguments)]
