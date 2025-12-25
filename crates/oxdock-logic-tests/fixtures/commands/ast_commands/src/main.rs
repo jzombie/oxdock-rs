@@ -90,49 +90,6 @@ struct PipeSpec {
     expect: Option<String>,
 }
 
-struct EnvOverrideGuard {
-    previous: Vec<(String, Option<String>)>,
-}
-
-impl EnvOverrideGuard {
-    fn apply(set_vars: &[(String, String)], remove_vars: &[String]) -> Self {
-        let mut previous = Vec::new();
-        let mut recorded = HashSet::new();
-        for key in remove_vars {
-            if recorded.insert(key.clone()) {
-                previous.push((key.clone(), std::env::var(key).ok()));
-            }
-            unsafe {
-                std::env::remove_var(key);
-            }
-        }
-        for (key, value) in set_vars {
-            if recorded.insert(key.clone()) {
-                previous.push((key.clone(), std::env::var(key).ok()));
-            }
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for EnvOverrideGuard {
-    fn drop(&mut self) {
-        for (key, value) in self.previous.drain(..).rev() {
-            if let Some(val) = value {
-                unsafe {
-                    std::env::set_var(&key, val);
-                }
-            } else {
-                unsafe {
-                    std::env::remove_var(&key);
-                }
-            }
-        }
-    }
-}
 fn main() {
     if let Err(err) = run() {
         eprintln!("fixture failed: {err:#}");
@@ -724,7 +681,6 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
         let cursor = std::io::Cursor::new(s.as_bytes().to_vec());
         Arc::new(Mutex::new(cursor)) as SharedInput
     });
-    let _env_guard = EnvOverrideGuard::apply(&case.env, &case.env_remove);
     
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stdout: SharedOutput = stdout_buf.clone();
@@ -732,6 +688,13 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     let mut io_cfg = ExecIo::new();
     io_cfg.set_stdout(Some(stdout.clone()));
     io_cfg.set_stdin(stdin);
+
+    for key in &case.env_remove {
+        io_cfg.remove_inherit_env(key.clone());
+    }
+    for (key, value) in &case.env {
+        io_cfg.insert_inherit_env(key.clone(), value.clone());
+    }
 
     let mut pipe_buffers: Vec<(String, Arc<Mutex<Vec<u8>>>, PipeSpec)> = Vec::new();
     for (name, spec) in &case.pipes {

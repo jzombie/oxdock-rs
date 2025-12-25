@@ -399,6 +399,26 @@ fn inherit_env_override_precedes_host_env() {
 }
 
 #[test]
+fn inherit_env_removal_blocks_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_parser::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.remove_inherit_env("SPECIAL_TOKEN");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(read_trimmed(&root.join("seen.txt").unwrap()), "");
+}
+
+#[test]
 fn exit_stops_pipeline_and_reports_code() {
     let temp = GuardedPath::tempdir().unwrap();
     let root = guard_root(&temp);
