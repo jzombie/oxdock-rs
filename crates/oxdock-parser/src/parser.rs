@@ -1,4 +1,6 @@
-use crate::ast::{Guard, PlatformGuard, Step, StepKind, WorkspaceTarget};
+use crate::ast::{
+    Guard, GuardExpr, IoBinding, IoStream, PlatformGuard, Step, StepKind, WorkspaceTarget,
+};
 use crate::lexer::{self, RawToken, Rule};
 use anyhow::{Result, anyhow, bail};
 use pest::iterators::Pair;
@@ -10,15 +12,70 @@ struct ScopeFrame {
     had_command: bool,
 }
 
+#[derive(Clone)]
+struct PendingIoBlock {
+    line_no: usize,
+    bindings: Vec<IoBinding>,
+    guards: Option<GuardExpr>,
+}
+
+#[derive(Clone)]
+struct IoScopeFrame {
+    line_no: usize,
+    had_command: bool,
+    bindings: Vec<IoBinding>,
+    guards: Option<GuardExpr>,
+}
+
+#[derive(Clone, Copy)]
+enum BlockKind {
+    Guard,
+    Io,
+}
+
+#[derive(Default)]
+struct IoBindingSet {
+    stdin: Option<IoBinding>,
+    stdout: Option<IoBinding>,
+    stderr: Option<IoBinding>,
+}
+
+impl IoBindingSet {
+    fn insert(&mut self, binding: IoBinding) {
+        match binding.stream {
+            IoStream::Stdin => self.stdin = Some(binding),
+            IoStream::Stdout => self.stdout = Some(binding),
+            IoStream::Stderr => self.stderr = Some(binding),
+        }
+    }
+
+    fn into_vec(self) -> Vec<IoBinding> {
+        let mut out = Vec::new();
+        if let Some(binding) = self.stdin {
+            out.push(binding);
+        }
+        if let Some(binding) = self.stdout {
+            out.push(binding);
+        }
+        if let Some(binding) = self.stderr {
+            out.push(binding);
+        }
+        out
+    }
+}
+
 pub struct ScriptParser<'a> {
     tokens: VecDeque<RawToken<'a>>,
     steps: Vec<Step>,
-    guard_stack: Vec<Vec<Vec<Guard>>>,
-    pending_guards: Option<Vec<Vec<Guard>>>,
-    pending_inline_guards: Option<Vec<Vec<Guard>>>,
+    guard_stack: Vec<Option<GuardExpr>>,
+    pending_guards: Option<GuardExpr>,
+    pending_inline_guards: Option<GuardExpr>,
     pending_can_open_block: bool,
     pending_scope_enters: usize,
     scope_stack: Vec<ScopeFrame>,
+    pending_io_block: Option<PendingIoBlock>,
+    io_scope_stack: Vec<IoScopeFrame>,
+    block_stack: Vec<BlockKind>,
 }
 
 impl<'a> ScriptParser<'a> {
@@ -27,23 +84,33 @@ impl<'a> ScriptParser<'a> {
         Ok(Self {
             tokens,
             steps: Vec::new(),
-            guard_stack: vec![Vec::new()],
+            guard_stack: vec![None],
             pending_guards: None,
             pending_inline_guards: None,
             pending_can_open_block: false,
             pending_scope_enters: 0,
             scope_stack: Vec::new(),
+            pending_io_block: None,
+            io_scope_stack: Vec::new(),
+            block_stack: Vec::new(),
         })
     }
 
     pub fn parse(mut self) -> Result<Vec<Step>> {
         while let Some(token) = self.tokens.pop_front() {
+            if self.pending_io_block.is_some() && !matches!(token, RawToken::BlockStart { .. }) {
+                let pending = self.pending_io_block.take().unwrap();
+                bail!(
+                    "line {}: WITH_IO block must be followed by '{{'",
+                    pending.line_no
+                );
+            }
             match token {
                 RawToken::Guard { pair, line_end } => {
                     let groups = parse_guard_line(pair)?;
                     self.handle_guard_token(line_end, groups)?
                 }
-                RawToken::BlockStart { line_no } => self.start_block_from_pending(line_no)?,
+                RawToken::BlockStart { line_no } => self.start_block(line_no)?,
                 RawToken::BlockEnd { line_no } => self.end_block(line_no)?,
                 RawToken::Command { pair, line_no } => {
                     let kind = parse_command(pair)?;
@@ -52,27 +119,68 @@ impl<'a> ScriptParser<'a> {
             }
         }
 
+        if let Some(pending) = self.pending_io_block.take() {
+            bail!(
+                "line {}: WITH_IO block must be followed by '{{'",
+                pending.line_no
+            );
+        }
+
         if self.guard_stack.len() != 1 {
             bail!("unclosed guard block at end of script");
         }
-        if let Some(pending) = &self.pending_guards
-            && !pending.is_empty()
-        {
+        if self.pending_guards.is_some() {
             bail!("guard declared on final lines without a following command");
+        }
+
+        if let Some(frame) = self.io_scope_stack.last() {
+            bail!(
+                "WITH_IO block starting on line {} was not closed",
+                frame.line_no
+            );
+        }
+
+        // Validate `INHERIT_ENV` directives: only allowed in the prelude (before
+        // any other commands) and at most one occurrence.
+        {
+            let mut seen_non_prelude = false;
+            let mut inherit_count = 0usize;
+            for step in &self.steps {
+                match &step.kind {
+                    StepKind::InheritEnv { .. } => {
+                        if seen_non_prelude {
+                            bail!("INHERIT_ENV must appear before any other commands");
+                        }
+                        if step.guard.is_some() || step.scope_enter > 0 || step.scope_exit > 0 {
+                            bail!("INHERIT_ENV cannot be guarded or nested inside blocks");
+                        }
+                        inherit_count += 1;
+                    }
+                    kind => {
+                        if contains_inherit_env(kind) {
+                            bail!("INHERIT_ENV cannot be nested inside other commands");
+                        }
+                        seen_non_prelude = true;
+                    }
+                }
+            }
+            if inherit_count > 1 {
+                bail!("only one INHERIT_ENV directive is allowed");
+            }
         }
 
         Ok(self.steps)
     }
 
-    fn handle_guard_token(&mut self, line_end: usize, groups: Vec<Vec<Guard>>) -> Result<()> {
+    fn handle_guard_token(&mut self, line_end: usize, expr: GuardExpr) -> Result<()> {
         if let Some(RawToken::Command { line_no, .. }) = self.tokens.front()
             && *line_no == line_end
         {
-            self.pending_inline_guards = Some(groups);
+            self.pending_inline_guards = Some(expr);
             self.pending_can_open_block = false;
             return Ok(());
         }
-        self.stash_pending_guard(groups);
+        self.stash_pending_guard(expr);
         self.pending_can_open_block = true;
         Ok(())
     }
@@ -82,15 +190,15 @@ impl<'a> ScriptParser<'a> {
         self.handle_command(line_no, kind, inline)
     }
 
-    fn stash_pending_guard(&mut self, groups: Vec<Vec<Guard>>) {
+    fn stash_pending_guard(&mut self, guard: GuardExpr) {
         self.pending_guards = Some(if let Some(existing) = self.pending_guards.take() {
-            combine_guard_groups(&existing, &groups)
+            GuardExpr::all(vec![existing, guard])
         } else {
-            groups
+            guard
         });
     }
 
-    fn start_block_from_pending(&mut self, line_no: usize) -> Result<()> {
+    fn start_guard_block_from_pending(&mut self, line_no: usize) -> Result<()> {
         let guards = self
             .pending_guards
             .take()
@@ -99,23 +207,17 @@ impl<'a> ScriptParser<'a> {
             bail!("line {}: '{{' must directly follow a guard", line_no);
         }
         self.pending_can_open_block = false;
-        self.start_block(guards, line_no)
+        self.enter_guard_block(guards, line_no)
     }
 
-    fn start_block(&mut self, guards: Vec<Vec<Guard>>, line_no: usize) -> Result<()> {
-        let with_pending = if let Some(pending) = self.pending_guards.take() {
-            combine_guard_groups(&pending, &guards)
+    fn enter_guard_block(&mut self, guard: GuardExpr, line_no: usize) -> Result<()> {
+        let composed = if let Some(pending) = self.pending_guards.take() {
+            GuardExpr::all(vec![pending, guard])
         } else {
-            guards
+            guard
         };
-        let parent = self.guard_stack.last().cloned().unwrap_or_default();
-        let next = if parent.is_empty() {
-            with_pending
-        } else if with_pending.is_empty() {
-            parent
-        } else {
-            combine_guard_groups(&parent, &with_pending)
-        };
+        let parent = self.guard_stack.last().cloned().unwrap_or(None);
+        let next = and_guard_exprs(parent, Some(composed));
         self.guard_stack.push(next);
         self.scope_stack.push(ScopeFrame {
             line_no,
@@ -125,7 +227,55 @@ impl<'a> ScriptParser<'a> {
         Ok(())
     }
 
+    fn begin_io_block(
+        &mut self,
+        line_no: usize,
+        bindings: Vec<IoBinding>,
+        guards: Option<GuardExpr>,
+    ) -> Result<()> {
+        if self.pending_io_block.is_some() {
+            bail!(
+                "line {}: previous WITH_IO block is still waiting for '{{'",
+                line_no
+            );
+        }
+        self.pending_io_block = Some(PendingIoBlock {
+            line_no,
+            bindings,
+            guards,
+        });
+        Ok(())
+    }
+
+    fn start_block(&mut self, line_no: usize) -> Result<()> {
+        if let Some(pending) = self.pending_io_block.take() {
+            self.block_stack.push(BlockKind::Io);
+            self.io_scope_stack.push(IoScopeFrame {
+                line_no: pending.line_no,
+                had_command: false,
+                bindings: pending.bindings,
+                guards: pending.guards,
+            });
+            Ok(())
+        } else {
+            self.start_guard_block_from_pending(line_no)?;
+            self.block_stack.push(BlockKind::Guard);
+            Ok(())
+        }
+    }
+
     fn end_block(&mut self, line_no: usize) -> Result<()> {
+        let kind = self
+            .block_stack
+            .pop()
+            .ok_or_else(|| anyhow!("line {}: unexpected '}}'", line_no))?;
+        match kind {
+            BlockKind::Guard => self.end_guard_block(line_no),
+            BlockKind::Io => self.end_io_block(line_no),
+        }
+    }
+
+    fn end_guard_block(&mut self, line_no: usize) -> Result<()> {
         if self.guard_stack.len() == 1 {
             bail!("line {}: unexpected '}}'", line_no);
         }
@@ -157,49 +307,99 @@ impl<'a> ScriptParser<'a> {
         Ok(())
     }
 
-    fn guard_context(&mut self, inline: Option<Vec<Vec<Guard>>>) -> Vec<Vec<Guard>> {
-        let mut context = if let Some(top) = self.guard_stack.last() {
-            top.clone()
-        } else {
-            Vec::new()
-        };
+    fn end_io_block(&mut self, line_no: usize) -> Result<()> {
+        let frame = self
+            .io_scope_stack
+            .pop()
+            .ok_or_else(|| anyhow!("line {}: unexpected '}}'", line_no))?;
+        if !frame.had_command {
+            bail!(
+                "line {}: WITH_IO block starting on line {} must contain at least one command",
+                line_no,
+                frame.line_no
+            );
+        }
+        Ok(())
+    }
+
+    fn guard_context(&mut self, inline: Option<GuardExpr>) -> Option<GuardExpr> {
+        let mut context = self.guard_stack.last().cloned().unwrap_or(None);
         if let Some(pending) = self.pending_guards.take() {
-            context = if context.is_empty() {
-                pending
-            } else {
-                combine_guard_groups(&context, &pending)
-            };
+            context = and_guard_exprs(context, Some(pending));
             self.pending_can_open_block = false;
         }
-        if let Some(inline_groups) = inline {
-            context = if context.is_empty() {
-                inline_groups
-            } else {
-                combine_guard_groups(&context, &inline_groups)
-            };
+        if let Some(inline_guard) = inline {
+            context = and_guard_exprs(context, Some(inline_guard));
         }
         context
     }
 
     fn handle_command(
         &mut self,
-        _line_no: usize,
+        line_no: usize,
         kind: StepKind,
-        inline_guards: Option<Vec<Vec<Guard>>>,
+        inline_guards: Option<GuardExpr>,
     ) -> Result<()> {
+        if let StepKind::WithIoBlock { bindings } = kind {
+            let guards = self.guard_context(inline_guards);
+            self.begin_io_block(line_no, bindings, guards)?;
+            return Ok(());
+        }
+
         let guards = self.guard_context(inline_guards);
+        let guards = self.apply_io_guards(guards);
         let scope_enter = self.pending_scope_enters;
         self.pending_scope_enters = 0;
         for frame in self.scope_stack.iter_mut() {
             frame.had_command = true;
         }
+        for frame in self.io_scope_stack.iter_mut() {
+            frame.had_command = true;
+        }
+        let kind = self.apply_io_defaults(kind);
         self.steps.push(Step {
-            guards,
+            guard: guards,
             kind,
             scope_enter,
             scope_exit: 0,
         });
         Ok(())
+    }
+
+    fn apply_io_defaults(&self, kind: StepKind) -> StepKind {
+        let defaults = self.current_io_defaults();
+        if defaults.is_empty() {
+            return kind;
+        }
+        match kind {
+            StepKind::WithIo { bindings, cmd } => StepKind::WithIo {
+                bindings: merge_bindings(&defaults, &bindings),
+                cmd,
+            },
+            other => StepKind::WithIo {
+                bindings: defaults,
+                cmd: Box::new(other),
+            },
+        }
+    }
+
+    fn current_io_defaults(&self) -> Vec<IoBinding> {
+        if self.io_scope_stack.is_empty() {
+            return Vec::new();
+        }
+        let mut set = IoBindingSet::default();
+        for frame in &self.io_scope_stack {
+            for binding in &frame.bindings {
+                set.insert(binding.clone());
+            }
+        }
+        set.into_vec()
+    }
+
+    fn apply_io_guards(&self, guard: Option<GuardExpr>) -> Option<GuardExpr> {
+        self.io_scope_stack.iter().fold(guard, |acc, frame| {
+            and_guard_exprs(acc, frame.guards.clone())
+        })
     }
 }
 
@@ -207,22 +407,31 @@ pub fn parse_script(input: &str) -> Result<Vec<Step>> {
     ScriptParser::new(input)?.parse()
 }
 
-fn combine_guard_groups(a: &[Vec<Guard>], b: &[Vec<Guard>]) -> Vec<Vec<Guard>> {
-    if a.is_empty() {
-        return b.to_vec();
+fn and_guard_exprs(left: Option<GuardExpr>, right: Option<GuardExpr>) -> Option<GuardExpr> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(expr), None) | (None, Some(expr)) => Some(expr),
+        (Some(lhs), Some(rhs)) => Some(GuardExpr::all(vec![lhs, rhs])),
     }
-    if b.is_empty() {
-        return a.to_vec();
+}
+
+fn merge_bindings(defaults: &[IoBinding], overrides: &[IoBinding]) -> Vec<IoBinding> {
+    let mut set = IoBindingSet::default();
+    for binding in defaults {
+        set.insert(binding.clone());
     }
-    let mut combined = Vec::new();
-    for left in a {
-        for right in b {
-            let mut merged = left.clone();
-            merged.extend(right.clone());
-            combined.push(merged);
-        }
+    for binding in overrides {
+        set.insert(binding.clone());
     }
-    combined
+    set.into_vec()
+}
+
+fn contains_inherit_env(kind: &StepKind) -> bool {
+    match kind {
+        StepKind::InheritEnv { .. } => true,
+        StepKind::WithIo { cmd, .. } => contains_inherit_env(cmd),
+        _ => false,
+    }
 }
 
 fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
@@ -255,37 +464,33 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             StepKind::RunBg(cmd.into())
         }
         Rule::copy_command => {
-            let mut args = parse_args(pair)?;
+            let mut args: Vec<String> = Vec::new();
+            let mut from_current_workspace = false;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::from_current_workspace_flag => from_current_workspace = true,
+                    Rule::argument => args.push(parse_argument(inner)?),
+                    _ => {}
+                }
+            }
+            if args.len() != 2 {
+                bail!("COPY expects 2 arguments (from, to)");
+            }
             StepKind::Copy {
+                from_current_workspace,
                 from: args.remove(0).into(),
                 to: args.remove(0).into(),
             }
         }
-        Rule::capture_to_file_command => {
-            let mut path = None;
-            let mut cmd = None;
-            for inner in pair.into_inner() {
-                match inner.as_rule() {
-                    Rule::argument => path = Some(parse_argument(inner)?),
-                    _ => cmd = Some(Box::new(parse_command(inner)?)),
-                }
-            }
-            StepKind::CaptureToFile {
-                path: path
-                    .ok_or_else(|| anyhow!("missing path in CAPTURE_TO_FILE"))?
-                    .into(),
-                cmd: cmd.ok_or_else(|| anyhow!("missing command in CAPTURE_TO_FILE"))?,
-            }
-        }
         Rule::with_io_command => {
-            let mut streams = Vec::new();
+            let mut bindings = Vec::new();
             let mut cmd = None;
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::io_flags => {
                         for flag in inner.into_inner() {
-                            if flag.as_rule() == Rule::io_flag {
-                                streams.push(flag.as_str().to_string());
+                            if flag.as_rule() == Rule::io_binding {
+                                bindings.push(parse_io_binding(flag)?);
                             }
                         }
                     }
@@ -294,9 +499,10 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
                     }
                 }
             }
-            StepKind::WithIo {
-                streams,
-                cmd: cmd.ok_or_else(|| anyhow!("missing command in WITH_IO"))?,
+            if let Some(cmd) = cmd {
+                StepKind::WithIo { bindings, cmd }
+            } else {
+                StepKind::WithIoBlock { bindings }
             }
         }
         Rule::copy_git_command => {
@@ -323,6 +529,23 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             let arg = parse_single_arg(pair)?;
             StepKind::HashSha256 { path: arg.into() }
         }
+        Rule::inherit_env_command => {
+            let mut keys: Vec<String> = Vec::new();
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::inherit_list => {
+                        for key in inner.into_inner() {
+                            if key.as_rule() == Rule::env_key {
+                                keys.push(key.as_str().trim().to_string());
+                            }
+                        }
+                    }
+                    Rule::env_key => keys.push(inner.as_str().trim().to_string()),
+                    _ => {}
+                }
+            }
+            StepKind::InheritEnv { keys }
+        }
         Rule::symlink_command => {
             let mut args = parse_args(pair)?;
             StepKind::Symlink {
@@ -339,16 +562,29 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
             StepKind::Ls(args.into_iter().next().map(Into::into))
         }
         Rule::cwd_command => StepKind::Cwd,
-        Rule::cat_command => {
+        Rule::read_command => {
             let args = parse_args(pair)?;
-            StepKind::Cat(args.into_iter().next().map(Into::into))
+            StepKind::Read(args.into_iter().next().map(Into::into))
         }
         Rule::write_command => {
-            let path = parse_single_arg_from_pair(pair.clone())?;
-            let contents = parse_message(pair)?;
+            let mut path = None;
+            let mut contents = None;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::argument if path.is_none() => {
+                        path = Some(parse_argument(inner)?);
+                    }
+                    Rule::message => {
+                        contents = Some(parse_concatenated_string(inner)?);
+                    }
+                    _ => {}
+                }
+            }
             StepKind::Write {
-                path: path.into(),
-                contents: contents.into(),
+                path: path
+                    .ok_or_else(|| anyhow!("WRITE expects a path argument"))?
+                    .into(),
+                contents: contents.map(Into::into),
             }
         }
         Rule::exit_command => {
@@ -361,15 +597,6 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
 }
 
 fn parse_single_arg(pair: Pair<Rule>) -> Result<String> {
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::argument {
-            return parse_argument(inner);
-        }
-    }
-    bail!("missing argument")
-}
-
-fn parse_single_arg_from_pair(pair: Pair<Rule>) -> Result<String> {
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::argument {
             return parse_argument(inner);
@@ -392,6 +619,7 @@ fn parse_argument(pair: Pair<Rule>) -> Result<String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::quoted_string => parse_quoted_string(inner),
+        Rule::templated_arg => Ok(inner.as_str().to_string()),
         Rule::unquoted_arg => Ok(inner.as_str().to_string()),
         _ => unreachable!(),
     }
@@ -552,53 +780,227 @@ fn parse_exit_code(pair: Pair<Rule>) -> Result<i32> {
     bail!("missing exit code")
 }
 
-fn parse_guard_line(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {
-    let mut groups = Vec::new();
+fn parse_guard_line(pair: Pair<Rule>) -> Result<GuardExpr> {
     for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::guard_groups {
-            groups = parse_guard_groups(inner)?;
+        if inner.as_rule() == Rule::guard_expr {
+            return parse_guard_expr(inner);
         }
     }
-    Ok(groups)
+    bail!("guard line missing expression")
 }
 
-fn parse_guard_groups(pair: Pair<Rule>) -> Result<Vec<Vec<Guard>>> {
-    let mut groups = Vec::new();
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::guard_conjunction {
-            groups.push(parse_guard_conjunction(inner)?);
-        }
-    }
-    Ok(groups)
-}
-
-fn parse_guard_conjunction(pair: Pair<Rule>) -> Result<Vec<Guard>> {
-    let mut group = Vec::new();
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::guard_term {
-            group.push(parse_guard_term(inner)?);
-        }
-    }
-    Ok(group)
-}
-
-fn parse_guard_term(pair: Pair<Rule>) -> Result<Guard> {
-    let mut invert = false;
-    let mut guard = None;
-
+fn parse_io_binding(pair: Pair<Rule>) -> Result<IoBinding> {
+    let mut stream = None;
+    let mut pipe = None;
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::invert => invert = true,
-            Rule::env_guard => guard = Some(parse_env_guard(inner, invert)?),
-            Rule::platform_guard => guard = Some(parse_platform_guard(inner, invert)?),
-            Rule::bare_platform => guard = Some(parse_bare_platform(inner, invert)?),
+            Rule::io_stream => stream = Some(parse_io_stream(inner.as_str())),
+            Rule::pipe_binding => pipe = Some(parse_pipe_binding(inner)?),
             _ => {}
         }
     }
-    guard.ok_or_else(|| anyhow!("missing guard predicate"))
+    let stream = stream.ok_or_else(|| anyhow!("missing IO stream in WITH_IO"))?;
+    Ok(IoBinding { stream, pipe })
 }
 
-fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
+fn parse_io_stream(text: &str) -> IoStream {
+    match text {
+        "stdin" => IoStream::Stdin,
+        "stdout" => IoStream::Stdout,
+        "stderr" => IoStream::Stderr,
+        _ => unreachable!("parser produced invalid io_stream token"),
+    }
+}
+
+fn parse_pipe_binding(pair: Pair<Rule>) -> Result<String> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::pipe_name {
+            return Ok(inner.as_str().to_string());
+        }
+    }
+    bail!("missing pipe identifier in WITH_IO binding");
+}
+
+fn parse_guard_expr(pair: Pair<Rule>) -> Result<GuardExpr> {
+    match pair.as_rule() {
+        Rule::guard_expr => {
+            let next = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| anyhow!("guard expression missing body"))?;
+            parse_guard_expr(next)
+        }
+        Rule::guard_seq => parse_guard_seq(pair),
+        Rule::guard_factor => parse_guard_factor(pair),
+        Rule::guard_not => parse_guard_not(pair),
+        Rule::guard_primary => parse_guard_primary(pair),
+        Rule::guard_group => parse_guard_group(pair),
+        Rule::guard_or_call => parse_guard_or_call(pair),
+        Rule::guard_term => Ok(GuardExpr::Predicate(parse_guard_term(pair)?)),
+        _ => bail!("unexpected guard expression rule: {:?}", pair.as_rule()),
+    }
+}
+
+fn parse_guard_seq(pair: Pair<Rule>) -> Result<GuardExpr> {
+    let mut exprs = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_factor {
+            exprs.push(parse_guard_factor(inner)?);
+        }
+    }
+    match exprs.len() {
+        0 => bail!("guard list requires at least one entry"),
+        1 => Ok(exprs.pop().unwrap()),
+        _ => Ok(GuardExpr::all(exprs)),
+    }
+}
+
+fn parse_guard_factor(pair: Pair<Rule>) -> Result<GuardExpr> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_not {
+            return parse_guard_not(inner);
+        }
+    }
+    bail!("guard factor missing expression")
+}
+
+fn parse_guard_not(pair: Pair<Rule>) -> Result<GuardExpr> {
+    let mut invert_count = 0usize;
+    let mut primary = None;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::invert => invert_count += 1,
+            _ => primary = Some(parse_guard_primary(inner)?),
+        }
+    }
+    let expr = primary.ok_or_else(|| anyhow!("guard expression missing predicate"))?;
+    apply_inversion(expr, invert_count % 2 == 1)
+}
+
+fn parse_guard_primary(pair: Pair<Rule>) -> Result<GuardExpr> {
+    match pair.as_rule() {
+        Rule::guard_primary => {
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| anyhow!("guard primary missing body"))?;
+            parse_guard_primary(inner)
+        }
+        Rule::guard_group => parse_guard_group(pair),
+        Rule::guard_or_call => parse_guard_or_call(pair),
+        Rule::guard_term => Ok(GuardExpr::Predicate(parse_guard_term(pair)?)),
+        _ => bail!("unexpected guard primary rule: {:?}", pair.as_rule()),
+    }
+}
+
+fn parse_guard_group(pair: Pair<Rule>) -> Result<GuardExpr> {
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_expr {
+            return parse_guard_expr(inner);
+        }
+    }
+    bail!("grouped guard missing expression")
+}
+
+fn parse_guard_or_call(pair: Pair<Rule>) -> Result<GuardExpr> {
+    let mut args = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_expr_list {
+            args = parse_guard_expr_list(inner)?;
+        }
+    }
+    if args.len() < 2 {
+        bail!("or(...) requires at least two guard expressions");
+    }
+    Ok(GuardExpr::or(args))
+}
+
+fn parse_guard_expr_list(pair: Pair<Rule>) -> Result<Vec<GuardExpr>> {
+    let mut exprs = Vec::new();
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::guard_expr {
+            push_guard_or_args_from_expr(inner, &mut exprs)?;
+        }
+    }
+    Ok(exprs)
+}
+
+fn push_guard_or_args_from_expr(expr_pair: Pair<Rule>, exprs: &mut Vec<GuardExpr>) -> Result<()> {
+    if let Some(seq_pair) = expr_pair
+        .clone()
+        .into_inner()
+        .find(|inner| inner.as_rule() == Rule::guard_seq)
+    {
+        let factors: Vec<Pair<Rule>> = seq_pair
+            .into_inner()
+            .filter(|inner| inner.as_rule() == Rule::guard_factor)
+            .collect();
+        if factors.len() > 1 {
+            for factor in factors {
+                exprs.push(parse_guard_factor(factor)?);
+            }
+            return Ok(());
+        }
+    }
+    exprs.push(parse_guard_expr(expr_pair)?);
+    Ok(())
+}
+
+fn apply_inversion(expr: GuardExpr, invert: bool) -> Result<GuardExpr> {
+    if !invert {
+        return Ok(expr);
+    }
+    match expr {
+        GuardExpr::Predicate(guard) => {
+            if let Guard::EnvEquals {
+                key,
+                value,
+                invert: false,
+            } = &guard
+            {
+                bail!(
+                    "inverted env equality is not allowed: use 'env:{}!={}' or '!env:{}'",
+                    key,
+                    value,
+                    key
+                );
+            }
+            Ok(GuardExpr::Predicate(invert_guard(guard)))
+        }
+        other => Ok(!other),
+    }
+}
+
+fn invert_guard(guard: Guard) -> Guard {
+    match guard {
+        Guard::Platform { target, invert } => Guard::Platform {
+            target,
+            invert: !invert,
+        },
+        Guard::EnvExists { key, invert } => Guard::EnvExists {
+            key,
+            invert: !invert,
+        },
+        Guard::EnvEquals { key, value, invert } => Guard::EnvEquals {
+            key,
+            value,
+            invert: !invert,
+        },
+    }
+}
+
+fn parse_guard_term(pair: Pair<Rule>) -> Result<Guard> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::env_guard => return parse_env_guard(inner),
+            Rule::bare_platform => return parse_bare_platform(inner, false),
+            _ => {}
+        }
+    }
+    bail!("missing guard predicate")
+}
+
+fn parse_env_guard(pair: Pair<Rule>) -> Result<Guard> {
     let mut key = String::new();
     let mut value = None;
     let mut is_not_equals = false;
@@ -635,36 +1037,14 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
     }
 
     if let Some(val) = value {
-        // Disallow the confusing pattern `!env:KEY==value` — require using
-        // `env:KEY!=value` or `!env:KEY` for negation without equality.
-        if invert && !is_not_equals {
-            bail!(
-                "inverted env equality is not allowed: use 'env:{}!={}' or '!env:{}'",
-                key,
-                val,
-                key
-            );
-        }
         Ok(Guard::EnvEquals {
             key,
             value: val,
-            invert: invert ^ is_not_equals,
+            invert: is_not_equals,
         })
     } else {
-        Ok(Guard::EnvExists { key, invert })
+        Ok(Guard::EnvExists { key, invert: false })
     }
-}
-
-fn parse_platform_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
-    // New platform syntax: `platform:tag`. We ignore legacy ==/!= comparisons.
-    let mut tag = "";
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::platform_tag {
-            tag = inner.as_str();
-            break;
-        }
-    }
-    parse_platform_tag(tag, invert)
 }
 
 fn parse_bare_platform(pair: Pair<Rule>, invert: bool) -> Result<Guard> {

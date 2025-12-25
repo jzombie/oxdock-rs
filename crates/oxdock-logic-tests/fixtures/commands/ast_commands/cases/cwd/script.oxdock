@@ -1,3 +1,4 @@
 WORKDIR a/b
 CWD
-CAPTURE_TO_FILE pwd.txt CWD
+WITH_IO [stdout=pipe:cap_pwd_txt] CWD
+WITH_IO [stdin=pipe:cap_pwd_txt] WRITE pwd.txt

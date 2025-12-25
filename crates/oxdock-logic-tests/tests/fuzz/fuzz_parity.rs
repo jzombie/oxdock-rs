@@ -1,6 +1,7 @@
 use oxdock_parser::ast::*;
 use oxdock_parser::{parse_braced_tokens, parse_script};
 use proptest::prelude::*;
+use proptest::strategy::BoxedStrategy;
 
 // Strategies
 
@@ -28,8 +29,53 @@ fn arb_guard() -> impl Strategy<Value = Guard> {
     ]
 }
 
-fn arb_guards() -> impl Strategy<Value = Vec<Vec<Guard>>> {
-    prop::collection::vec(prop::collection::vec(arb_guard(), 1..3), 0..2)
+fn arb_guard_expr_with_depth(depth: u32) -> BoxedStrategy<GuardExpr> {
+    let leaf = arb_guard().prop_map(GuardExpr::from).boxed();
+    if depth >= 3 {
+        return leaf;
+    }
+    let deeper = arb_guard_expr_with_depth(depth + 1);
+    prop_oneof![
+        leaf,
+        prop::collection::vec(deeper.clone(), 2..=3)
+            .prop_map(GuardExpr::all)
+            .boxed(),
+        prop::collection::vec(deeper.clone(), 2..=3)
+            .prop_map(GuardExpr::or)
+            .boxed(),
+        deeper.clone().prop_map(canonical_not).boxed(),
+    ]
+    .boxed()
+}
+
+fn arb_guard_expr() -> impl Strategy<Value = GuardExpr> {
+    arb_guard_expr_with_depth(0)
+}
+
+fn canonical_not(expr: GuardExpr) -> GuardExpr {
+    match expr {
+        GuardExpr::Predicate(guard) => GuardExpr::Predicate(invert_guard_predicate(guard)),
+        GuardExpr::Not(inner) => *inner,
+        other => !other,
+    }
+}
+
+fn invert_guard_predicate(guard: Guard) -> Guard {
+    match guard {
+        Guard::Platform { target, invert } => Guard::Platform {
+            target,
+            invert: !invert,
+        },
+        Guard::EnvExists { key, invert } => Guard::EnvExists {
+            key,
+            invert: !invert,
+        },
+        Guard::EnvEquals { key, value, invert } => Guard::EnvEquals {
+            key,
+            value,
+            invert: !invert,
+        },
+    }
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
@@ -116,6 +162,9 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
+        prop::collection::vec("[A-Z_][A-Z0-9_]*", 1..3).prop_map(|keys| StepKind::InheritEnv {
+            keys: keys.into_iter().map(|k| k.to_string()).collect(),
+        }),
         safe_string().prop_map(|s| StepKind::Workdir(s.into())),
         prop_oneof![
             Just(WorkspaceTarget::Snapshot),
@@ -130,6 +179,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_msg().prop_map(|s| StepKind::Echo(s.into())),
         safe_msg().prop_map(|s| StepKind::RunBg(s.into())),
         (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy {
+            from_current_workspace: false,
             from: from.into(),
             to: to.into()
         }),
@@ -140,14 +190,10 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(|s| StepKind::Mkdir(s.into())),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
-        prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
+        prop::option::of(safe_string()).prop_map(|s| StepKind::Read(s.map(Into::into))),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
             path: path.into(),
-            contents: contents.into()
-        }),
-        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
-            path: path.into(),
-            cmd: Box::new(StepKind::Run(cmd.into())),
+            contents: Some(contents.into())
         }),
         (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
             StepKind::CopyGit {
@@ -163,36 +209,21 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
 }
 
 fn arb_step() -> impl Strategy<Value = Step> {
-    (arb_guards(), arb_step_kind())
-        .prop_map(|(guards, kind)| Step {
-            guards,
+    (prop::option::of(arb_guard_expr()), arb_step_kind())
+        .prop_map(|(guard, kind)| Step {
+            guard,
             kind,
             scope_enter: 0,
             scope_exit: 0,
         })
-        .prop_filter("Avoids ambiguous CAPTURE_TO_FILE boundary", |step| {
-            if let StepKind::CaptureToFile { path, cmd } = &step.kind {
-                let cmd_str = cmd.to_string();
-                // Check if path ends with something that sticks to cmd start
-                if let (Some(last), Some(first)) = (path.chars().last(), cmd_str.chars().next()) {
-                    let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
-                    // If macro_input.rs would merge them (needs_space returns false)
-                    // needs_space is false if sticky(prev) || sticky(next)
-                    // AND not command/semicolon etc.
-                    if sticky(last) || sticky(first) {
-                        // They will merge.
-                        // But we want them separated (CAPTURE_TO_FILE path cmd).
-                        // So this input is ambiguous for TokenStream.
-                        return false;
-                    }
-                }
-            }
-            true
+        .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
+            StepKind::InheritEnv { .. } => step.guard.is_none(),
+            _ => true,
         })
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
-    assert_eq!(left.guards, right.guards, "Guards mismatch: {}", msg);
+    assert_eq!(left.guard, right.guard, "Guards mismatch: {}", msg);
     assert_eq!(
         left.scope_enter, right.scope_enter,
         "Scope enter mismatch: {}",
@@ -210,13 +241,6 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
         }
         (StepKind::RunBg(l), StepKind::RunBg(r)) => {
             assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
-        }
-        (
-            StepKind::CaptureToFile { path: lp, cmd: lc },
-            StepKind::CaptureToFile { path: rp, cmd: rc },
-        ) => {
-            assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
-            assert_eq!(lc, rc, "Capture cmd mismatch: {}", msg);
         }
         _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
     }

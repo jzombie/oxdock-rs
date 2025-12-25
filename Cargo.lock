@@ -321,7 +321,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxdock-buildtime-helpers"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-process",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-buildtime-macros"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fixture"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fs"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "libc",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-logic-tests"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-parser"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "indoc",
@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-process"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "oxdock-sys-test-utils"
-version = "0.5.0-alpha"
+version = "0.6.0-alpha"
 
 [[package]]
 name = "pest"
@@ -601,9 +601,9 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rustix"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd15f8a2c5551a84d56efdc1cd049089e409ac19a3072d5037a17fd70719ff3e"
+checksum = "146c9e247ccc180c1f61615433868c99f3de3ae256a30a43b49f67c2d9171f34"
 dependencies = [
  "bitflags",
  "errno",
@@ -680,9 +680,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.23.0"
+version = "3.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
+checksum = "655da9c7eb6305c55742045d5a8d2037996d61d8de95806335c7c86ce0f82e9c"
 dependencies = [
  "fastrand",
  "getrandom",

@@ -61,21 +61,19 @@ mod tests {
     }
 
     #[test]
-    fn script_from_braced_tokens_terminates_capture_instruction() {
+    fn script_from_braced_tokens_terminates_write_instruction() {
         let mut ts = TokenStream::new();
         ts.extend([
-            TokenTree::Ident(Ident::new("CAPTURE_TO_FILE", Span::call_site())),
+            TokenTree::Ident(Ident::new("WRITE", Span::call_site())),
             TokenTree::Ident(Ident::new("out_txt", Span::call_site())),
-            TokenTree::Ident(Ident::new("ECHO", Span::call_site())),
-            TokenTree::Ident(Ident::new("hi", Span::call_site())),
             TokenTree::Ident(Ident::new("WORKDIR", Span::call_site())),
             TokenTree::Ident(Ident::new("dist", Span::call_site())),
         ]);
 
-        let script = script_from_braced_tokens(&ts).expect("failed to render capture instruction");
+        let script = script_from_braced_tokens(&ts).expect("failed to render write instruction");
         assert!(
-            script.contains("CAPTURE_TO_FILE out_txt ECHO hi\nWORKDIR dist"),
-            "expected capture to terminate before next command, got: {script}"
+            script.contains("WRITE out_txt\nWORKDIR dist"),
+            "expected WRITE to terminate before next command, got: {script}"
         );
     }
 

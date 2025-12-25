@@ -1,0 +1,10 @@
+name = "with_io_block"
+
+[pipes.block_outer]
+expect = "outer-1\nouter-3\n"
+
+[pipes.block_inner]
+expect = "inner-2\n"
+
+[expect]
+stdout = "override-stdout\noutside\n"

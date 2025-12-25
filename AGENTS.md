@@ -31,6 +31,7 @@ Prefer explicit, test-only skips over runtime detection.
 
 - **Filesystem**: Use the `oxdock-fs` abstractions (`GuardedPath`/`UnguardedPath`, `PathResolver`, `GuardedPath::tempdir`) instead of raw `std::fs` for guarded paths; keep paths under their guards.
     - Do not use `tempfile` directly in any crate other than `oxdock-fs`.
+    - Normalize paths via the shared helpers (`to_forward_slashes`, `normalized_path`, `PathResolver::parse_env_path`) instead of ad-hoc `.replace` chains or string comparisons.
 - **Process Execution**: Use `oxdock-process` abstractions instead of raw `std::process::Command`.
     - Logic handling process execution differences (e.g. Miri vs Native) belongs in `oxdock-process`.
 

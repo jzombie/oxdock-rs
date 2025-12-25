@@ -8,17 +8,17 @@ fn platform_guard_display_uses_equals() {
         invert: false,
     };
 
-    assert_eq!(guard.to_string(), "platform:unix");
+    assert_eq!(guard.to_string(), "unix");
 
     let step = Step {
-        guards: vec![vec![guard]],
+        guard: Some(guard.into()),
         kind: StepKind::Workdir("a".into()),
         scope_enter: 0,
         scope_exit: 0,
     };
 
     let rendered = step.to_string();
-    assert_eq!(rendered, "[platform:unix] WORKDIR a");
+    assert_eq!(rendered, "[unix] WORKDIR a");
 
     let parsed = parse_script(&rendered).expect("parse");
     assert_eq!(parsed, vec![step]);
