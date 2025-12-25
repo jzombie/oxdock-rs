@@ -80,7 +80,7 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
     cargo_toml.push_str("[workspace]\n\n");
     cargo_toml.push_str("[dependencies]\n");
     for (name, path) in deps {
-        let path_str = path.display().to_string();
+        let path_str = path_to_toml(&path);
         cargo_toml.push_str(&format!("{name} = {{ path = \"{path_str}\" }}\n"));
     }
     cargo_toml.push_str("\n[[bin]]\nname = \"oxbook-snippet\"\npath = \"src/main.rs\"\n");
@@ -94,4 +94,9 @@ fn generate(workspace_root: &Path, out_path: &Path) -> Result<PathBuf> {
         fs::write(out_path, cargo_toml).with_context(|| format!("write {}", out_path.display()))?;
     }
     Ok(out_path.to_path_buf())
+}
+
+#[allow(clippy::disallowed_types)]
+fn path_to_toml(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
