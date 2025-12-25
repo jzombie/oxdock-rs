@@ -134,11 +134,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     if guard.is_empty() {
                         String::from("(no logs yet)")
                     } else {
-                        let mut buf = String::new();
-                        for entry in guard.iter() {
-                            buf.push_str(entry);
-                        }
-                        buf
+                        let inner_height = mid[1].height.saturating_sub(2) as usize;
+                        log_tail(&guard, inner_height.max(1))
                     }
                 };
                 let logs_widget = Paragraph::new(log_snapshot)
@@ -534,6 +531,23 @@ fn trim_logs(logs: &mut VecDeque<String>, max: usize) {
     while logs.len() > max {
         logs.pop_front();
     }
+}
+
+fn log_tail(entries: &VecDeque<String>, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+    let mut buffer = Vec::new();
+    let mut remaining = max_lines;
+    for entry in entries.iter().rev() {
+        buffer.push(entry.as_str());
+        remaining = remaining.saturating_sub(1);
+        if remaining == 0 {
+            break;
+        }
+    }
+    buffer.reverse();
+    buffer.concat()
 }
 
 fn spawn_cli_child(
