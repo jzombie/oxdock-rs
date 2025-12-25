@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -154,6 +154,9 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
 
             if event::poll(Duration::from_millis(120))? {
                 if let CEvent::Key(key_event) = event::read()? {
+                    if key_event.kind != KeyEventKind::Press {
+                        continue;
+                    }
                     match &mut mode {
                         UiMode::Dashboard => match key_event.code {
                             KeyCode::Char('q') => {
