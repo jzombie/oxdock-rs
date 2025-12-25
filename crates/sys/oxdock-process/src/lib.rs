@@ -146,10 +146,7 @@ pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
         if let Some(key) = name.strip_prefix("env:") {
-            ctx.envs()
-                .get(key)
-                .cloned()
-                .or_else(|| std::env::var(key).ok())
+            ctx.envs().get(key).cloned()
         } else {
             None
         }
@@ -1188,7 +1185,7 @@ mod tests {
         envs.insert("FOO".into(), "bar".into());
         envs.insert("PCT".into(), "percent".into());
         envs.insert("CARGO_TARGET_DIR".into(), guard.display().to_string());
-        let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
+        envs.insert("HOST_ONLY".into(), "host".into());
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
 
@@ -1206,5 +1203,18 @@ mod tests {
         let input_literal = "%FOO%-{CARGO_TARGET_DIR}-$$";
         let rendered_literal = expand_command_env(input_literal, &ctx);
         assert_eq!(rendered_literal, input_literal);
+    }
+
+    #[test]
+    fn expand_command_env_does_not_fallback_to_host() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let cwd: PolicyPath = guard.clone().into();
+        let envs = HashMap::new();
+        let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
+
+        let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
+        let rendered = expand_command_env("{{ env:HOST_ONLY }}", &ctx);
+        assert_eq!(rendered, "");
     }
 }
