@@ -454,244 +454,236 @@ fn render_shell_outputs(
     only_missing_outputs: bool,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
+    use comrak::{nodes::NodeValue, Arena, parse_document};
+
+    let arena = Arena::new();
+    let mut options = comrak::Options::default();
+    options.render.sourcepos = true;
+    let root = parse_document(&arena, contents, &options);
+
+    // Collect code block nodes with their source line ranges.
+    let mut blocks: Vec<(usize, usize, String, String)> = Vec::new(); // (start_line, end_line, info, script)
+    for node in root.descendants() {
+        let n = node.data.borrow();
+        if let NodeValue::CodeBlock(cb) = &n.value {
+            // comrak sets source positions when `options.parse.sourcepos` is true.
+            let sp = &n.sourcepos;
+            // comrak sourcepos lines are 1-based inclusive
+            let start = sp.start.line.saturating_sub(1);
+            let end = sp.end.line.saturating_sub(1);
+            let info = cb.info.clone();
+            let script = cb.literal.clone();
+            blocks.push((start, end, info.trim().to_string(), script));
+        }
+    }
+
+    // Sort by start line
+    blocks.sort_by_key(|b| b.0);
+
     let mut out_lines: Vec<String> = Vec::new();
     let mut prev_reader: Option<SharedInput> = None;
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
-        let (ws, rest) = split_leading_ws(line);
-        if ws <= MAX_FENCE_PREFIX_WS
-            && let Some((fence_char, fence_len, info)) = parse_fence_start(rest)
-        {
-            out_lines.push(line.to_string());
-            i += 1;
-            let mut body_lines: Vec<&str> = Vec::new();
-            let mut closed = false;
-            while i < lines.len() {
-                let inner = lines[i];
-                let (inner_ws, inner_rest) = split_leading_ws(inner);
-                if inner_ws <= MAX_FENCE_PREFIX_WS
-                    && is_fence_close(inner_rest, fence_char, fence_len)
-                {
-                    out_lines.push(inner.to_string());
-                    i += 1;
-                    closed = true;
-                    break;
-                }
-                body_lines.push(inner);
-                out_lines.push(inner.to_string());
-                i += 1;
-            }
-            if !closed {
-                continue;
-            }
-            let script = body_lines.join("\n");
-            // Parse fence info params (currently used for language/oxfile/cmd only).
-            let _fence_info = parse_fence_info(&info);
-            let existing = parse_output_block(&lines, i);
-            if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
-                let code_hash = code_hash(&script, &spec);
-                let should_run = match &existing {
-                    Some(block) => {
-                        let code_hash_short = short_hash(&code_hash);
-                        let matches_code = block.code_hash.as_deref() == Some(&code_hash)
-                            || block.code_hash.as_deref() == Some(&code_hash_short);
-                        if only_missing_outputs {
-                            !matches_code
-                        } else {
-                            let stdout_norm = normalize_output(&block.stdout);
-                            let stderr_norm = normalize_output(&block.stderr);
-                            let expected_combined_hash =
-                                combined_output_hash(&stdout_norm, &stderr_norm);
-                            let expected_combined_short = short_hash(&expected_combined_hash);
-                            let matches_output =
-                                if let Some(meta_hash) = block.combined_hash.as_deref() {
-                                    meta_hash == expected_combined_hash
-                                        || meta_hash == expected_combined_short
-                                } else {
-                                    let expected_stdout_hash = sha256_hex(&stdout_norm);
-                                    let expected_stderr_hash = sha256_hex(&stderr_norm);
-                                    let matches_stdout =
-                                        block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
-                                    let matches_stderr =
-                                        block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
-                                    matches_stdout && matches_stderr
-                                };
-                            !(matches_code && matches_output)
-                        }
-                    }
-                    None => true,
-                };
-                if should_run {
-                    // Always stream the previous fence's stdout into this fence's stdin.
-                    let stdin_stream = prev_reader.take();
+    let mut cursor: usize = 0;
 
-                    // Create a cross-platform anonymous pipe (reader, writer)
-                    // to stream this fence's stdout to the next fence while
-                    // also capturing it for embedding.
-                    let (reader, writer) =
-                        pipe().with_context(|| "create pipe for piping stdout to next fence")?;
-                    let reader_shared: SharedInput = Arc::new(Mutex::new(reader));
-                    let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> =
-                        Arc::new(Mutex::new(writer));
-
-                    // Capture buffers to embed output in the markdown.
-                    let capture_stdout: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-                    let capture_stderr: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-
-                    // Tee writer writes to both the capture buffer and the
-                    // pipe writer so we both embed and stream the output.
-                    struct TeeWriter {
-                        cap: Arc<Mutex<Vec<u8>>>,
-                        pipe: Arc<Mutex<dyn std::io::Write + Send>>,
-                    }
-                    impl std::io::Write for TeeWriter {
-                        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                            if let Ok(mut g) = self.cap.lock() {
-                                let _ = std::io::Write::write_all(&mut *g, buf);
-                            }
-                            if let Ok(mut p) = self.pipe.lock() {
-                                let _ = std::io::Write::write_all(&mut *p, buf);
-                            }
-                            Ok(buf.len())
-                        }
-
-                        fn flush(&mut self) -> std::io::Result<()> {
-                            if let Ok(mut g) = self.cap.lock() {
-                                let _ = std::io::Write::flush(&mut *g);
-                            }
-                            if let Ok(mut p) = self.pipe.lock() {
-                                let _ = std::io::Write::flush(&mut *p);
-                            }
-                            Ok(())
-                        }
-                    }
-
-                    struct CaptureWriter {
-                        cap: Arc<Mutex<Vec<u8>>>,
-                    }
-
-                    impl std::io::Write for CaptureWriter {
-                        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                            if let Ok(mut g) = self.cap.lock() {
-                                let _ = std::io::Write::write_all(&mut *g, buf);
-                            }
-                            Ok(buf.len())
-                        }
-
-                        fn flush(&mut self) -> std::io::Result<()> {
-                            if let Ok(mut g) = self.cap.lock() {
-                                let _ = std::io::Write::flush(&mut *g);
-                            }
-                            Ok(())
-                        }
-                    }
-
-                    let tee = TeeWriter {
-                        cap: capture_stdout.clone(),
-                        pipe: writer_shared.clone(),
-                    };
-                    let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
-                    let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter {
-                        cap: capture_stderr.clone(),
-                    }));
-
-                    // Run runner with stdin_stream and the tee writer
-                    // as stdout. Provide the capture buffer so the caller
-                    // can inspect the captured bytes after execution.
-                    let run_res = run_runner(
-                        resolver,
-                        workspace_root,
-                        source_dir,
-                        cache,
-                        &spec,
-                        &script,
-                        stdin_stream,
-                        Some(stdout_writer.clone()),
-                        Some(stderr_writer.clone()),
-                        Some(capture_stdout.clone()),
-                        Some(capture_stderr.clone()),
-                    );
-                    match run_res {
-                        Ok(run_output) => {
-                            // Make the reader available to the next fence.
-                            prev_reader = Some(reader_shared);
-                            let output_block = format_output_block(
-                                &code_hash,
-                                &run_output.stdout,
-                                &run_output.stderr,
-                            );
-                            if let Some(block) = existing {
-                                i = block.end_index;
-                            }
-                            out_lines.extend(output_block);
-                        }
-                        Err(err) => {
-                            let mut chain = Vec::new();
-                            for (idx, cause) in err.chain().enumerate() {
-                                if idx == 0 {
-                                    chain.push(format!("error: {}", cause));
-                                } else {
-                                    chain.push(format!("caused by: {}", cause));
-                                }
-                            }
-                            let err_msg = chain.join("\n");
-                            let stdout_output = {
-                                let data = capture_stdout.lock().unwrap();
-                                String::from_utf8_lossy(&data).to_string()
-                            };
-                            let mut stderr_output = {
-                                let data = capture_stderr.lock().unwrap();
-                                String::from_utf8_lossy(&data).to_string()
-                            };
-                            if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-                                stderr_output.push('\n');
-                            }
-                            if !stderr_output.is_empty() {
-                                stderr_output.push_str(&err_msg);
-                            } else {
-                                stderr_output = err_msg.clone();
-                            }
-                            if let Some(block) = existing {
-                                i = block.end_index;
-                            }
-                            let output_block =
-                                format_output_block(&code_hash, &stdout_output, &stderr_output);
-                            out_lines.extend(output_block);
-                        }
-                    }
-                } else if let Some(block) = existing {
-                    out_lines.extend(
-                        lines[block.start_index..block.end_index]
-                            .iter()
-                            .map(|line| (*line).to_string()),
-                    );
-                    // When reusing an existing block, restore prev_reader from
-                    // the saved stdout so subsequent fences can consume it.
-                    let prev_buf = block.stdout.clone();
-                    let cursor = Cursor::new(prev_buf.into_bytes());
-                    prev_reader = Some(Arc::new(Mutex::new(cursor)));
-                    i = block.end_index;
-                }
-            } else {
-                // No runner spec found. If the fence declared a language,
-                // write an informative output block so users see that the
-                // fence was not executed.
-                let parsed = parse_fence_info(&info);
-                if let Some(lang) = parsed.language {
-                    let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
-                    let output = format!("error: no runner registered for language '{}'", lang);
-                    if let Some(block) = existing {
-                        i = block.end_index;
-                    }
-                    let output_block = format_output_block(&code_hash, "", &output);
-                    out_lines.extend(output_block);
-                }
-            }
+    for (start, end, info, script) in blocks {
+        // If this block ends before the current cursor, it's already been
+        // consumed by a previous step (or overlaps); skip it to avoid
+        // attaching outputs to the wrong fence.
+        if end < cursor {
             continue;
         }
-        out_lines.push(line.to_string());
-        i += 1;
+        if start >= lines.len() {
+            break;
+        }
+
+        // Clamp start to cursor so we don't re-emit lines we've already
+        // written when sourcepos spans slightly earlier than expected.
+        let start_clamped = std::cmp::max(start, cursor);
+
+        // Copy lines up to the fence
+        for ln in cursor..start_clamped {
+            out_lines.push(lines[ln].to_string());
+        }
+
+        // Copy the original fence lines (clamped)
+        let fence_end = end.min(lines.len().saturating_sub(1));
+        if fence_end >= start_clamped {
+            for ln in start_clamped..=fence_end {
+                out_lines.push(lines[ln].to_string());
+            }
+        }
+
+        // Determine existing output block after the fence
+        let next_index = fence_end + 1;
+        let existing = if next_index <= lines.len() { parse_output_block(&lines, next_index) } else { None };
+
+        if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
+            let code_hash = code_hash(&script, &spec);
+            let should_run = match &existing {
+                Some(block) => {
+                    let code_hash_short = short_hash(&code_hash);
+                    let matches_code = block.code_hash.as_deref() == Some(&code_hash)
+                        || block.code_hash.as_deref() == Some(&code_hash_short);
+                    if only_missing_outputs {
+                        !matches_code
+                    } else {
+                        let stdout_norm = normalize_output(&block.stdout);
+                        let stderr_norm = normalize_output(&block.stderr);
+                        let expected_combined_hash = combined_output_hash(&stdout_norm, &stderr_norm);
+                        let expected_combined_short = short_hash(&expected_combined_hash);
+                        let matches_output = if let Some(meta_hash) = block.combined_hash.as_deref() {
+                            meta_hash == expected_combined_hash || meta_hash == expected_combined_short
+                        } else {
+                            let expected_stdout_hash = sha256_hex(&stdout_norm);
+                            let expected_stderr_hash = sha256_hex(&stderr_norm);
+                            let matches_stdout = block.stdout_hash.as_deref() == Some(&expected_stdout_hash);
+                            let matches_stderr = block.stderr_hash.as_deref() == Some(&expected_stderr_hash);
+                            matches_stdout && matches_stderr
+                        };
+                        !(matches_code && matches_output)
+                    }
+                }
+                None => true,
+            };
+
+            if should_run {
+                // Prepare stdin from previous fence
+                let stdin_stream = prev_reader.take();
+
+                let (reader, writer) = pipe().with_context(|| "create pipe for piping stdout to next fence")?;
+                let reader_shared: SharedInput = Arc::new(Mutex::new(reader));
+                let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> = Arc::new(Mutex::new(writer));
+
+                let capture_stdout: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                let capture_stderr: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+                struct TeeWriter {
+                    cap: Arc<Mutex<Vec<u8>>>,
+                    pipe: Arc<Mutex<dyn std::io::Write + Send>>,
+                }
+                impl std::io::Write for TeeWriter {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        if let Ok(mut g) = self.cap.lock() {
+                            let _ = std::io::Write::write_all(&mut *g, buf);
+                        }
+                        if let Ok(mut p) = self.pipe.lock() {
+                            let _ = std::io::Write::write_all(&mut *p, buf);
+                        }
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        if let Ok(mut g) = self.cap.lock() {
+                            let _ = std::io::Write::flush(&mut *g);
+                        }
+                        if let Ok(mut p) = self.pipe.lock() {
+                            let _ = std::io::Write::flush(&mut *p);
+                        }
+                        Ok(())
+                    }
+                }
+
+                struct CaptureWriter {
+                    cap: Arc<Mutex<Vec<u8>>>,
+                }
+                impl std::io::Write for CaptureWriter {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        if let Ok(mut g) = self.cap.lock() {
+                            let _ = std::io::Write::write_all(&mut *g, buf);
+                        }
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        if let Ok(mut g) = self.cap.lock() {
+                            let _ = std::io::Write::flush(&mut *g);
+                        }
+                        Ok(())
+                    }
+                }
+
+                let tee = TeeWriter { cap: capture_stdout.clone(), pipe: writer_shared.clone() };
+                let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
+                let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter { cap: capture_stderr.clone() }));
+
+                let run_res = run_runner(
+                    resolver,
+                    workspace_root,
+                    source_dir,
+                    cache,
+                    &spec,
+                    &script,
+                    stdin_stream,
+                    Some(stdout_writer.clone()),
+                    Some(stderr_writer.clone()),
+                    Some(capture_stdout.clone()),
+                    Some(capture_stderr.clone()),
+                );
+
+                match run_res {
+                    Ok(run_output) => {
+                        prev_reader = Some(reader_shared);
+                        let output_block = format_output_block(&code_hash, &run_output.stdout, &run_output.stderr);
+                        out_lines.extend(output_block);
+                        // advance cursor past any existing output if present
+                        cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                    }
+                    Err(err) => {
+                        let mut chain = Vec::new();
+                        for (idx, cause) in err.chain().enumerate() {
+                            if idx == 0 {
+                                chain.push(format!("error: {}", cause));
+                            } else {
+                                chain.push(format!("caused by: {}", cause));
+                            }
+                        }
+                        let err_msg = chain.join("\n");
+                        let stdout_output = {
+                            let data = capture_stdout.lock().unwrap();
+                            String::from_utf8_lossy(&data).to_string()
+                        };
+                        let mut stderr_output = {
+                            let data = capture_stderr.lock().unwrap();
+                            String::from_utf8_lossy(&data).to_string()
+                        };
+                        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+                            stderr_output.push('\n');
+                        }
+                        if !stderr_output.is_empty() {
+                            stderr_output.push_str(&err_msg);
+                        } else {
+                            stderr_output = err_msg.clone();
+                        }
+                        let output_block = format_output_block(&code_hash, &stdout_output, &stderr_output);
+                        out_lines.extend(output_block);
+                        cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                    }
+                }
+            } else if let Some(block) = existing {
+                out_lines.extend(lines[block.start_index..block.end_index].iter().map(|l| (*l).to_string()));
+                let prev_buf = block.stdout.clone();
+                let cursor_reader = Cursor::new(prev_buf.into_bytes());
+                prev_reader = Some(Arc::new(Mutex::new(cursor_reader)));
+                cursor = block.end_index;
+            } else {
+                // No existing block and not running: leave cursor after fence
+                cursor = fence_end + 1;
+            }
+        } else {
+            // No runner spec found. If the fence declared a language,
+            // write an informative output block so users see that the
+            // fence was not executed.
+            let parsed = parse_fence_info(&info);
+            if let Some(lang) = parsed.language {
+                let code_hash = sha256_hex(&format!("{}\n{}", script, lang));
+                let output = format!("error: no runner registered for language '{}'", lang);
+                let output_block = format_output_block(&code_hash, "", &output);
+                out_lines.extend(output_block);
+            }
+            cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+        }
+    }
+
+    // Append remaining lines
+    for ln in cursor..lines.len() {
+        out_lines.push(lines[ln].to_string());
     }
 
     let mut rendered = out_lines.join("\n");
@@ -873,16 +865,18 @@ fn parse_inline_meta(
     line: &str,
     code_hash: &mut Option<String>,
     combined_hash: &mut Option<String>,
-) {
+) -> bool {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
-        return;
+        return false;
     }
     let mut tokens = trimmed.trim_start_matches('`').split_whitespace();
     // Skip the fence language token if present.
     let _ = tokens.next();
+    let mut saw_oxbook = false;
     for token in tokens {
         if token == "oxbook" {
+            saw_oxbook = true;
             continue;
         }
         if let Some(value) = token.strip_prefix("code=") {
@@ -891,6 +885,7 @@ fn parse_inline_meta(
             combined_hash.get_or_insert_with(|| value.to_string());
         }
     }
+    saw_oxbook
 }
 
 fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<String> {

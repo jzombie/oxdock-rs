@@ -6,7 +6,7 @@ echo "Hello world"
 
 Rust...
 
-```rust
+<!-- ```rust
 use std::io::{self, Read};
 use oxdock_fs;
 
@@ -16,7 +16,7 @@ fn main() {
     io::stdin().read_to_string(&mut input).unwrap();
     println!("rust saw: {}, {ws:?}", input.trim());
 }
-```
+``` -->
 
 Reverse the string...
 

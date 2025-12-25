@@ -22,6 +22,7 @@ oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
 sha2.workspace = true
+comrak = { workspace = true }
 
 [lints]
 workspace = true
