@@ -52,15 +52,15 @@ pub fn tokenize(input: &str) -> Result<Vec<RawToken<'_>>> {
             | Rule::run_command
             | Rule::run_bg_command
             | Rule::copy_command
-            | Rule::capture_to_file_command
             | Rule::with_io_command
             | Rule::copy_git_command
             | Rule::hash_sha256_command
+            | Rule::inherit_env_command
             | Rule::symlink_command
             | Rule::mkdir_command
             | Rule::ls_command
             | Rule::cwd_command
-            | Rule::cat_command
+            | Rule::read_command
             | Rule::write_command
             | Rule::exit_command => tokens.push(RawToken::Command { pair, line_no }),
             other => bail!("unexpected parser rule {:?}", other),

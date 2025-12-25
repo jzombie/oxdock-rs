@@ -116,6 +116,9 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
+        prop::collection::vec("[A-Z_][A-Z0-9_]*", 1..3).prop_map(|keys| StepKind::InheritEnv {
+            keys: keys.into_iter().map(|k| k.to_string()).collect(),
+        }),
         safe_string().prop_map(|s| StepKind::Workdir(s.into())),
         prop_oneof![
             Just(WorkspaceTarget::Snapshot),
@@ -130,6 +133,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_msg().prop_map(|s| StepKind::Echo(s.into())),
         safe_msg().prop_map(|s| StepKind::RunBg(s.into())),
         (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy {
+            from_current_workspace: false,
             from: from.into(),
             to: to.into()
         }),
@@ -140,14 +144,10 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(|s| StepKind::Mkdir(s.into())),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
-        prop::option::of(safe_string()).prop_map(|s| StepKind::Cat(s.map(Into::into))),
+        prop::option::of(safe_string()).prop_map(|s| StepKind::Read(s.map(Into::into))),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
             path: path.into(),
-            contents: contents.into()
-        }),
-        (safe_string(), safe_msg()).prop_map(|(path, cmd)| StepKind::CaptureToFile {
-            path: path.into(),
-            cmd: Box::new(StepKind::Run(cmd.into())),
+            contents: Some(contents.into())
         }),
         (safe_string(), safe_string(), safe_string()).prop_map(|(rev, from, to)| {
             StepKind::CopyGit {
@@ -170,24 +170,9 @@ fn arb_step() -> impl Strategy<Value = Step> {
             scope_enter: 0,
             scope_exit: 0,
         })
-        .prop_filter("Avoids ambiguous CAPTURE_TO_FILE boundary", |step| {
-            if let StepKind::CaptureToFile { path, cmd } = &step.kind {
-                let cmd_str = cmd.to_string();
-                // Check if path ends with something that sticks to cmd start
-                if let (Some(last), Some(first)) = (path.chars().last(), cmd_str.chars().next()) {
-                    let sticky = |c: char| matches!(c, '/' | '.' | '-' | ':' | '=');
-                    // If macro_input.rs would merge them (needs_space returns false)
-                    // needs_space is false if sticky(prev) || sticky(next)
-                    // AND not command/semicolon etc.
-                    if sticky(last) || sticky(first) {
-                        // They will merge.
-                        // But we want them separated (CAPTURE_TO_FILE path cmd).
-                        // So this input is ambiguous for TokenStream.
-                        return false;
-                    }
-                }
-            }
-            true
+        .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
+            StepKind::InheritEnv { .. } => step.guards.is_empty(),
+            _ => true,
         })
 }
 
@@ -210,13 +195,6 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
         }
         (StepKind::RunBg(l), StepKind::RunBg(r)) => {
             assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
-        }
-        (
-            StepKind::CaptureToFile { path: lp, cmd: lc },
-            StepKind::CaptureToFile { path: rp, cmd: rc },
-        ) => {
-            assert_eq!(lp, rp, "Capture path mismatch: {}", msg);
-            assert_eq!(lc, rc, "Capture cmd mismatch: {}", msg);
         }
         _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
     }

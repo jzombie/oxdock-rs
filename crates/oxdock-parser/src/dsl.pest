@@ -29,7 +29,7 @@ guard_term = { ws? ~ invert? ~ guard_predicate ~ ws? }
 
 invert = { "!" }
 
-guard_predicate = _{ env_guard | platform_guard | bare_platform }
+guard_predicate = _{ env_guard | bare_platform }
 
 env_guard = { env_prefix ~ ws? ~ env_key ~ env_comparison? }
 
@@ -49,7 +49,6 @@ env_value = @{ guard_value_char+ }
 
 guard_value_char = _{ !( "," | "|" | "]" | linebreak | "//" | "/*" ) ~ ANY }
 
-platform_guard = { "platform" ~ ":" ~ ws? ~ platform_tag }
 
 eq_op = { "==" }
 
@@ -60,6 +59,7 @@ bare_platform = { platform_tag }
 platform_tag = @{ ASCII_ALPHANUMERIC+ }
 
 command = _{
+    inherit_env_command |
     workdir_command |
     workspace_command |
     env_command |
@@ -68,14 +68,13 @@ command = _{
     run_command |
     copy_git_command | // Must come before copy_command
     copy_command |
-    capture_to_file_command |
     with_io_command |
     hash_sha256_command |
     symlink_command |
     mkdir_command |
     ls_command |
     cwd_command |
-    cat_command |
+    read_command |
     write_command |
     exit_command
 }
@@ -87,18 +86,24 @@ env_command = ${ "ENV" ~ sep ~ env_pair }
 echo_command = ${ "ECHO" ~ sep ~ message }
 run_command = ${ "RUN" ~ sep ~ run_args }
 run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
-copy_command = ${ "COPY" ~ sep ~ argument ~ sep ~ argument }
-capture_to_file_command = ${ "CAPTURE_TO_FILE" ~ sep ~ argument ~ sep ~ command }
-with_io_command = ${ "WITH_IO" ~ sep ~ io_flags ~ sep ~ command }
+from_current_workspace_flag = { "--from-current-workspace" }
+copy_command = ${ "COPY" ~ sep ~ (from_current_workspace_flag ~ sep)? ~ argument ~ sep ~ argument }
+with_io_command = ${ "WITH_IO" ~ sep ~ io_flags ~ (sep ~ command)? }
 copy_git_command = ${ "COPY_GIT" ~ sep ~ (include_dirty_flag ~ sep)? ~ argument ~ sep ~ argument ~ sep ~ argument }
 hash_sha256_command = ${ "HASH_SHA256" ~ sep ~ argument }
 symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }
 mkdir_command = ${ "MKDIR" ~ sep ~ argument }
 ls_command = ${ "LS" ~ (sep ~ argument)? }
 cwd_command = ${ "CWD" }
-cat_command = ${ "CAT" ~ (sep ~ argument)? }
-write_command = ${ "WRITE" ~ sep ~ argument ~ sep ~ message }
+read_command = ${ "READ" ~ (sep ~ argument)? }
+write_command = ${ "WRITE" ~ sep ~ argument ~ (sep ~ message)? }
 exit_command = ${ "EXIT" ~ sep ~ exit_code }
+
+// Inherit environment variables (selective list only). Placed here so it's available
+// as a top-level command in the prelude. NOTE: `ALL` form is intentionally omitted.
+inherit_env_command = ${ "INHERIT_ENV" ~ sep ~ inherit_list }
+
+inherit_list = { "[" ~ ws? ~ env_key ~ (ws? ~ "," ~ ws? ~ env_key)* ~ ws? ~ "]" }
 
 // Arguments
 sep = _{ WHITESPACE+ }
@@ -106,8 +111,11 @@ argument = { quoted_string | templated_arg | unquoted_arg }
 templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
 unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
 include_dirty_flag = { "--include-dirty" }
-io_flags = { "[" ~ ws? ~ io_flag ~ (ws? ~ "," ~ ws? ~ io_flag)* ~ ws? ~ "]" }
-io_flag = { "stdin" | "stdout" | "stderr" }
+io_flags = { "[" ~ ws? ~ io_binding ~ (ws? ~ "," ~ ws? ~ io_binding)* ~ ws? ~ "]" }
+io_binding = { io_stream ~ (ws? ~ "=" ~ ws? ~ pipe_binding)? }
+io_stream = { "stdin" | "stdout" | "stderr" }
+pipe_binding = { "pipe" ~ ":" ~ pipe_name }
+pipe_name = @{ (ASCII_ALPHANUMERIC | "_" | "-")+ }
 
 workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
 env_pair = { env_key_part ~ ws? ~ "=" ~ ws? ~ env_value_part }

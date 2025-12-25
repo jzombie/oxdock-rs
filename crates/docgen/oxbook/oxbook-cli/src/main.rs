@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
-use oxdock_core::run_steps_with_context_result;
+use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes,
 };
-use oxdock_parser::{Step, StepKind, parse_script};
+use oxdock_parser::parse_script;
 use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
 
 use once_cell::sync::Lazy;
@@ -25,6 +25,8 @@ const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
 const SHORT_HASH_LEN: usize = 32;
 // If set to "0" disables terminal streaming; otherwise auto-on when stdout is a TTY.
 const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
+const PIPE_SETUP: &str = "setup";
+const PIPE_SNIPPET: &str = "snippet";
 
 #[derive(Debug)]
 struct FenceBlock {
@@ -533,8 +535,9 @@ fn render_shell_outputs(
                     let writer_shared: Arc<Mutex<dyn std::io::Write + Send>> =
                         Arc::new(Mutex::new(writer));
 
-                    // Capture buffer to embed output in the markdown.
-                    let capture_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                    // Capture buffers to embed output in the markdown.
+                    let capture_stdout: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+                    let capture_stderr: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
                     // Tee writer writes to both the capture buffer and the
                     // pipe writer so we both embed and stream the output.
@@ -564,11 +567,34 @@ fn render_shell_outputs(
                         }
                     }
 
+                    struct CaptureWriter {
+                        cap: Arc<Mutex<Vec<u8>>>,
+                    }
+
+                    impl std::io::Write for CaptureWriter {
+                        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::write_all(&mut *g, buf);
+                            }
+                            Ok(buf.len())
+                        }
+
+                        fn flush(&mut self) -> std::io::Result<()> {
+                            if let Ok(mut g) = self.cap.lock() {
+                                let _ = std::io::Write::flush(&mut *g);
+                            }
+                            Ok(())
+                        }
+                    }
+
                     let tee = TeeWriter {
-                        cap: capture_buf.clone(),
+                        cap: capture_stdout.clone(),
                         pipe: writer_shared.clone(),
                     };
-                    let shared_out: SharedOutput = Arc::new(Mutex::new(tee));
+                    let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
+                    let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter {
+                        cap: capture_stderr.clone(),
+                    }));
 
                     // Run runner with stdin_stream and the tee writer
                     // as stdout. Provide the capture buffer so the caller
@@ -581,16 +607,20 @@ fn render_shell_outputs(
                         &spec,
                         &script,
                         stdin_stream,
-                        Some(shared_out.clone()),
-                        Some(capture_buf.clone()),
+                        Some(stdout_writer.clone()),
+                        Some(stderr_writer.clone()),
+                        Some(capture_stdout.clone()),
+                        Some(capture_stderr.clone()),
                     );
                     match run_res {
-                        Ok(_) => {
-                            let data = capture_buf.lock().unwrap();
-                            let output = String::from_utf8_lossy(&data).to_string();
+                        Ok(run_output) => {
                             // Make the reader available to the next fence.
                             prev_reader = Some(reader_shared);
-                            let output_block = format_output_block(&code_hash, &output, "");
+                            let output_block = format_output_block(
+                                &code_hash,
+                                &run_output.stdout,
+                                &run_output.stderr,
+                            );
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
@@ -606,10 +636,27 @@ fn render_shell_outputs(
                                 }
                             }
                             let err_msg = chain.join("\n");
+                            let stdout_output = {
+                                let data = capture_stdout.lock().unwrap();
+                                String::from_utf8_lossy(&data).to_string()
+                            };
+                            let mut stderr_output = {
+                                let data = capture_stderr.lock().unwrap();
+                                String::from_utf8_lossy(&data).to_string()
+                            };
+                            if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+                                stderr_output.push('\n');
+                            }
+                            if !stderr_output.is_empty() {
+                                stderr_output.push_str(&err_msg);
+                            } else {
+                                stderr_output = err_msg.clone();
+                            }
                             if let Some(block) = existing {
                                 i = block.end_index;
                             }
-                            let output_block = format_output_block(&code_hash, "", &err_msg);
+                            let output_block =
+                                format_output_block(&code_hash, &stdout_output, &stderr_output);
                             out_lines.extend(output_block);
                         }
                     }
@@ -1074,7 +1121,7 @@ fn scan_and_register_runners(workspace_root: &GuardedPath) {
                 }
                 if let Ok(rel) = path.strip_prefix(root) {
                     if let Some(rel_str) = rel.to_str() {
-                        let rel_str = rel_str.replace('\\', "/");
+                        let rel_str = to_forward_slashes(rel_str);
                         register_language_oxfile(lang, &rel_str);
                     }
                 }
@@ -1137,7 +1184,6 @@ fn build_env_from_oxfile(
     script: &str,
     hash: String,
 ) -> Result<RunnerEnv> {
-    let mut steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
     // Expose runner directory relative to the workspace root so
     // temp oxfiles can resolve it inside the copied temp workspace without
     // host-absolute paths.
@@ -1147,16 +1193,7 @@ fn build_env_from_oxfile(
         .strip_prefix(resolver.root().as_path())
         .map(|p| to_forward_slashes(&p.to_string_lossy()))
         .unwrap_or_else(|_| runner_dir.display().to_string());
-    let runner_env = Step {
-        guards: Vec::new(),
-        kind: StepKind::Env {
-            key: "OXBOOK_RUNNER_DIR".to_string(),
-            value: runner_rel.into(),
-        },
-        scope_enter: 0,
-        scope_exit: 0,
-    };
-    steps.insert(0, runner_env);
+    let steps = parse_script(script).with_context(|| format!("parse {}", path.display()))?;
     let tempdir =
         GuardedPath::tempdir().with_context(|| format!("tempdir for {}", path.display()))?;
     let temp_root = tempdir.as_guarded_path().clone();
@@ -1179,8 +1216,15 @@ fn build_env_from_oxfile(
         output_buf.clone()
     };
 
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("OXBOOK_RUNNER_DIR", runner_rel.clone());
+    io_cfg.set_stdout(Some(build_stdout.clone()));
+    io_cfg.set_stderr(Some(build_stdout.clone()));
+    io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
+    io_cfg.insert_output_pipe_stderr_inherit(PIPE_SETUP);
+    io_cfg.insert_output_pipe(PIPE_SNIPPET, build_stdout.clone());
     let final_cwd =
-        run_steps_with_context_result(&temp_root, &build_context, &steps, None, Some(build_stdout))
+        run_steps_with_context_result_with_io(&temp_root, &build_context, &steps, io_cfg)
             .with_context(|| format!("run {}", path.display()))?;
 
     Ok(RunnerEnv {
@@ -1189,6 +1233,11 @@ fn build_env_from_oxfile(
         env_hash: Some(hash),
         _tempdir: Some(tempdir),
     })
+}
+
+struct RunnerOutput {
+    stdout: String,
+    stderr: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1201,8 +1250,10 @@ fn run_runner(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     let env = match &spec.oxfile {
         Some(path) => {
             let key = path.display();
@@ -1220,11 +1271,23 @@ fn run_runner(
                 script,
                 stdin,
                 stdout,
-                capture_buf,
+                stderr,
+                stdout_capture,
+                stderr_capture,
             );
         }
     };
-    run_in_env(resolver, env, spec, script, stdin, stdout, capture_buf)
+    run_in_env(
+        resolver,
+        env,
+        spec,
+        script,
+        stdin,
+        stdout,
+        stderr,
+        stdout_capture,
+        stderr_capture,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1236,8 +1299,10 @@ fn run_in_default_env(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     let env = RunnerEnv {
         root: workspace_root.clone(),
         cwd: source_dir.clone(),
@@ -1246,16 +1311,18 @@ fn run_in_default_env(
     };
     run_in_env_with_resolver(
         resolver,
-        resolver,
         &env,
         spec,
         script,
         stdin,
         stdout,
-        capture_buf,
+        stderr,
+        stdout_capture,
+        stderr_capture,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_in_env(
     workspace_resolver: &PathResolver,
     env: &RunnerEnv,
@@ -1263,49 +1330,44 @@ fn run_in_env(
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
-    let resolver = PathResolver::new_guarded(env.root.clone(), env.root.clone())?;
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     run_in_env_with_resolver(
         workspace_resolver,
-        &resolver,
         env,
         spec,
         script,
         stdin,
         stdout,
-        capture_buf,
+        stderr,
+        stdout_capture,
+        stderr_capture,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_in_env_with_resolver(
     workspace_resolver: &PathResolver,
-    resolver: &PathResolver,
     env: &RunnerEnv,
     spec: &RunnerSpec,
     script: &str,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
-    capture_buf: Option<Arc<Mutex<Vec<u8>>>>,
-) -> Result<String> {
+    stderr: Option<SharedOutput>,
+    stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> Result<RunnerOutput> {
     if let Some(oxfile_path) = &spec.oxfile {
         let oxfile_content = workspace_resolver
             .read_to_string(oxfile_path)
             .with_context(|| format!("read {}", oxfile_path.display()))?;
-        let mut steps = parse_script(&oxfile_content)
+        let steps = parse_script(&oxfile_content)
             .with_context(|| format!("parse {}", oxfile_path.display()))?;
         // Make runner location available to oxfiles so they can be path-agnostic.
         let runner_dir = oxfile_path.parent().unwrap_or_else(|| env.root.clone());
-        let runner_env = Step {
-            guards: Vec::new(),
-            kind: StepKind::Env {
-                key: "OXBOOK_RUNNER_DIR".to_string(),
-                value: runner_dir.display().to_string().into(),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        };
+        let runner_dir_value = runner_dir.display().to_string();
 
         // Persist the snippet so runners can execute the file while
         // receiving the previous fence's stdout via stdin.
@@ -1321,37 +1383,20 @@ fn run_in_env_with_resolver(
             })
             .collect();
         let snippet_name = format!("oxbook-snippet.{lang_safe}");
-        let snippet_path = env
-            .root
+        let snippets_dir = workspace_resolver
+            .root()
+            .join("target")?
+            .join("oxbook")?
+            .join("snippets")?;
+        workspace_resolver
+            .create_dir_all(&snippets_dir)
+            .with_context(|| format!("create snippets dir at {}", snippets_dir.display()))?;
+        let snippet_path = snippets_dir
             .join(&snippet_name)
             .with_context(|| format!("snippet path for {}", spec.language))?;
-        resolver
+        workspace_resolver
             .write_file(&snippet_path, script.as_bytes())
             .with_context(|| format!("write {}", snippet_path.display()))?;
-
-        let snippet_dir = snippet_path.parent().unwrap_or_else(|| env.root.clone());
-
-        let snippet_env = Step {
-            guards: Vec::new(),
-            kind: StepKind::Env {
-                key: "OXBOOK_SNIPPET_PATH".to_string(),
-                value: snippet_path.display().to_string().into(),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        };
-        let snippet_dir_env = Step {
-            guards: Vec::new(),
-            kind: StepKind::Env {
-                key: "OXBOOK_SNIPPET_DIR".to_string(),
-                value: snippet_dir.display().to_string().into(),
-            },
-            scope_enter: 0,
-            scope_exit: 0,
-        };
-        steps.insert(0, snippet_env);
-        steps.insert(0, snippet_dir_env);
-        steps.insert(0, runner_env);
 
         // Use the previous fence's stdout (if any) as stdin; the snippet
         // itself is provided via OXBOOK_SNIPPET_PATH.
@@ -1359,7 +1404,7 @@ fn run_in_env_with_resolver(
 
         // Prepare stdout: if provided, use it; otherwise create a capture
         // buffer and use that for stdout so we can return captured output.
-        let (use_stdout, internal_capture): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
+        let (use_stdout, internal_stdout): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
             match stdout {
                 Some(s) => (s, None),
                 None => {
@@ -1383,29 +1428,56 @@ fn run_in_env_with_resolver(
                 }
             };
 
-        run_steps_with_context_result(
-            &env.root,
-            workspace_resolver.root(),
-            &steps,
-            input_stream,
-            Some(use_stdout),
-        )
-        .with_context(|| format!("run {}", oxfile_path.display()))?;
+        let (use_stderr, internal_stderr): (SharedOutput, Option<Arc<Mutex<Vec<u8>>>>) =
+            match stderr {
+                Some(s) => (s, None),
+                None => {
+                    let buf = Arc::new(Mutex::new(Vec::new()));
+                    (buf.clone(), Some(buf))
+                }
+            };
+
+        let mut io_cfg = ExecIo::new();
+        io_cfg.insert_inherit_env("OXBOOK_SNIPPET_PATH", snippet_path.display().to_string());
+        io_cfg.insert_inherit_env("OXBOOK_SNIPPET_DIR", snippets_dir.display().to_string());
+        io_cfg.insert_inherit_env("OXBOOK_RUNNER_DIR", runner_dir_value.clone());
+        io_cfg.set_stdin(input_stream);
+        io_cfg.set_stdout(Some(use_stdout.clone()));
+        io_cfg.set_stderr(Some(use_stderr.clone()));
+
+        // Pipe setup/build output directly to the user's terminal using inherited stdio
+        // so tools like Cargo keep their colorized output.
+        io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
+        io_cfg.insert_output_pipe_stderr_inherit(PIPE_SETUP);
+        io_cfg.insert_output_pipe_stdout(PIPE_SNIPPET, use_stdout.clone());
+        io_cfg.insert_output_pipe_stderr(PIPE_SNIPPET, use_stderr.clone());
+
+        run_steps_with_context_result_with_io(&env.root, workspace_resolver.root(), &steps, io_cfg)
+            .with_context(|| format!("run {}", oxfile_path.display()))?;
 
         // Determine which capture buffer to read from: prefer explicit
-        // capture_buf passed by caller, otherwise use internal_capture.
-        if let Some(cb) = capture_buf {
-            let data = cb.lock().unwrap();
-            return Ok(String::from_utf8_lossy(&data).to_string());
-        }
-        if let Some(cb) = internal_capture {
-            let data = cb.lock().unwrap();
-            return Ok(String::from_utf8_lossy(&data).to_string());
-        }
+        // capture buffers passed by the caller; otherwise use the internal
+        // captures when stdout/stderr writers were synthesized above.
+        let stdout_bytes = if let Some(cb) = stdout_capture {
+            cb.lock().unwrap().clone()
+        } else if let Some(cb) = internal_stdout {
+            cb.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        };
 
-        // If stdout was provided and no capture buffer passed, we cannot
-        // reliably return the captured text here — return empty string.
-        return Ok(String::new());
+        let stderr_bytes = if let Some(cb) = stderr_capture {
+            cb.lock().unwrap().clone()
+        } else if let Some(cb) = internal_stderr {
+            cb.lock().unwrap().clone()
+        } else {
+            Vec::new()
+        };
+
+        return Ok(RunnerOutput {
+            stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+            stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+        });
     }
 
     // At this point we require an oxfile to drive execution. The old behavior
@@ -1452,4 +1524,122 @@ fn code_hash(script: &str, spec: &RunnerSpec) -> String {
         combined.push_str(hash);
     }
     sha256_hex(&combined)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::{Context, Result};
+    use indoc::indoc;
+
+    fn run_probe_runner(script: &str) -> Result<(GuardedPath, Option<String>, Option<String>)> {
+        let temp = GuardedPath::tempdir().context("probe workspace tempdir")?;
+        let workspace = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("create workspace resolver")?;
+        let runner_path = workspace.join("temp.runner.probe.oxfile")?;
+        resolver
+            .write_file(&runner_path, script.as_bytes())
+            .context("write probe runner")?;
+
+        let mut cache = RunnerCache::default();
+        let hash = env_hash_for_oxfile(&resolver, &runner_path, &mut cache)
+            .context("build runner env")?
+            .expect("runner env hash");
+        let key = runner_path.display().to_string();
+        let spec = RunnerSpec {
+            language: "probe".to_string(),
+            command: Vec::new(),
+            oxfile: Some(runner_path.clone()),
+            env_hash: Some(hash),
+        };
+
+        run_runner(
+            &resolver, &workspace, &workspace, &mut cache, &spec, "", None, None, None, None, None,
+        )
+        .context("execute probe runner")?;
+
+        let env = cache.envs.get(&key).expect("runner env should be cached");
+        let leak_path_file = env.root.join("leak-path.txt")?;
+        let leak_dir_file = env.root.join("leak-dir.txt")?;
+
+        Ok((
+            workspace,
+            read_if_exists(&leak_path_file)?,
+            read_if_exists(&leak_dir_file)?,
+        ))
+    }
+
+    fn read_if_exists(path: &GuardedPath) -> Result<Option<String>> {
+        let resolver =
+            PathResolver::new(path.root(), path.root()).context("resolver for leak file")?;
+        if resolver.entry_kind(path).is_err() {
+            return Ok(None);
+        }
+        let contents = resolver.read_to_string(path).context("read leak file")?;
+        Ok(Some(contents.trim().to_string()))
+    }
+
+    #[test]
+    fn snippet_env_hidden_without_inherit() -> Result<()> {
+        let script = indoc! {
+            r#"
+            [env:OXBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
+            [env:OXBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            "#
+        };
+
+        let (_workspace, path_value, dir_value) = run_probe_runner(script)?;
+        assert!(
+            path_value.is_none() && dir_value.is_none(),
+            "snippet env should not be visible without INHERIT_ENV"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn snippet_env_available_with_inherit() -> Result<()> {
+        let script = indoc! {
+            r#"
+            INHERIT_ENV [OXBOOK_SNIPPET_PATH, OXBOOK_SNIPPET_DIR]
+            [env:OXBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
+            [env:OXBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            "#
+        };
+
+        let (workspace, path_value, dir_value) = run_probe_runner(script)?;
+        let path_value = path_value.expect("snippet path should be inherited");
+        let dir_value = dir_value.expect("snippet dir should be inherited");
+
+        // Parse env-provided paths using the workspace resolver so platform
+        // specific quirks (backslashes, file://) are handled consistently.
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("create resolver for snippet env parse")?;
+        let dir_raw = dir_value.trim_start_matches("dir=");
+        let parsed_dir = resolver.parse_env_path(resolver.root(), dir_raw)?;
+        let expected_dir = resolver
+            .root()
+            .join("target")?
+            .join("oxbook")?
+            .join("snippets")?;
+        assert_eq!(
+            parsed_dir.as_path(),
+            expected_dir.as_path(),
+            "snippet dir should resolve to snippets staging directory"
+        );
+
+        let path_raw = path_value.trim_start_matches("path=");
+        let parsed_path = resolver.parse_env_path(resolver.root(), path_raw)?;
+        let expected_path = expected_dir.join("oxbook-snippet.probe")?;
+        assert_eq!(
+            parsed_path.as_path(),
+            expected_path.as_path(),
+            "snippet path should resolve to generated snippet file"
+        );
+        Ok(())
+    }
 }

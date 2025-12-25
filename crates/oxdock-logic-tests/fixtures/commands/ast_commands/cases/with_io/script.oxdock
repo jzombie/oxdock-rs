@@ -1,4 +1,3 @@
-[unix] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN cat
-[windows] CAPTURE_TO_FILE out.txt WITH_IO [stdin, stdout] RUN sort
-[unix] RUN "cat > empty.txt"
-[windows] RUN "sort > empty.txt"
+WITH_IO [stdin, stdout=pipe:cap_out_txt] READ
+WITH_IO [stdin=pipe:cap_out_txt] WRITE out.txt
+WRITE empty.txt ""

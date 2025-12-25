@@ -45,7 +45,7 @@ Every internal command is engineered to run the same way across platforms, excep
 ... TODO: Mention that OxDock adds no additional runtime dependencies if used as a preprocessor.  
 ... TODO: Show example
 
-... TODO: Note that OxDock guard expressions borrow TOML-like syntax for single-line conditions, and support multi-line guarded blocks using `{ ... }` braces.
+... TODO: Describe Oxfile (which is a script which runs in the OxDock interpreter or is embedded in Rust compile-time macros). Note that guard expressions borrow TOML-like syntax for single-line conditions, gates are loosely inspired by Rust's derive macros, and support multi-line guarded blocks using `{ ... }` braces.
 
 ## Testing & Coverage
 
@@ -172,9 +172,9 @@ Guards can now span multiple lines and wrap entire blocks of commands. This make
 ]
 WRITE linux-release.txt generated
 
-[platform:windows] {
-    WRITE win.txt hi
-    RUN powershell -Command Write-Host "windows!"
+[windows] {
+  WRITE win.txt hi
+  RUN powershell -Command Write-Host "windows!"
 }
 ```
 
@@ -182,6 +182,42 @@ WRITE linux-release.txt generated
 - Attaching a `{ ... }` block to a guard applies the guard to every enclosed command.
 - Guard-only lines without a block apply to the next command, preserving the existing syntax.
 - Commands inside `{ ... }` run inside a scoped environment: changes to `WORKDIR`, `WORKSPACE`, or `ENV` revert once the block exits so temporary setup does not leak outward.
+
+## Selective environment inheritance
+
+- Scripts no longer inherit the caller's environment wholesale. Host variables stay private unless you opt in explicitly.
+- Add `INHERIT_ENV [FOO, BAR, BAZ]` at the very top of the script to copy those keys from the process environment before any other command runs.
+- The directive must be top-level—no guards, no surrounding blocks, and no repeats. Trying to nest or guard it triggers a parser error so scripts stay deterministic.
+- Subsequent `ENV` commands can override inherited values, similar to how Docker's `ENV` overrides `--env` flags.
+
+```text
+INHERIT_ENV [AWS_REGION, HTTP_PROXY]
+ENV AWS_REGION=us-west-2 # explicit overrides still win
+RUN aws sts get-caller-identity
+```
+
+Keeping inheritance selective avoids leaking secrets by default while still allowing ergonomics for well-known keys (proxy settings, artifact caches, etc.).
+
+## WITH_IO defaults and blocks
+
+- The inline form (`WITH_IO [stdin, stdout=pipe:setup] RUN cargo test`) applies only to the next command and lets you mix-and-match stream sources (stdin), sinks (stdout/stderr), and named pipes that UI layers can render elsewhere.
+- The block form (`WITH_IO [stdout=pipe:block_outer] { ... }`) hoists those bindings so every enclosed command inherits them. Defaults stack: nested blocks merge bindings, and inline `WITH_IO` calls inside a block can override or extend the inherited defaults without affecting siblings.
+- Pipes decouple the DSL from the host: the CLI/docgen runtimes pre-register names such as `setup` or `snippet`, but you can also expose your own handles via `ExecIo` to tee structured logs into files, sockets, or streamed UI widgets.
+
+```text
+WITH_IO [stdout=pipe:block_outer] {
+  ECHO "outer-1"
+  WITH_IO [stdout] ECHO "override-stdout" # inline override streams to the terminal
+  WITH_IO [stdout=pipe:block_inner] {
+    ECHO "inner-2"
+  }
+  ECHO "outer-3"
+}
+
+ECHO "outside"
+```
+
+`block_outer` captures the first and last lines, `block_inner` isolates the nested section, and the inline override prints directly to the user before the default binding resumes. Once the braces close the previous IO defaults are restored, so later commands behave exactly as if the block never ran.
 
 ## Comments in DSL scripts
 

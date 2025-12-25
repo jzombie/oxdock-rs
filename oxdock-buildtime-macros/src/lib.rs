@@ -276,12 +276,11 @@ fn build_assets(
     let workspace_root =
         oxdock_fs::discover_workspace_root().map_err(|e| syn::Error::new(span, e.to_string()))?;
 
-    let final_cwd = oxdock_core::run_steps_with_context_result(
+    let final_cwd = oxdock_core::run_steps_with_context_result_with_io(
         &temp_root_guard,
         &workspace_root,
         &steps,
-        None,
-        None,
+        oxdock_core::ExecIo::new(),
     )
     .map_err(|e| {
         // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
