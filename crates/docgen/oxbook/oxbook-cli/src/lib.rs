@@ -129,6 +129,79 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+pub fn run_block(path: &str, line: usize) -> Result<()> {
+    let target_line = line.max(1);
+    let workspace_root = discover_workspace_root().context("resolve workspace root")?;
+    let resolver = PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
+        .context("create workspace path resolver")?;
+
+    scan_and_register_runners(&workspace_root);
+
+    let process_cwd = std::env::current_dir().context("determine current directory")?;
+    let cwd_base = match GuardedPath::new(workspace_root.root(), &process_cwd) {
+        Ok(g) => g,
+        Err(_) => workspace_root.clone(),
+    };
+
+    let watched = resolver
+        .resolve_read(&cwd_base, path)
+        .with_context(|| format!("resolve markdown path {path}"))?;
+
+    let source_dir = watched.parent().unwrap_or_else(|| workspace_root.clone());
+    let mut cache = RunnerCache::default();
+
+    let contents = read_stable_contents(&resolver, &watched)?;
+    let fences = parse_fences(&contents);
+    let fence = fences
+        .into_iter()
+        .find(|block| block.start_line <= target_line && block.end_line >= target_line)
+        .with_context(|| format!("no code block covering line {}", target_line))?;
+
+    let spec = match runner_spec(&fence.info, &resolver, &workspace_root, &source_dir, &mut cache)? {
+        Some(spec) => spec,
+        None => {
+            println!(
+                "No runner configured for fence at line {} (info: {})",
+                fence.start_line,
+                if fence.info.is_empty() {
+                    String::from("plain")
+                } else {
+                    fence.info.clone()
+                }
+            );
+            return Ok(());
+        }
+    };
+
+    let stream_stdout = match std::env::var_os(STREAM_STDOUT_ENV) {
+        Some(val) => val != "0",
+        None => std::io::stdout().is_terminal(),
+    };
+
+    let output = run_runner(
+        &resolver,
+        &workspace_root,
+        &source_dir,
+        &mut cache,
+        &spec,
+        &fence.content,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+
+    if !stream_stdout && !output.stdout.is_empty() {
+        print!("{}", output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", output.stderr);
+    }
+
+    Ok(())
+}
+
 fn parse_target_path() -> Result<String> {
     let mut args = std::env::args();
     let _ = args.next();

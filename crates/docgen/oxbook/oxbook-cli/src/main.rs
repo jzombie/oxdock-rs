@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -21,22 +24,47 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+const RUN_GLYPH_IDLE: &str = "[>]";
+const RUN_GLYPH_RUNNING: &str = "[X]";
+const RUN_GLYPH_BLANK: &str = "   ";
+const RUN_GLYPH_WIDTH: usize = RUN_GLYPH_IDLE.len();
+
 fn main() -> Result<()> {
-    let mut use_tui = false;
+    enum LaunchMode {
+        Default,
+        Tui,
+        RunBlock { path: String, line: usize },
+    }
+
+    let mut mode = LaunchMode::Default;
     let mut cli_args = Vec::new();
-    for arg in std::env::args().skip(1) {
+    let mut args = std::env::args().skip(1).peekable();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--tui" | "-t" => use_tui = true,
-            "tui" if !use_tui && cli_args.is_empty() => use_tui = true,
+            "--tui" | "-t" => mode = LaunchMode::Tui,
+            "tui" if matches!(mode, LaunchMode::Default) && cli_args.is_empty() => {
+                mode = LaunchMode::Tui
+            }
+            "--run-block" | "run-block" => {
+                let path = args
+                    .next()
+                    .context("expected path after --run-block")?;
+                let line = args
+                    .next()
+                    .context("expected line number after --run-block")?
+                    .parse::<usize>()
+                    .context("invalid line number for --run-block")?;
+                mode = LaunchMode::RunBlock { path, line };
+            }
             _ => cli_args.push(arg),
         }
     }
 
-    if use_tui {
-        return run_tui(cli_args);
+    match mode {
+        LaunchMode::Tui => run_tui(cli_args),
+        LaunchMode::RunBlock { path, line } => oxbook_cli::run_block(&path, line),
+        LaunchMode::Default => oxbook_cli::run(),
     }
-
-    oxbook_cli::run()
 }
 
 fn run_tui(cli_args: Vec<String>) -> Result<()> {
@@ -45,7 +73,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -54,6 +82,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
         let mut status = String::from("Idle");
         let mut child: Option<Child> = None;
+        let mut snippet_run: Option<SnippetRun> = None;
         let mut mode = UiMode::Dashboard;
 
         loop {
@@ -67,6 +96,19 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     trim_logs(&mut guard, MAX_LOG_LINES);
                     child = None;
                     status = String::from("Idle");
+                }
+            }
+
+            if let Some(run) = snippet_run.as_mut() {
+                if let Some(exit) = run.child.try_wait()? {
+                    let mut guard = logs.lock().unwrap();
+                    guard.push_back(LogRecord::new(
+                        LogSource::Stdout,
+                        format!("block at line {} exited: {}\n", run.line + 1, exit),
+                    ));
+                    trim_logs(&mut guard, MAX_LOG_LINES);
+                    status = format!("Block at line {} exited", run.line + 1);
+                    snippet_run = None;
                 }
             }
 
@@ -108,12 +150,13 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             format!("Target: {}", cli_args.join(" "))
                         };
                         let mut controls_view = ControlsView::new(format!(
-                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session."
+                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor, 'r' to run oxbook-cli within this session.\nIn the editor view, click [>] to run a code block."
                         ));
                         controls_view.render(f, mid[0]);
                     }
                     UiMode::Editor(editor) => {
-                        let mut editor_view = EditorView::new(editor);
+                        let running_line = snippet_run.as_ref().map(|run| run.line);
+                        let mut editor_view = EditorView::new(editor, running_line);
                         editor_view.render(f, mid[0]);
                     }
                 }
@@ -126,80 +169,172 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
             })?;
 
             if event::poll(Duration::from_millis(120))? {
-                if let CEvent::Key(key_event) = event::read()? {
-                    if key_event.kind != KeyEventKind::Press {
-                        continue;
-                    }
-                    match &mut mode {
-                        UiMode::Dashboard => match key_event.code {
-                            KeyCode::Char('q') => {
-                                if let Some(mut proc) = child.take() {
-                                    let _ = proc.kill();
-                                    let _ = proc.wait();
+                match event::read()? {
+                    CEvent::Mouse(mouse_event) => {
+                        if let UiMode::Editor(editor) = &mut mode {
+                            if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                                if let Some(line_idx) = editor
+                                    .hit_test_run_glyph(mouse_event.column, mouse_event.row)
+                                {
+                                    let line_number = line_idx + 1;
+                                    if let Some(mut running) = snippet_run.take() {
+                                        if running.line == line_idx {
+                                            let _ = running.child.kill();
+                                            let _ = running.child.wait();
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stdout,
+                                                format!(
+                                                    "stopped block at line {}\n",
+                                                    line_number
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = format!(
+                                                "Stopped block at line {}",
+                                                line_number
+                                            );
+                                            continue;
+                                        } else {
+                                            let _ = running.child.kill();
+                                            let _ = running.child.wait();
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stderr,
+                                                format!(
+                                                    "aborted block at line {}\n",
+                                                    running.line + 1
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                        }
+                                    }
+
+                                    match spawn_run_block_child(
+                                        &target_path,
+                                        line_number,
+                                        logs.clone(),
+                                        MAX_LOG_LINES,
+                                    ) {
+                                        Ok(child_proc) => {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stdout,
+                                                format!(
+                                                    "running block at line {}\n",
+                                                    line_number
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = format!(
+                                                "Running block at line {}...",
+                                                line_number
+                                            );
+                                            snippet_run = Some(SnippetRun {
+                                                line: line_idx,
+                                                child: child_proc,
+                                            });
+                                        }
+                                        Err(err) => {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stderr,
+                                                format!(
+                                                    "run-block error at line {}: {}\n",
+                                                    line_number, err
+                                                ),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = format!(
+                                                "Snippet spawn failed at line {}",
+                                                line_number
+                                            );
+                                        }
+                                    }
                                 }
-                                break Ok(());
                             }
-                            KeyCode::Char('r') => {
-                                if child.is_some() {
-                                    status = String::from("Already running");
-                                    continue;
+                        }
+                    }
+                    CEvent::Key(key_event) => {
+                        if key_event.kind != KeyEventKind::Press {
+                            continue;
+                        }
+                        match &mut mode {
+                            UiMode::Dashboard => match key_event.code {
+                                KeyCode::Char('q') => {
+                                    if let Some(mut proc) = child.take() {
+                                        let _ = proc.kill();
+                                        let _ = proc.wait();
+                                    }
+                                    if let Some(mut run) = snippet_run.take() {
+                                        let _ = run.child.kill();
+                                        let _ = run.child.wait();
+                                    }
+                                    break Ok(());
                                 }
-                                match spawn_cli_child(&cli_args, logs.clone(), MAX_LOG_LINES) {
-                                    Ok(new_child) => {
-                                        status = String::from("Running...");
-                                        child = Some(new_child);
+                                KeyCode::Char('r') => {
+                                    if child.is_some() {
+                                        status = String::from("Already running");
+                                        continue;
+                                    }
+                                    match spawn_cli_child(&cli_args, logs.clone(), MAX_LOG_LINES) {
+                                        Ok(new_child) => {
+                                            status = String::from("Running...");
+                                            child = Some(new_child);
+                                        }
+                                        Err(err) => {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stderr,
+                                                format!("spawn error: {err}\n"),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = String::from("Spawn failed");
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('e') => match EditorState::load(target_path.clone()) {
+                                    Ok(editor) => {
+                                        status = format!("Editing {}", editor.short_path());
+                                        mode = UiMode::Editor(editor);
                                     }
                                     Err(err) => {
                                         let mut guard = logs.lock().unwrap();
                                         guard.push_back(LogRecord::new(
                                             LogSource::Stderr,
-                                            format!("spawn error: {err}\n"),
+                                            format!("editor load error: {err}\n"),
                                         ));
                                         trim_logs(&mut guard, MAX_LOG_LINES);
-                                        status = String::from("Spawn failed");
+                                        status = String::from("Editor failed");
                                     }
-                                }
-                            }
-                            KeyCode::Char('e') => match EditorState::load(target_path.clone()) {
-                                Ok(editor) => {
-                                    status = format!("Editing {}", editor.short_path());
-                                    mode = UiMode::Editor(editor);
-                                }
-                                Err(err) => {
-                                    let mut guard = logs.lock().unwrap();
-                                    guard.push_back(LogRecord::new(
-                                        LogSource::Stderr,
-                                        format!("editor load error: {err}\n"),
-                                    ));
-                                    trim_logs(&mut guard, MAX_LOG_LINES);
-                                    status = String::from("Editor failed");
-                                }
+                                },
+                                _ => {}
                             },
-                            _ => {}
-                        },
-                        UiMode::Editor(editor) => {
-                            let action = editor.handle_key(key_event)?;
-                            let message = editor.take_status_message();
-                            if matches!(action, EditorAction::Exit) {
-                                let closed = editor.short_path();
-                                status = if let Some(msg) = message {
-                                    format!("{msg} • Editor closed ({closed})")
-                                } else {
-                                    format!("Editor closed ({closed})")
-                                };
-                                mode = UiMode::Dashboard;
-                            } else if let Some(msg) = message {
-                                status = msg;
+                            UiMode::Editor(editor) => {
+                                let action = editor.handle_key(key_event)?;
+                                let message = editor.take_status_message();
+                                if matches!(action, EditorAction::Exit) {
+                                    let closed = editor.short_path();
+                                    status = if let Some(msg) = message {
+                                        format!("{msg} • Editor closed ({closed})")
+                                    } else {
+                                        format!("Editor closed ({closed})")
+                                    };
+                                    mode = UiMode::Dashboard;
+                                } else if let Some(msg) = message {
+                                    status = msg;
+                                }
                             }
                         }
-                    }
+                }
+                    _ => {}
                 }
             }
         }
     })();
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     result
 }
@@ -220,6 +355,11 @@ enum UiMode {
 enum EditorAction {
     Continue,
     Exit,
+}
+
+struct SnippetRun {
+    line: usize,
+    child: Child,
 }
 
 trait FramedView {
@@ -243,6 +383,9 @@ struct EditorState {
     dirty: bool,
     last_disk_mtime: Option<SystemTime>,
     pending_status: Option<String>,
+    code_blocks: Vec<CodeBlockMeta>,
+    code_blocks_dirty: bool,
+    render_info: Option<EditorRenderInfo>,
 }
 
 struct LineRender {
@@ -250,9 +393,33 @@ struct LineRender {
     prefix_width: usize,
 }
 
+struct VisibleLines {
+    lines: Vec<LineRender>,
+    digits_width: usize,
+    arrow_width: usize,
+}
+
+#[derive(Clone)]
+struct CodeBlockMeta {
+    fence_line: usize,
+    _close_line: usize,
+    _info: String,
+}
+
+struct EditorRenderInfo {
+    inner_x: u16,
+    inner_y: u16,
+    inner_width: u16,
+    inner_height: u16,
+    prefix_width: usize,
+    digits_width: usize,
+    arrow_width: usize,
+}
+
 impl EditorState {
     fn load(path: PathBuf) -> Result<Self> {
         let (lines, last_disk_mtime) = Self::read_disk_snapshot(&path)?;
+        let code_blocks = Self::compute_code_blocks(&lines);
         Ok(Self {
             path,
             lines,
@@ -262,6 +429,9 @@ impl EditorState {
             dirty: false,
             last_disk_mtime,
             pending_status: None,
+            code_blocks,
+            code_blocks_dirty: false,
+            render_info: None,
         })
     }
 
@@ -316,6 +486,9 @@ impl EditorState {
         self.lines = new_lines;
         self.clamp_cursor();
         self.last_disk_mtime = modified;
+        self.code_blocks = Self::compute_code_blocks(&self.lines);
+        self.code_blocks_dirty = false;
+        self.render_info = None;
         Ok(Some(format!("Reloaded {}", self.short_path())))
     }
 
@@ -362,18 +535,37 @@ impl EditorState {
         }
     }
 
-    fn visible_lines_for_render(&self, viewport_height: usize) -> Vec<LineRender> {
+    fn visible_lines_for_render(
+        &mut self,
+        viewport_height: usize,
+        running_block: Option<usize>,
+    ) -> VisibleLines {
         if viewport_height == 0 {
-            return Vec::new();
+            return VisibleLines {
+                lines: Vec::new(),
+                digits_width: digits(self.lines.len().max(1)),
+                arrow_width: RUN_GLYPH_WIDTH,
+            };
         }
 
+        self.ensure_code_blocks();
+
         let total_lines = self.lines.len().max(1);
-        let width = digits(total_lines);
+        let digits_width = digits(total_lines);
         let end = (self.scroll_row + viewport_height).min(self.lines.len());
         let mut rendered = Vec::with_capacity(end.saturating_sub(self.scroll_row));
         for idx in self.scroll_row..end {
             let number = idx + 1;
-            let prefix = format!("{:>width$} | ", number, width = width);
+            let arrow = if self.is_code_block_start(idx) {
+                if Some(idx) == running_block {
+                    RUN_GLYPH_RUNNING
+                } else {
+                    RUN_GLYPH_IDLE
+                }
+            } else {
+                RUN_GLYPH_BLANK
+            };
+            let prefix = format!("{:>width$} {} | ", number, arrow, width = digits_width);
             let display = format!("{prefix}{}", self.lines[idx]);
             rendered.push(LineRender {
                 display,
@@ -381,7 +573,11 @@ impl EditorState {
             });
         }
 
-        rendered
+        VisibleLines {
+            lines: rendered,
+            digits_width,
+            arrow_width: RUN_GLYPH_WIDTH,
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<EditorAction> {
@@ -449,6 +645,7 @@ impl EditorState {
             line.insert(self.cursor_col, ch);
             self.cursor_col += 1;
             self.dirty = true;
+            self.invalidate_layout();
         }
     }
 
@@ -459,6 +656,7 @@ impl EditorState {
             self.cursor_row += 1;
             self.cursor_col = 0;
             self.dirty = true;
+            self.invalidate_layout();
         }
     }
 
@@ -468,6 +666,7 @@ impl EditorState {
                 self.cursor_col -= 1;
                 line.remove(self.cursor_col);
                 self.dirty = true;
+                self.invalidate_layout();
             }
         } else if self.cursor_row > 0 {
             let current_line = self.lines.remove(self.cursor_row);
@@ -480,6 +679,7 @@ impl EditorState {
                 self.cursor_col = 0;
             }
             self.dirty = true;
+            self.invalidate_layout();
         }
     }
 
@@ -488,6 +688,7 @@ impl EditorState {
             if self.cursor_col < line.len() {
                 line.remove(self.cursor_col);
                 self.dirty = true;
+                self.invalidate_layout();
                 return;
             }
         }
@@ -497,6 +698,7 @@ impl EditorState {
                 line.push_str(&next_line);
             }
             self.dirty = true;
+            self.invalidate_layout();
         }
     }
 
@@ -541,6 +743,142 @@ impl EditorState {
 
     fn move_line_end(&mut self) {
         self.cursor_col = self.current_line_len();
+    }
+
+    fn hit_test_run_glyph(&self, column: u16, row: u16) -> Option<usize> {
+        let info = self.render_info.as_ref()?;
+        if column < info.inner_x || row < info.inner_y {
+            return None;
+        }
+
+        let rel_x = (column - info.inner_x) as usize;
+        let rel_y = (row - info.inner_y) as usize;
+        let inner_width = info.inner_width as usize;
+        let inner_height = info.inner_height as usize;
+        if rel_x >= inner_width || rel_y >= inner_height {
+            return None;
+        }
+
+        if rel_x >= info.prefix_width {
+            return None;
+        }
+
+        let arrow_start = info.digits_width + 1;
+        if rel_x < arrow_start || rel_x >= arrow_start + info.arrow_width {
+            return None;
+        }
+
+        let line_idx = self.scroll_row + rel_y;
+        if line_idx >= self.lines.len() {
+            return None;
+        }
+        if self.is_code_block_start(line_idx) {
+            Some(line_idx)
+        } else {
+            None
+        }
+    }
+
+    fn invalidate_layout(&mut self) {
+        self.code_blocks_dirty = true;
+        self.render_info = None;
+    }
+
+    fn ensure_code_blocks(&mut self) {
+        if self.code_blocks_dirty {
+            self.code_blocks = Self::compute_code_blocks(&self.lines);
+            self.code_blocks_dirty = false;
+        }
+    }
+
+    fn is_code_block_start(&self, line_idx: usize) -> bool {
+        self.code_blocks
+            .iter()
+            .any(|block| block.fence_line == line_idx)
+    }
+
+    fn compute_code_blocks(lines: &[String]) -> Vec<CodeBlockMeta> {
+        #[derive(Clone)]
+        struct OpenBlock {
+            start: usize,
+            fence_char: char,
+            fence_len: usize,
+            info: String,
+        }
+
+        let mut blocks = Vec::new();
+        let mut current: Option<OpenBlock> = None;
+
+        for (idx, line) in lines.iter().enumerate() {
+            let marker = Self::parse_fence_marker(line);
+            if let Some(open) = current.as_ref() {
+                if let Some((_, fence_char, fence_len, info)) = marker.as_ref() {
+                    if *fence_char == open.fence_char
+                        && *fence_len >= open.fence_len
+                        && info.is_empty()
+                    {
+                        blocks.push(CodeBlockMeta {
+                            fence_line: open.start,
+                            _close_line: idx,
+                            _info: open.info.clone(),
+                        });
+                        current = None;
+                        continue;
+                    }
+                }
+            }
+
+            if current.is_none() {
+                if let Some((_, fence_char, fence_len, info)) = marker {
+                    current = Some(OpenBlock {
+                        start: idx,
+                        fence_char,
+                        fence_len,
+                        info,
+                    });
+                }
+            }
+        }
+
+        if let Some(open) = current {
+            blocks.push(CodeBlockMeta {
+                fence_line: open.start,
+                _close_line: lines.len().saturating_sub(1),
+                _info: open.info,
+            });
+        }
+
+        blocks
+    }
+
+    fn parse_fence_marker(line: &str) -> Option<(usize, char, usize, String)> {
+        let bytes = line.as_bytes();
+        let mut idx = 0usize;
+        let mut ws = 0usize;
+        while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b'\t') {
+            ws += 1;
+            idx += 1;
+        }
+        if ws > 3 || idx >= bytes.len() {
+            return None;
+        }
+
+        let fence_char = bytes[idx] as char;
+        if fence_char != '`' && fence_char != '~' {
+            return None;
+        }
+        idx += 1;
+        let mut fence_len = 1;
+        while idx < bytes.len() && bytes[idx] as char == fence_char {
+            fence_len += 1;
+            idx += 1;
+        }
+        if fence_len < 3 {
+            return None;
+        }
+
+        let rest = &line[idx..];
+        Some((ws, fence_char, fence_len, rest.trim().to_string()))
     }
 }
 
@@ -589,11 +927,15 @@ impl FramedView for ControlsView {
 
 struct EditorView<'a> {
     editor: &'a mut EditorState,
+    running_block: Option<usize>,
 }
 
 impl<'a> EditorView<'a> {
-    fn new(editor: &'a mut EditorState) -> Self {
-        Self { editor }
+    fn new(editor: &'a mut EditorState, running_block: Option<usize>) -> Self {
+        Self {
+            editor,
+            running_block,
+        }
     }
 }
 
@@ -611,29 +953,49 @@ impl<'a> FramedView for EditorView<'a> {
 
         let viewport = inner.height as usize;
         self.editor.adjust_scroll(viewport);
-        let lines = self.editor.visible_lines_for_render(viewport);
-        let text = lines
+        let visible = self
+            .editor
+            .visible_lines_for_render(viewport, self.running_block);
+        let text = visible
+            .lines
             .iter()
             .map(|line| line.display.as_str())
             .collect::<Vec<_>>()
             .join("\n");
         frame.render_widget(Paragraph::new(text), inner);
 
+        self.editor.render_info = Some(EditorRenderInfo {
+            inner_x: inner.x,
+            inner_y: inner.y,
+            inner_width: inner.width,
+            inner_height: inner.height,
+            prefix_width: visible
+                .lines
+                .first()
+                .map(|line| line.prefix_width)
+                .unwrap_or(0),
+            digits_width: visible.digits_width,
+            arrow_width: visible.arrow_width,
+        });
+
         let cursor_row = self
             .editor
             .relative_cursor_row()
-            .min(lines.len().saturating_sub(1));
-        if let Some(line) = lines.get(cursor_row) {
-            let prefix = line.prefix_width.min(inner.width as usize);
+            .min(visible.lines.len().saturating_sub(1));
+        if let Some(line) = visible.lines.get(cursor_row) {
+            let inner_width = inner.width as usize;
+            let prefix = line.prefix_width.min(inner_width);
             let prefix_cols = prefix as u16;
-            if inner.width > prefix_cols {
-                let content_width = inner.width - prefix_cols;
-                let max_col = content_width.saturating_sub(1) as usize;
-                let cursor_col = self.editor.cursor_col().min(max_col);
-                frame.set_cursor(
-                    inner.x + prefix_cols + cursor_col as u16,
-                    inner.y + cursor_row as u16,
-                );
+            if inner_width > prefix {
+                let content_width = inner_width.saturating_sub(prefix);
+                if content_width > 0 {
+                    let max_col = content_width.saturating_sub(1);
+                    let cursor_col = self.editor.cursor_col().min(max_col);
+                    frame.set_cursor(
+                        inner.x + prefix_cols + cursor_col as u16,
+                        inner.y + cursor_row as u16,
+                    );
+                }
             }
         }
     }
@@ -961,10 +1323,31 @@ fn spawn_cli_child(
     logs: Arc<Mutex<VecDeque<LogRecord>>>,
     max_logs: usize,
 ) -> Result<Child> {
+    spawn_cli_command(cli_args.to_vec(), logs, max_logs)
+}
+
+fn spawn_run_block_child(
+    target: &Path,
+    line: usize,
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+) -> Result<Child> {
+    let mut args = Vec::with_capacity(3);
+    args.push(String::from("--run-block"));
+    args.push(target.to_string_lossy().to_string());
+    args.push(line.to_string());
+    spawn_cli_command(args, logs, max_logs)
+}
+
+fn spawn_cli_command(
+    args: Vec<String>,
+    logs: Arc<Mutex<VecDeque<LogRecord>>>,
+    max_logs: usize,
+) -> Result<Child> {
     let exe = std::env::current_exe().context("locate current executable")?;
     let mut cmd = Command::new(exe);
-    if !cli_args.is_empty() {
-        cmd.args(cli_args);
+    if !args.is_empty() {
+        cmd.args(&args);
     }
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
