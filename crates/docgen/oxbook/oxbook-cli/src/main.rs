@@ -245,6 +245,11 @@ struct EditorState {
     pending_status: Option<String>,
 }
 
+struct LineRender {
+    display: String,
+    prefix_width: usize,
+}
+
 impl EditorState {
     fn load(path: PathBuf) -> Result<Self> {
         let (lines, last_disk_mtime) = Self::read_disk_snapshot(&path)?;
@@ -357,12 +362,26 @@ impl EditorState {
         }
     }
 
-    fn visible_text(&self, viewport_height: usize) -> String {
+    fn visible_lines_for_render(&self, viewport_height: usize) -> Vec<LineRender> {
         if viewport_height == 0 {
-            return String::new();
+            return Vec::new();
         }
+
+        let total_lines = self.lines.len().max(1);
+        let width = digits(total_lines);
         let end = (self.scroll_row + viewport_height).min(self.lines.len());
-        self.lines[self.scroll_row..end].join("\n")
+        let mut rendered = Vec::with_capacity(end.saturating_sub(self.scroll_row));
+        for idx in self.scroll_row..end {
+            let number = idx + 1;
+            let prefix = format!("{:>width$} | ", number, width = width);
+            let display = format!("{prefix}{}", self.lines[idx]);
+            rendered.push(LineRender {
+                display,
+                prefix_width: prefix.len(),
+            });
+        }
+
+        rendered
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<EditorAction> {
@@ -525,6 +544,7 @@ impl EditorState {
     }
 }
 
+
 struct HeaderView<'a> {
     text: &'a str,
 }
@@ -591,16 +611,31 @@ impl<'a> FramedView for EditorView<'a> {
 
         let viewport = inner.height as usize;
         self.editor.adjust_scroll(viewport);
-        let text = self.editor.visible_text(viewport);
+        let lines = self.editor.visible_lines_for_render(viewport);
+        let text = lines
+            .iter()
+            .map(|line| line.display.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         frame.render_widget(Paragraph::new(text), inner);
 
-        let max_col = inner.width.saturating_sub(1) as usize;
-        let cursor_col = self.editor.cursor_col().min(max_col);
         let cursor_row = self
             .editor
             .relative_cursor_row()
-            .min(viewport.saturating_sub(1));
-        frame.set_cursor(inner.x + cursor_col as u16, inner.y + cursor_row as u16);
+            .min(lines.len().saturating_sub(1));
+        if let Some(line) = lines.get(cursor_row) {
+            let prefix = line.prefix_width.min(inner.width as usize);
+            let prefix_cols = prefix as u16;
+            if inner.width > prefix_cols {
+                let content_width = inner.width - prefix_cols;
+                let max_col = content_width.saturating_sub(1) as usize;
+                let cursor_col = self.editor.cursor_col().min(max_col);
+                frame.set_cursor(
+                    inner.x + prefix_cols + cursor_col as u16,
+                    inner.y + cursor_row as u16,
+                );
+            }
+        }
     }
 }
 
@@ -659,6 +694,15 @@ fn trim_logs(logs: &mut VecDeque<LogRecord>, max: usize) {
     while logs.len() > max {
         logs.pop_front();
     }
+}
+
+fn digits(mut value: usize) -> usize {
+    let mut width = 1;
+    while value >= 10 {
+        value /= 10;
+        width += 1;
+    }
+    width
 }
 
 fn logs_to_text(entries: &VecDeque<LogRecord>, max_lines: usize) -> Text<'static> {
