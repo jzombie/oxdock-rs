@@ -146,10 +146,7 @@ pub fn expand_script_env(input: &str, script_envs: &HashMap<String, String>) -> 
 pub fn expand_command_env(input: &str, ctx: &CommandContext) -> String {
     expand_with_lookup(input, |name| {
         if let Some(key) = name.strip_prefix("env:") {
-            ctx.envs()
-                .get(key)
-                .cloned()
-                .or_else(|| std::env::var(key).ok())
+            ctx.envs().get(key).cloned()
         } else {
             None
         }
@@ -312,10 +309,20 @@ impl ProcessManager for ShellProcessManager {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     // Use command_path to strip Windows verbatim prefixes (\\?\) before passing to Command.
-    // While Rust's std::process::Command handles verbatim paths in current_dir correctly,
-    // environment variables are passed as-is. If we pass a verbatim path in CARGO_TARGET_DIR,
+    // While Rust's `std::process::Command handles verbatim paths in current_dir correctly,
+    // environment variables are passed as-is. If we pass a verbatim path in `CARGO_TARGET_DIR`,
     // tools that don't understand it (or shell scripts echoing it) might misbehave or produce
     // unexpected output. Normalizing here ensures consistency.
+    //
+    // Why the `\\?\` verbatim prefixes?
+    // On Windows we intentionally keep the canonical verbatim path (e.g. `\\?\C:\\repo`)
+    // inside every `GuardedPath`. This avoids MAX_PATH truncation and prevents subtle
+    // `PathBuf` casing/drive-letter surprises when the guard is later joined, copied,
+    // or passed through `std::fs`. When you need a human-readable path, call
+    // [`command_path`] (native separators, prefix stripped) or [`normalized_path`]
+    // (forward slashes) or use the `Display` impl, which already defers to
+    // `command_path`. Keep the debug view raw so diagnostics can show the exact path
+    // we are guarding.
     let cwd_path: std::borrow::Cow<std::path::Path> = match ctx.cwd() {
         PolicyPath::Guarded(p) => oxdock_fs::command_path(p),
         PolicyPath::Unguarded(p) => std::borrow::Cow::Borrowed(p.as_path()),
@@ -1188,7 +1195,7 @@ mod tests {
         envs.insert("FOO".into(), "bar".into());
         envs.insert("PCT".into(), "percent".into());
         envs.insert("CARGO_TARGET_DIR".into(), guard.display().to_string());
-        let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
+        envs.insert("HOST_ONLY".into(), "host".into());
 
         let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
 
@@ -1206,5 +1213,18 @@ mod tests {
         let input_literal = "%FOO%-{CARGO_TARGET_DIR}-$$";
         let rendered_literal = expand_command_env(input_literal, &ctx);
         assert_eq!(rendered_literal, input_literal);
+    }
+
+    #[test]
+    fn expand_command_env_does_not_fallback_to_host() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let guard = temp.as_guarded_path().clone();
+        let cwd: PolicyPath = guard.clone().into();
+        let envs = HashMap::new();
+        let _env_guard = TestEnvGuard::set("HOST_ONLY", "host");
+
+        let ctx = CommandContext::new(&cwd, &envs, &guard, &guard, &guard);
+        let rendered = expand_command_env("{{ env:HOST_ONLY }}", &ctx);
+        assert_eq!(rendered, "");
     }
 }

@@ -59,6 +59,7 @@ bare_platform = { platform_tag }
 platform_tag = @{ ASCII_ALPHANUMERIC+ }
 
 command = _{
+    inherit_env_command |
     workdir_command |
     workspace_command |
     env_command |
@@ -97,6 +98,12 @@ cwd_command = ${ "CWD" }
 read_command = ${ "READ" ~ (sep ~ argument)? }
 write_command = ${ "WRITE" ~ sep ~ argument ~ (sep ~ message)? }
 exit_command = ${ "EXIT" ~ sep ~ exit_code }
+
+// Inherit environment variables (selective list only). Placed here so it's available
+// as a top-level command in the prelude. NOTE: `ALL` form is intentionally omitted.
+inherit_env_command = ${ "INHERIT_ENV" ~ sep ~ inherit_list }
+
+inherit_list = { "[" ~ ws? ~ env_key ~ (ws? ~ "," ~ ws? ~ env_key)* ~ ws? ~ "]" }
 
 // Arguments
 sep = _{ WHITESPACE+ }

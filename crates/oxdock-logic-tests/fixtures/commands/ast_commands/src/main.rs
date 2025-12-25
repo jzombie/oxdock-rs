@@ -73,6 +73,8 @@ struct CaseSpec {
     build_context: BuildContext,
     setup: Option<String>,
     stdin: Option<String>,
+    env: Vec<(String, String)>,
+    env_remove: Vec<String>,
     expect_error: Option<ErrorExpectation>,
     expectations: Expectations,
     pipes: BTreeMap<String, PipeSpec>,
@@ -87,6 +89,7 @@ struct CoverageSpec {
 struct PipeSpec {
     expect: Option<String>,
 }
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("fixture failed: {err:#}");
@@ -257,6 +260,18 @@ fn load_case_spec(
         .map(parse_pipe_specs)
         .transpose()? 
         .unwrap_or_default();
+    let env = doc
+        .get("env")
+        .and_then(|item| item.as_table())
+        .map(parse_env_table)
+        .transpose()? 
+        .unwrap_or_default();
+    let env_remove = doc
+        .get("env_remove")
+        .and_then(|item| item.as_array())
+        .map(parse_string_array)
+        .transpose()? 
+        .unwrap_or_default();
 
     Ok(CaseSpec {
         name,
@@ -265,6 +280,8 @@ fn load_case_spec(
         build_context,
         setup,
         stdin,
+        env,
+        env_remove,
         expect_error,
         expectations,
         pipes,
@@ -354,6 +371,17 @@ fn parse_pipe_specs(table: &Table) -> Result<BTreeMap<String, PipeSpec>> {
         pipes.insert(name.to_string(), PipeSpec { expect });
     }
     Ok(pipes)
+}
+
+fn parse_env_table(table: &Table) -> Result<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    for (key, value) in table.iter() {
+        let value = value
+            .as_str()
+            .ok_or_else(|| anyhow!("env.{key} must be a string"))?;
+        env.push((key.to_string(), value.to_string()));
+    }
+    Ok(env)
 }
 
 fn parse_root_expect(table: &Table) -> Result<RootExpect> {
@@ -660,6 +688,13 @@ fn run_case(case: &CaseSpec, steps: &[Step]) -> Result<()> {
     let mut io_cfg = ExecIo::new();
     io_cfg.set_stdout(Some(stdout.clone()));
     io_cfg.set_stdin(stdin);
+
+    for key in &case.env_remove {
+        io_cfg.remove_inherit_env(key.clone());
+    }
+    for (key, value) in &case.env {
+        io_cfg.insert_inherit_env(key.clone(), value.clone());
+    }
 
     let mut pipe_buffers: Vec<(String, Arc<Mutex<Vec<u8>>>, PipeSpec)> = Vec::new();
     for (name, spec) in &case.pipes {
@@ -1043,6 +1078,7 @@ fn extract_step_kind_variants(source: &str) -> Vec<String> {
 
 fn step_kind_name(kind: &StepKind) -> &'static str {
     match kind {
+        StepKind::InheritEnv { .. } => "InheritEnv",
         StepKind::Workdir(_) => "Workdir",
         StepKind::Workspace(_) => "Workspace",
         StepKind::Env { .. } => "Env",

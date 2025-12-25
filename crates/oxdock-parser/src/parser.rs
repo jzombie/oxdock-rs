@@ -140,6 +140,35 @@ impl<'a> ScriptParser<'a> {
             );
         }
 
+        // Validate `INHERIT_ENV` directives: only allowed in the prelude (before
+        // any other commands) and at most one occurrence.
+        {
+            let mut seen_non_prelude = false;
+            let mut inherit_count = 0usize;
+            for step in &self.steps {
+                match &step.kind {
+                    StepKind::InheritEnv { .. } => {
+                        if seen_non_prelude {
+                            bail!("INHERIT_ENV must appear before any other commands");
+                        }
+                        if !step.guards.is_empty() || step.scope_enter > 0 || step.scope_exit > 0 {
+                            bail!("INHERIT_ENV cannot be guarded or nested inside blocks");
+                        }
+                        inherit_count += 1;
+                    }
+                    kind => {
+                        if contains_inherit_env(kind) {
+                            bail!("INHERIT_ENV cannot be nested inside other commands");
+                        }
+                        seen_non_prelude = true;
+                    }
+                }
+            }
+            if inherit_count > 1 {
+                bail!("only one INHERIT_ENV directive is allowed");
+            }
+        }
+
         Ok(self.steps)
     }
 
@@ -425,6 +454,14 @@ fn merge_bindings(defaults: &[IoBinding], overrides: &[IoBinding]) -> Vec<IoBind
     set.into_vec()
 }
 
+fn contains_inherit_env(kind: &StepKind) -> bool {
+    match kind {
+        StepKind::InheritEnv { .. } => true,
+        StepKind::WithIo { cmd, .. } => contains_inherit_env(cmd),
+        _ => false,
+    }
+}
+
 fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
     let kind = match pair.as_rule() {
         Rule::workdir_command => {
@@ -519,6 +556,23 @@ fn parse_command(pair: Pair<Rule>) -> Result<StepKind> {
         Rule::hash_sha256_command => {
             let arg = parse_single_arg(pair)?;
             StepKind::HashSha256 { path: arg.into() }
+        }
+        Rule::inherit_env_command => {
+            let mut keys: Vec<String> = Vec::new();
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::inherit_list => {
+                        for key in inner.into_inner() {
+                            if key.as_rule() == Rule::env_key {
+                                keys.push(key.as_str().trim().to_string());
+                            }
+                        }
+                    }
+                    Rule::env_key => keys.push(inner.as_str().trim().to_string()),
+                    _ => {}
+                }
+            }
+            StepKind::InheritEnv { keys }
         }
         Rule::symlink_command => {
             let mut args = parse_args(pair)?;

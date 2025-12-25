@@ -116,6 +116,9 @@ fn has_invalid_prefixed_literal(s: &str) -> bool {
 
 fn arb_step_kind() -> impl Strategy<Value = StepKind> {
     prop_oneof![
+        prop::collection::vec("[A-Z_][A-Z0-9_]*", 1..3).prop_map(|keys| StepKind::InheritEnv {
+            keys: keys.into_iter().map(|k| k.to_string()).collect(),
+        }),
         safe_string().prop_map(|s| StepKind::Workdir(s.into())),
         prop_oneof![
             Just(WorkspaceTarget::Snapshot),
@@ -167,7 +170,10 @@ fn arb_step() -> impl Strategy<Value = Step> {
             scope_enter: 0,
             scope_exit: 0,
         })
-        .prop_filter("Avoids ambiguous inputs", |_step| true)
+        .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
+            StepKind::InheritEnv { .. } => step.guards.is_empty(),
+            _ => true,
+        })
 }
 
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
