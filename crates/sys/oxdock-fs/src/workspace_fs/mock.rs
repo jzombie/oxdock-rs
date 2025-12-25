@@ -357,7 +357,3 @@ impl WorkspaceFs for MockFs {
         bail!("git copy unsupported")
     }
 }
-
-// TODO: Remove
-/// Backward compatible alias while downstream code migrates.
-pub type MockWorkspaceFs = MockFs;
