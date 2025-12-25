@@ -46,7 +46,7 @@
     #    Capture stdout/stderr for markdown via snippet pipe
     WITH_IO [stdin, stdout=pipe:snippet, stderr=pipe:snippet] {
         WORKDIR /ws/target/debug
-        [platform:unix] RUN ./oxbook-snippet
-        [platform:windows] RUN oxbook-snippet.exe
+        [unix] RUN ./oxbook-snippet
+        [windows] RUN oxbook-snippet.exe
     }
 }

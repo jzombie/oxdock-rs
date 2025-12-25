@@ -824,7 +824,6 @@ fn parse_guard_term(pair: Pair<Rule>) -> Result<Guard> {
         match inner.as_rule() {
             Rule::invert => invert = true,
             Rule::env_guard => guard = Some(parse_env_guard(inner, invert)?),
-            Rule::platform_guard => guard = Some(parse_platform_guard(inner, invert)?),
             Rule::bare_platform => guard = Some(parse_bare_platform(inner, invert)?),
             _ => {}
         }
@@ -887,18 +886,6 @@ fn parse_env_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
     } else {
         Ok(Guard::EnvExists { key, invert })
     }
-}
-
-fn parse_platform_guard(pair: Pair<Rule>, invert: bool) -> Result<Guard> {
-    // New platform syntax: `platform:tag`. We ignore legacy ==/!= comparisons.
-    let mut tag = "";
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::platform_tag {
-            tag = inner.as_str();
-            break;
-        }
-    }
-    parse_platform_tag(tag, invert)
 }
 
 fn parse_bare_platform(pair: Pair<Rule>, invert: bool) -> Result<Guard> {

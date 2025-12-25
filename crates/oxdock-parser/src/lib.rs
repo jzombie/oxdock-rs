@@ -341,14 +341,14 @@ mod tests {
         cases.push((
             indoc! {r#"
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             "#}
             .trim()
             .to_string(),
             quote! {
                 [!env:SKIP]
-                [platform:windows] RUN echo win
+                [windows] RUN echo win
                 [env:MODE==beta, linux] RUN echo combo
             },
         ));
