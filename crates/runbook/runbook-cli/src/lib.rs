@@ -59,6 +59,8 @@ struct OutputBlock {
     combined_hash: Option<String>,
     stdout: String,
     stderr: String,
+    stdout_newlines: Option<usize>,
+    stderr_newlines: Option<usize>,
 }
 const STDERR_MARKER: &str = "<!-- runbook-output:stderr -->";
 
@@ -123,6 +125,45 @@ impl RunControl {
     pub(crate) fn token(&self) -> &CancellationToken {
         &self.token
     }
+}
+
+fn mark_consumed(consumed: &mut [bool], start: usize, end: usize) {
+    if consumed.is_empty() {
+        return;
+    }
+    let end = end.min(consumed.len());
+    for idx in start.min(end)..end {
+        consumed[idx] = true;
+    }
+}
+
+fn take_detached_output_block(
+    lines: &[&str],
+    search_start: usize,
+    code_hash: &str,
+    consumed: &mut [bool],
+) -> Option<OutputBlock> {
+    let short = short_hash(code_hash);
+    let mut idx = search_start.min(lines.len());
+    while idx < lines.len() {
+        if consumed.get(idx).copied().unwrap_or(false) {
+            idx += 1;
+            continue;
+        }
+        if let Some(block) = parse_output_block(lines, idx) {
+            let matches = block.code_hash.as_deref().map_or(false, |stored| {
+                stored == code_hash || stored == short
+            });
+            if matches {
+                mark_consumed(consumed, block.start_index, block.end_index);
+                return Some(block);
+            }
+            idx = block.end_index;
+        } else {
+            idx += 1;
+        }
+    }
+    None
 }
 
 pub(crate) struct RunGuard<'a> {
@@ -985,6 +1026,7 @@ fn render_shell_outputs(
     output_observer: Option<Arc<dyn ExecutionOutputObserver>>,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
+    let mut consumed_lines = vec![false; lines.len()];
     use comrak::{Arena, nodes::NodeValue, parse_document};
 
     let arena = Arena::new();
@@ -1033,14 +1075,18 @@ fn render_shell_outputs(
 
         // Copy lines up to the fence
         for ln in cursor..start_clamped {
-            out_lines.push(lines[ln].to_string());
+            if !consumed_lines.get(ln).copied().unwrap_or(false) {
+                out_lines.push(lines[ln].to_string());
+            }
         }
 
         // Copy the original fence lines (clamped)
         let fence_end = end.min(lines.len().saturating_sub(1));
         if fence_end >= start_clamped {
             for ln in start_clamped..=fence_end {
-                out_lines.push(lines[ln].to_string());
+                if !consumed_lines.get(ln).copied().unwrap_or(false) {
+                    out_lines.push(lines[ln].to_string());
+                }
             }
         }
 
@@ -1051,6 +1097,10 @@ fn render_shell_outputs(
         } else {
             None
         };
+        if let Some(block) = &existing {
+            mark_consumed(&mut consumed_lines, block.start_index, block.end_index);
+        }
+        let adjacent_end = existing.as_ref().map(|block| block.end_index);
 
         let block_start_line = start + 1;
         let block_end_line = end + 1;
@@ -1060,9 +1110,19 @@ fn render_shell_outputs(
 
         if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
             let code_hash = code_hash(&script, &spec);
-            let mut should_run = match &existing {
+            let code_hash_short = short_hash(&code_hash);
+            let mut detached: Option<OutputBlock> = None;
+            if existing.is_none() {
+                detached = take_detached_output_block(
+                    &lines,
+                    fence_end + 1,
+                    &code_hash,
+                    &mut consumed_lines,
+                );
+            }
+            let block_for_decision = existing.as_ref().or(detached.as_ref());
+            let mut should_run = match block_for_decision {
                 Some(block) => {
-                    let code_hash_short = short_hash(&code_hash);
                     let matches_code = block.code_hash.as_deref() == Some(&code_hash)
                         || block.code_hash.as_deref() == Some(&code_hash_short);
                     if only_missing_outputs {
@@ -1100,7 +1160,7 @@ fn render_shell_outputs(
                 if cancel_token.map_or(false, |token| token.is_cancelled()) {
                     let output_block = format_output_block(&code_hash, "", "execution cancelled");
                     out_lines.extend(output_block);
-                    cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                    cursor = adjacent_end.unwrap_or(fence_end + 1);
                     if let Some(cb) = on_block_run.as_mut() {
                         cb(BlockExecution {
                             start_line: block_start_line,
@@ -1214,7 +1274,7 @@ fn render_shell_outputs(
                             format_output_block(&code_hash, &run_output.stdout, &run_output.stderr);
                         out_lines.extend(output_block);
                         // advance cursor past any existing output if present
-                        cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                        cursor = adjacent_end.unwrap_or(fence_end + 1);
                         block_success = true;
                         if let Some(cb) = on_block_run.as_mut() {
                             cb(BlockExecution {
@@ -1267,7 +1327,7 @@ fn render_shell_outputs(
                         let output_block =
                             format_output_block(&code_hash, &stdout_output, &stderr_output);
                         out_lines.extend(output_block);
-                        cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                        cursor = adjacent_end.unwrap_or(fence_end + 1);
                         if let Some(cb) = on_block_run.as_mut() {
                             cb(BlockExecution {
                                 start_line: block_start_line,
@@ -1296,10 +1356,17 @@ fn render_shell_outputs(
                         .iter()
                         .map(|l| (*l).to_string()),
                 );
-                let prev_buf = block.stdout.clone();
+                let prev_buf = restore_with_trailing_newlines(&block.stdout, block.stdout_newlines);
                 let cursor_reader = Cursor::new(prev_buf.into_bytes());
                 prev_reader = Some(Arc::new(Mutex::new(cursor_reader)));
                 cursor = block.end_index;
+            } else if let Some(block) = detached {
+                let output_block = format_output_block(&code_hash, &block.stdout, &block.stderr);
+                out_lines.extend(output_block);
+                let prev_buf = restore_with_trailing_newlines(&block.stdout, block.stdout_newlines);
+                let cursor_reader = Cursor::new(prev_buf.into_bytes());
+                prev_reader = Some(Arc::new(Mutex::new(cursor_reader)));
+                cursor = fence_end + 1;
             } else {
                 // No existing block and not running: leave cursor after fence
                 cursor = fence_end + 1;
@@ -1336,13 +1403,15 @@ fn render_shell_outputs(
                     });
                 }
             }
-            cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+            cursor = adjacent_end.unwrap_or(fence_end + 1);
         }
     }
 
     // Append remaining lines
     for ln in cursor..lines.len() {
-        out_lines.push(lines[ln].to_string());
+        if !consumed_lines.get(ln).copied().unwrap_or(false) {
+            out_lines.push(lines[ln].to_string());
+        }
     }
 
     let mut rendered = out_lines.join("\n");
@@ -1410,9 +1479,18 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     if idx >= lines.len() || !lines[idx].trim_start().starts_with("```") {
         return None;
     }
-    parse_inline_meta(lines[idx], &mut code_hash, &mut combined_hash);
+    let inline_meta = parse_inline_meta(lines[idx]);
+    if code_hash.is_none() {
+        code_hash = inline_meta.code_hash;
+    }
+    if combined_hash.is_none() {
+        combined_hash = inline_meta.combined_hash;
+    }
+    let mut stdout_newlines = inline_meta.newline_count;
 
+    let is_text_output = inline_meta.language.as_deref() == Some("text");
     if !has_begin_marker
+        && !is_text_output
         && code_hash.is_none()
         && combined_hash.is_none()
         && stdout_hash.is_none()
@@ -1424,6 +1502,7 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     let (stdout, mut idx) = parse_fenced_block(lines, idx)?;
     let mut stderr = String::new();
     let mut end_index = idx;
+    let mut stderr_newlines = None;
 
     // Look for an optional stderr block. In the legacy format this was
     // prefixed with a comment marker; the compact format omits the marker.
@@ -1437,18 +1516,28 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
         while stderr_start < lines.len() && lines[stderr_start].trim().is_empty() {
             stderr_start += 1;
         }
-        if let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, stderr_start) {
-            stderr = parsed_stderr;
-            end_index = next_idx;
-            idx = next_idx;
+        if stderr_start < lines.len()
+            && let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, stderr_start)
+        {
+            let stderr_meta = parse_inline_meta(lines[stderr_start]);
+            if stderr_meta.language.as_deref() == Some("text") {
+                stderr_newlines = stderr_meta.newline_count;
+                stderr = parsed_stderr;
+                end_index = next_idx;
+                idx = next_idx;
+            }
         }
     } else if peek_idx < lines.len()
         && lines[peek_idx].trim_start().starts_with("```")
         && let Some((parsed_stderr, next_idx)) = parse_fenced_block(lines, peek_idx)
     {
-        stderr = parsed_stderr;
-        end_index = next_idx;
-        idx = next_idx;
+        let stderr_meta = parse_inline_meta(lines[peek_idx]);
+        if stderr_meta.language.as_deref() == Some("text") && stderr_meta.saw_runbook {
+            stderr_newlines = stderr_meta.newline_count;
+            stderr = parsed_stderr;
+            end_index = next_idx;
+            idx = next_idx;
+        }
     }
 
     if has_begin_marker {
@@ -1471,6 +1560,8 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
         combined_hash,
         stdout,
         stderr,
+        stdout_newlines,
+        stderr_newlines,
     })
 }
 
@@ -1520,35 +1611,45 @@ fn parse_output_meta(
     }
 }
 
-fn parse_inline_meta(
-    line: &str,
-    code_hash: &mut Option<String>,
-    combined_hash: &mut Option<String>,
-) -> bool {
+#[derive(Default)]
+struct InlineFenceMeta {
+    language: Option<String>,
+    code_hash: Option<String>,
+    combined_hash: Option<String>,
+    newline_count: Option<usize>,
+    saw_runbook: bool,
+}
+
+fn parse_inline_meta(line: &str) -> InlineFenceMeta {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
-        return false;
+        return InlineFenceMeta::default();
     }
     let mut tokens = trimmed.trim_start_matches('`').split_whitespace();
-    // Skip the fence language token if present.
-    let _ = tokens.next();
-    let mut saw_runbook = false;
+    let mut meta = InlineFenceMeta::default();
+    meta.language = tokens.next().map(|tok| tok.to_string());
     for token in tokens {
         if token == "runbook" {
-            saw_runbook = true;
+            meta.saw_runbook = true;
             continue;
         }
         if let Some(value) = token.strip_prefix("code=") {
-            code_hash.get_or_insert_with(|| value.to_string());
+            meta.code_hash = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("hash=") {
-            combined_hash.get_or_insert_with(|| value.to_string());
+            meta.combined_hash = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("nl=") {
+            if let Ok(parsed) = value.parse::<usize>() {
+                meta.newline_count = Some(parsed);
+            }
         }
     }
-    saw_runbook
+    meta
 }
 
 fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<String> {
     let mut lines = Vec::new();
+    let stdout_newlines = count_trailing_newlines(stdout);
+    let stderr_newlines = count_trailing_newlines(stderr);
     let stdout_norm = normalize_output(stdout);
     let stderr_norm = normalize_output(stderr);
     let combined_hash = combined_output_hash(&stdout_norm, &stderr_norm);
@@ -1556,7 +1657,7 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
     let combined_hash_short = short_hash(&combined_hash);
     // First fenced block: stdout (may be empty). Keep it minimal for humans.
     lines.push(format!(
-        "```text runbook code={code_hash_short} hash={combined_hash_short}"
+        "```text runbook code={code_hash_short} hash={combined_hash_short} nl={stdout_newlines}"
     ));
     if !stdout_norm.is_empty() {
         for line in stdout_norm.lines() {
@@ -1570,7 +1671,7 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
     if !stderr_norm.is_empty() {
         lines.push(String::new());
         lines.push(format!(
-            "```text runbook code={code_hash_short} hash={combined_hash_short}"
+            "```text runbook code={code_hash_short} hash={combined_hash_short} nl={stderr_newlines}"
         ));
         let mut s_lines = stderr_norm.lines();
         if let Some(first) = s_lines.next() {
@@ -1607,6 +1708,27 @@ fn short_hash(full_hex: &str) -> String {
 
 fn normalize_output(output: &str) -> String {
     output.trim_end_matches('\n').to_string()
+}
+
+fn count_trailing_newlines(output: &str) -> usize {
+    output
+        .chars()
+        .rev()
+        .take_while(|ch| *ch == '\n')
+        .count()
+}
+
+fn restore_with_trailing_newlines(value: &str, newline_count: Option<usize>) -> String {
+    let extra = newline_count.unwrap_or_else(|| if value.is_empty() { 0 } else { 1 });
+    if extra == 0 {
+        return value.to_string();
+    }
+    let mut restored = String::with_capacity(value.len() + extra);
+    restored.push_str(value);
+    for _ in 0..extra {
+        restored.push('\n');
+    }
+    restored
 }
 
 fn parse_fence_info(info: &str) -> FenceInfo {
@@ -2223,6 +2345,17 @@ mod tests {
     use anyhow::{Context, Result};
     use indoc::indoc;
 
+    const BASH_RUNNER: &str = r#"
+INHERIT_ENV [
+    RUNBOOK_SNIPPET_PATH,
+    RUNBOOK_SNIPPET_DIR
+]
+
+[env:RUNBOOK_SNIPPET_PATH]
+WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
+
+"#;
+
     fn run_probe_runner(script: &str) -> Result<(GuardedPath, Option<String>, Option<String>)> {
         let temp = GuardedPath::tempdir().context("probe workspace tempdir")?;
         let workspace = temp.as_guarded_path().clone();
@@ -2246,7 +2379,18 @@ mod tests {
         };
 
         run_runner(
-            &resolver, &workspace, &workspace, &mut cache, &spec, "", None, None, None, None, None,
+            &resolver,
+            &workspace,
+            &workspace,
+            &mut cache,
+            &spec,
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .context("execute probe runner")?;
 
@@ -2330,6 +2474,304 @@ mod tests {
             parsed_path.as_path(),
             expected_path.as_path(),
             "snippet path should resolve to generated snippet file"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inserted_block_consumes_prior_stdout() -> Result<()> {
+        let workspace_dir = GuardedPath::tempdir().context("workspace tempdir")?;
+        let workspace = workspace_dir.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("workspace resolver")?;
+
+        let runner_path = workspace.join("temp.runner.bash.oxfile")?;
+        resolver
+            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .context("write bash runner")?;
+
+        let watched = workspace.join("doc.md")?;
+        let initial_doc = indoc! {
+            r#"
+            ```bash runbook
+            printf 'alpha\n'
+            ```
+            "#
+        };
+        resolver
+            .write_file(&watched, initial_doc.as_bytes())
+            .context("write initial doc")?;
+
+        let mut cache = RunnerCache::default();
+
+        let rendered = render_shell_outputs(
+            initial_doc,
+            &resolver,
+            &workspace,
+            &workspace,
+            &mut cache,
+            true,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )?;
+        resolver
+            .write_file(&watched, rendered.as_bytes())
+            .context("persist initial render")?;
+        let mut last_contents = rendered.clone();
+
+        let insert_block = indoc! {
+            r#"
+            ```bash runbook
+            cat
+            ```
+            "#
+        }
+        .trim();
+        let marker = "```text runbook";
+        let marker_idx = rendered
+            .find(marker)
+            .context("initial run should emit output block")?;
+        let mut modified = String::new();
+        modified.push_str(&rendered[..marker_idx]);
+        if !modified.ends_with('\n') {
+            modified.push('\n');
+        }
+        modified.push_str(insert_block);
+        modified.push_str("\n\n");
+        modified.push_str(&rendered[marker_idx..]);
+        resolver
+            .write_file(&watched, modified.as_bytes())
+            .context("insert cat block")?;
+
+        let target_line = modified
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.trim() == "cat")
+            .map(|(idx, _)| idx + 1)
+            .expect("cat line present");
+
+        let emit = Arc::new(AtomicBool::new(false));
+        let execution = run_block_in_place(
+            &resolver,
+            &workspace,
+            &watched,
+            &workspace,
+            &mut cache,
+            &mut last_contents,
+            target_line,
+            emit,
+            None,
+            None,
+        )?
+        .expect("cat block should run");
+
+        assert!(
+            execution.success,
+            "cat block should succeed: {}",
+            execution.stderr
+        );
+        assert_eq!(execution.stdout, "alpha\n", "stdin should include previous stdout");
+        assert!(
+            last_contents.contains("```bash runbook\ncat\n```"),
+            "cat block should remain in document"
+        );
+        let cat_section = last_contents
+            .split("```bash runbook\ncat\n```")
+            .nth(1)
+            .expect("cat block should have trailing output");
+        assert!(
+            cat_section.contains("alpha"),
+            "cat output should record piped stdout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inserted_block_handles_line_buffered_stdin() -> Result<()> {
+        let workspace_dir = GuardedPath::tempdir().context("workspace tempdir")?;
+        let workspace = workspace_dir.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("workspace resolver")?;
+
+        let runner_path = workspace.join("temp.runner.bash.oxfile")?;
+        resolver
+            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .context("write bash runner")?;
+
+        let watched = workspace.join("doc.md")?;
+        let initial_doc = indoc! {
+            r#"
+            ```bash runbook
+            printf 'bravo\n'
+            ```
+            "#
+        };
+        resolver
+            .write_file(&watched, initial_doc.as_bytes())
+            .context("write initial doc")?;
+
+        let mut cache = RunnerCache::default();
+        let rendered = render_shell_outputs(
+            initial_doc,
+            &resolver,
+            &workspace,
+            &workspace,
+            &mut cache,
+            true,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )?;
+        resolver
+            .write_file(&watched, rendered.as_bytes())
+            .context("persist initial render")?;
+        let mut last_contents = rendered.clone();
+
+        let insert_block = indoc! {
+            r#"
+            ```bash runbook
+            python3 -c 'print(input())'
+            ```
+            "#
+        }
+        .trim();
+        let marker = "```text runbook";
+        let marker_idx = rendered
+            .find(marker)
+            .context("initial run should emit output block")?;
+        let mut modified = String::new();
+        modified.push_str(&rendered[..marker_idx]);
+        if !modified.ends_with('\n') {
+            modified.push('\n');
+        }
+        modified.push_str(insert_block);
+        modified.push_str("\n\n");
+        modified.push_str(&rendered[marker_idx..]);
+        resolver
+            .write_file(&watched, modified.as_bytes())
+            .context("insert python block")?;
+
+        let target_line = modified
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("python3 -c"))
+            .map(|(idx, _)| idx + 1)
+            .expect("python block present");
+
+        let emit = Arc::new(AtomicBool::new(false));
+        let execution = run_block_in_place(
+            &resolver,
+            &workspace,
+            &watched,
+            &workspace,
+            &mut cache,
+            &mut last_contents,
+            target_line,
+            emit,
+            None,
+            None,
+        )?
+        .expect("python block should run");
+
+        assert!(
+            execution.success,
+            "python block should succeed: {}",
+            execution.stderr
+        );
+        assert_eq!(execution.stdout, "bravo\n", "stdin should include newline for input()");
+        assert!(
+            last_contents.contains("python3 -c 'print(input())'"),
+            "python block should remain in document"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn appended_block_after_output_consumes_prior_stdout() -> Result<()> {
+        let workspace_dir = GuardedPath::tempdir().context("workspace tempdir")?;
+        let workspace = workspace_dir.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(workspace.clone(), workspace.clone())
+            .context("workspace resolver")?;
+
+        let runner_path = workspace.join("temp.runner.bash.oxfile")?;
+        resolver
+            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .context("write bash runner")?;
+
+        let watched = workspace.join("doc.md")?;
+        let initial_doc = indoc! {
+            r#"
+            ```bash runbook
+            echo "Hello world"
+            ```
+            "#
+        };
+        resolver
+            .write_file(&watched, initial_doc.as_bytes())
+            .context("write initial doc")?;
+
+        let mut cache = RunnerCache::default();
+        let rendered = render_shell_outputs(
+            initial_doc,
+            &resolver,
+            &workspace,
+            &workspace,
+            &mut cache,
+            true,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )?;
+        resolver
+            .write_file(&watched, rendered.as_bytes())
+            .context("persist initial render")?;
+        let mut last_contents = rendered.clone();
+
+        let appended = format!(
+            "{rendered}\n\n```bash runbook\ncat\n```\n"
+        );
+        resolver
+            .write_file(&watched, appended.as_bytes())
+            .context("append cat block")?;
+
+        let target_line = appended
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.trim() == "cat")
+            .map(|(idx, _)| idx + 1)
+            .expect("cat line present");
+
+        let emit = Arc::new(AtomicBool::new(false));
+        let execution = run_block_in_place(
+            &resolver,
+            &workspace,
+            &watched,
+            &workspace,
+            &mut cache,
+            &mut last_contents,
+            target_line,
+            emit,
+            None,
+            None,
+        )?
+        .expect("cat block should run");
+
+        assert!(
+            execution.success,
+            "cat block should succeed: {}",
+            execution.stderr
+        );
+        assert_eq!(
+            execution.stdout,
+            "Hello world\n",
+            "stdin should include previous stdout even when block appended"
         );
         Ok(())
     }
