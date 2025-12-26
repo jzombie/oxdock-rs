@@ -1,19 +1,25 @@
 use anyhow::{Context, Result, bail};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
-use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
+use oxdock_core::{
+    ExecIo, run_steps_with_context_result_with_io,
+    run_steps_with_context_result_with_io_and_process,
+};
 use oxdock_fs::{
     GuardedPath, GuardedTempDir, PathResolver, discover_workspace_root, to_forward_slashes,
 };
 use oxdock_parser::parse_script;
-use oxdock_process::{CommandOutput, SharedInput, SharedOutput};
+use oxdock_process::{
+    CancellationToken, CommandCancelled, CommandOutput, InterruptibleProcessManager, SharedInput,
+    SharedOutput,
+};
 
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Cursor, IsTerminal, Stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 const STABLE_READ_RETRIES: usize = 5;
@@ -79,6 +85,54 @@ struct RunnerCache {
     envs: HashMap<String, RunnerEnv>,
 }
 
+#[derive(Default)]
+struct RunControl {
+    token: CancellationToken,
+    active: AtomicBool,
+}
+
+impl RunControl {
+    fn new() -> Self {
+        Self {
+            token: CancellationToken::new(),
+            active: AtomicBool::new(false),
+        }
+    }
+
+    fn begin(&self) -> RunGuard<'_> {
+        self.token.reset();
+        self.active.store(true, Ordering::SeqCst);
+        RunGuard { control: self }
+    }
+
+    fn finish(&self) {
+        self.active.store(false, Ordering::SeqCst);
+    }
+
+    fn request_cancel(&self) -> bool {
+        if self.active.load(Ordering::SeqCst) {
+            self.token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+}
+
+struct RunGuard<'a> {
+    control: &'a RunControl,
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        self.control.finish();
+    }
+}
+
 pub fn run() -> Result<()> {
     let target = parse_target_path()?;
     let workspace_root = discover_workspace_root().context("resolve workspace root")?;
@@ -106,26 +160,31 @@ pub fn run() -> Result<()> {
     let cwd = watched.parent().unwrap_or_else(|| workspace_root.clone());
     let mut cache = RunnerCache::default();
     let emit_block_events = Arc::new(AtomicBool::new(emit_block_events_enabled()));
+    let run_control = Arc::new(RunControl::new());
 
     let mut command_rx = None;
     if !std::io::stdin().is_terminal() {
         let (tx, rx) = mpsc::channel();
-        spawn_command_listener(tx, emit_block_events.clone());
+        spawn_command_listener(tx, emit_block_events.clone(), run_control.clone());
         command_rx = Some(rx);
     }
 
     let initial_contents = read_stable_contents(&resolver, &watched)?;
-    let rendered = render_shell_outputs(
-        &initial_contents,
-        &resolver,
-        &workspace_root,
-        &cwd,
-        &mut cache,
-        true,
-        None,
-        None,
-        emit_block_events.load(Ordering::Relaxed),
-    )?;
+    let rendered = {
+        let _guard = run_control.begin();
+        render_shell_outputs(
+            &initial_contents,
+            &resolver,
+            &workspace_root,
+            &cwd,
+            &mut cache,
+            true,
+            None,
+            None,
+            emit_block_events.load(Ordering::Relaxed),
+            Some(run_control.token()),
+        )?
+    };
     if rendered != initial_contents {
         resolver
             .write_file(&watched, rendered.as_bytes())
@@ -142,6 +201,7 @@ pub fn run() -> Result<()> {
         &mut last_contents,
         command_rx,
         emit_block_events,
+        run_control,
     )?;
     Ok(())
 }
@@ -183,6 +243,7 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
         &mut last_contents,
         target_line,
         emit_block_events,
+        None,
     )?;
 
     match execution {
@@ -300,10 +361,7 @@ fn run_block_once(
     {
         Some(fence) => fence,
         None => {
-            println!(
-                "No code block covering line {}",
-                target_line
-            );
+            println!("No code block covering line {}", target_line);
             return Ok(false);
         }
     };
@@ -331,6 +389,7 @@ fn run_block_once(
         cache,
         &spec,
         &fence.content,
+        None,
         None,
         None,
         None,
@@ -398,6 +457,7 @@ fn run_watch_loop(
     last_contents: &mut String,
     command_rx: Option<mpsc::Receiver<ServerCommand>>,
     emit_block_events: Arc<AtomicBool>,
+    run_control: Arc<RunControl>,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
@@ -423,6 +483,7 @@ fn run_watch_loop(
             cache,
             last_contents,
             &emit_block_events,
+            &run_control,
         )?;
 
         let mut should_process = false;
@@ -456,6 +517,7 @@ fn run_watch_loop(
                 cache,
                 last_contents,
                 &emit_block_events,
+                &run_control,
             )?;
             match rx.recv_timeout(WATCH_DEBOUNCE_WINDOW) {
                 Ok(Ok(event)) => {
@@ -477,17 +539,21 @@ fn run_watch_loop(
             && new_contents != *last_contents
         {
             report_fence_changes(watched, last_contents, &new_contents);
-            let rendered = render_shell_outputs(
-                &new_contents,
-                resolver,
-                workspace_root,
-                source_dir,
-                cache,
-                false,
-                None,
-                None,
-                emit_block_events.load(Ordering::Relaxed),
-            )?;
+            let rendered = {
+                let _guard = run_control.begin();
+                render_shell_outputs(
+                    &new_contents,
+                    resolver,
+                    workspace_root,
+                    source_dir,
+                    cache,
+                    false,
+                    None,
+                    None,
+                    emit_block_events.load(Ordering::Relaxed),
+                    Some(run_control.token()),
+                )?
+            };
             if rendered != new_contents {
                 resolver
                     .write_file(watched, rendered.as_bytes())
@@ -507,6 +573,7 @@ fn drain_server_commands(
     cache: &mut RunnerCache,
     last_contents: &mut String,
     emit_block_events: &Arc<AtomicBool>,
+    run_control: &Arc<RunControl>,
 ) -> Result<()> {
     if let Some(rx) = command_rx {
         while let Ok(cmd) = rx.try_recv() {
@@ -519,6 +586,7 @@ fn drain_server_commands(
                 cache,
                 last_contents,
                 emit_block_events,
+                run_control,
             )?;
         }
     }
@@ -534,9 +602,11 @@ fn handle_server_command(
     cache: &mut RunnerCache,
     last_contents: &mut String,
     emit_block_events: &Arc<AtomicBool>,
+    run_control: &Arc<RunControl>,
 ) -> Result<()> {
     match command {
         ServerCommand::RunBlock { line } => {
+            let _guard = run_control.begin();
             let target_line = line.max(1);
             println!("{WORKER_EVENT_PREFIX} START {target_line}");
             io::stdout().flush().ok();
@@ -550,6 +620,7 @@ fn handle_server_command(
                 last_contents,
                 target_line,
                 emit_block_events.clone(),
+                Some(run_control.token()),
             )?;
 
             if result.is_none() {
@@ -576,6 +647,7 @@ fn run_block_in_place(
     last_contents: &mut String,
     target_line: usize,
     emit_block_events: Arc<AtomicBool>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<BlockExecution>> {
     let contents = read_stable_contents(resolver, watched)?;
     let fences = parse_fences(&contents);
@@ -610,6 +682,7 @@ fn run_block_in_place(
             Some(&forced_lines),
             Some(&mut callback),
             emit_block_events.load(Ordering::Relaxed),
+            cancel_token,
         )?;
 
         if rendered != contents {
@@ -635,7 +708,11 @@ fn run_block_in_place(
     Ok(matched)
 }
 
-fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>, emit_block_events: Arc<AtomicBool>) {
+fn spawn_command_listener(
+    tx: mpsc::Sender<ServerCommand>,
+    emit_block_events: Arc<AtomicBool>,
+    run_control: Arc<RunControl>,
+) {
     std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut reader = io::BufReader::new(stdin.lock());
@@ -661,6 +738,12 @@ fn spawn_command_listener(tx: mpsc::Sender<ServerCommand>, emit_block_events: Ar
                         emit_block_events.store(true, Ordering::Relaxed);
                     } else if trimmed.eq_ignore_ascii_case("EVENTS OFF") {
                         emit_block_events.store(false, Ordering::Relaxed);
+                    } else if trimmed.eq_ignore_ascii_case("STOP") {
+                        if run_control.request_cancel() {
+                            println!("Stop requested");
+                        } else {
+                            println!("Stop requested but no block running");
+                        }
                     } else {
                         eprintln!("unknown command: {trimmed}");
                     }
@@ -885,6 +968,7 @@ fn render_shell_outputs(
     forced_lines: Option<&HashSet<usize>>,
     on_block_run: Option<&mut dyn FnMut(BlockExecution)>,
     emit_block_events: bool,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     use comrak::{Arena, nodes::NodeValue, parse_document};
@@ -979,7 +1063,6 @@ fn render_shell_outputs(
                         {
                             meta_hash == expected_combined_hash
                                 || meta_hash == expected_combined_short
-
                         } else {
                             let expected_stdout_hash = sha256_hex(&stdout_norm);
                             let expected_stderr_hash = sha256_hex(&stderr_norm);
@@ -1000,6 +1083,21 @@ fn render_shell_outputs(
             }
 
             if should_run {
+                if cancel_token.map_or(false, |token| token.is_cancelled()) {
+                    let output_block = format_output_block(&code_hash, "", "execution cancelled");
+                    out_lines.extend(output_block);
+                    cursor = existing.map(|b| b.end_index).unwrap_or(fence_end + 1);
+                    if let Some(cb) = on_block_run.as_mut() {
+                        cb(BlockExecution {
+                            start_line: block_start_line,
+                            end_line: block_end_line,
+                            success: false,
+                            stdout: String::new(),
+                            stderr: String::from("execution cancelled"),
+                        });
+                    }
+                    break;
+                }
                 if emit_block_events {
                     println!("{WORKER_EVENT_PREFIX} START {block_start_line}");
                     io::stdout().flush().ok();
@@ -1081,6 +1179,7 @@ fn render_shell_outputs(
                     Some(stderr_writer.clone()),
                     Some(capture_stdout.clone()),
                     Some(capture_stderr.clone()),
+                    cancel_token,
                 );
 
                 let mut block_success = false;
@@ -1104,15 +1203,7 @@ fn render_shell_outputs(
                         }
                     }
                     Err(err) => {
-                        let mut chain = Vec::new();
-                        for (idx, cause) in err.chain().enumerate() {
-                            if idx == 0 {
-                                chain.push(format!("error: {}", cause));
-                            } else {
-                                chain.push(format!("caused by: {}", cause));
-                            }
-                        }
-                        let err_msg = chain.join("\n");
+                        let cancelled_block = err.downcast_ref::<CommandCancelled>().is_some();
                         let stdout_output = {
                             let data = capture_stdout.lock().unwrap();
                             String::from_utf8_lossy(&data).to_string()
@@ -1121,13 +1212,33 @@ fn render_shell_outputs(
                             let data = capture_stderr.lock().unwrap();
                             String::from_utf8_lossy(&data).to_string()
                         };
-                        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-                            stderr_output.push('\n');
-                        }
-                        if !stderr_output.is_empty() {
-                            stderr_output.push_str(&err_msg);
+                        if cancelled_block {
+                            if !stderr_output.trim().is_empty() && !stderr_output.ends_with('\n') {
+                                stderr_output.push('\n');
+                            }
+                            if stderr_output.trim().is_empty() {
+                                stderr_output = String::from("execution cancelled");
+                            } else {
+                                stderr_output.push_str("execution cancelled");
+                            }
                         } else {
-                            stderr_output = err_msg.clone();
+                            let mut chain = Vec::new();
+                            for (idx, cause) in err.chain().enumerate() {
+                                if idx == 0 {
+                                    chain.push(format!("error: {}", cause));
+                                } else {
+                                    chain.push(format!("caused by: {}", cause));
+                                }
+                            }
+                            let err_msg = chain.join("\n");
+                            if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+                                stderr_output.push('\n');
+                            }
+                            if !stderr_output.is_empty() {
+                                stderr_output.push_str(&err_msg);
+                            } else {
+                                stderr_output = err_msg.clone();
+                            }
                         }
                         let output_block =
                             format_output_block(&code_hash, &stdout_output, &stderr_output);
@@ -1141,6 +1252,9 @@ fn render_shell_outputs(
                                 stdout: stdout_output.clone(),
                                 stderr: stderr_output.clone(),
                             });
+                        }
+                        if cancelled_block {
+                            break;
                         }
                     }
                 }
@@ -1782,6 +1896,7 @@ fn run_runner(
     stderr: Option<SharedOutput>,
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<RunnerOutput> {
     let env = match &spec.oxfile {
         Some(path) => {
@@ -1803,6 +1918,7 @@ fn run_runner(
                 stderr,
                 stdout_capture,
                 stderr_capture,
+                cancel_token,
             );
         }
     };
@@ -1816,6 +1932,7 @@ fn run_runner(
         stderr,
         stdout_capture,
         stderr_capture,
+        cancel_token,
     )
 }
 
@@ -1831,6 +1948,7 @@ fn run_in_default_env(
     stderr: Option<SharedOutput>,
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<RunnerOutput> {
     let env = RunnerEnv {
         root: workspace_root.clone(),
@@ -1848,6 +1966,7 @@ fn run_in_default_env(
         stderr,
         stdout_capture,
         stderr_capture,
+        cancel_token,
     )
 }
 
@@ -1862,6 +1981,7 @@ fn run_in_env(
     stderr: Option<SharedOutput>,
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<RunnerOutput> {
     run_in_env_with_resolver(
         workspace_resolver,
@@ -1873,6 +1993,7 @@ fn run_in_env(
         stderr,
         stdout_capture,
         stderr_capture,
+        cancel_token,
     )
 }
 
@@ -1887,6 +2008,7 @@ fn run_in_env_with_resolver(
     stderr: Option<SharedOutput>,
     stdout_capture: Option<Arc<Mutex<Vec<u8>>>>,
     stderr_capture: Option<Arc<Mutex<Vec<u8>>>>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<RunnerOutput> {
     if let Some(oxfile_path) = &spec.oxfile {
         let oxfile_content = workspace_resolver
@@ -1981,8 +2103,24 @@ fn run_in_env_with_resolver(
         io_cfg.insert_output_pipe_stdout(PIPE_SNIPPET, use_stdout.clone());
         io_cfg.insert_output_pipe_stderr(PIPE_SNIPPET, use_stderr.clone());
 
-        run_steps_with_context_result_with_io(&env.root, workspace_resolver.root(), &steps, io_cfg)
-            .with_context(|| format!("run {}", oxfile_path.display()))?;
+        if let Some(token) = cancel_token {
+            let process = InterruptibleProcessManager::new(token.clone());
+            run_steps_with_context_result_with_io_and_process(
+                &env.root,
+                workspace_resolver.root(),
+                &steps,
+                io_cfg,
+                process,
+            )
+        } else {
+            run_steps_with_context_result_with_io(
+                &env.root,
+                workspace_resolver.root(),
+                &steps,
+                io_cfg,
+            )
+        }
+        .with_context(|| format!("run {}", oxfile_path.display()))?;
 
         // Determine which capture buffer to read from: prefer explicit
         // capture buffers passed by the caller; otherwise use the internal

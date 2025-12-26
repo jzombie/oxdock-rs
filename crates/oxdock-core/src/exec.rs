@@ -445,40 +445,20 @@ pub fn run_steps_with_context_result_with_io(
 ) -> Result<GuardedPath> {
     match run_steps_inner(fs_root, build_context, steps, io) {
         Ok(final_cwd) => Ok(final_cwd),
-        Err(err) => {
-            // Compose a single error message with the top cause plus a compact fs snapshot.
-            let chain = err.chain().map(|e| e.to_string()).collect::<Vec<_>>();
-            let mut primary = chain
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "unknown error".into());
-            let rest = if chain.len() > 1 {
-                let first_cause = chain[1].clone();
-                primary = format!("{primary} ({first_cause})");
-                if chain.len() > 2 {
-                    let causes = chain
-                        .iter()
-                        .skip(2)
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n  ");
-                    format!("\ncauses:\n  {}", causes)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-            let fs = PathResolver::new(fs_root.as_path(), build_context.as_path())?;
-            let tree = describe_dir(&fs, fs_root, 2, 24);
-            let snapshot = format!(
-                "filesystem snapshot (root {}):\n{}",
-                fs_root.display(),
-                tree
-            );
-            let msg = format!("{}{}\n{}", primary, rest, snapshot);
-            Err(anyhow::anyhow!(msg))
-        }
+        Err(err) => Err(enrich_exec_error(err, fs_root, build_context)),
+    }
+}
+
+pub fn run_steps_with_context_result_with_io_and_process<P: ProcessManager>(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+    io: ExecIo,
+    process: P,
+) -> Result<GuardedPath> {
+    match run_steps_inner_with_process(fs_root, build_context, steps, io, process) {
+        Ok(final_cwd) => Ok(final_cwd),
+        Err(err) => Err(enrich_exec_error(err, fs_root, build_context)),
     }
 }
 
@@ -488,9 +468,63 @@ fn run_steps_inner(
     steps: &[Step],
     io: ExecIo,
 ) -> Result<GuardedPath> {
+    run_steps_inner_with_process(fs_root, build_context, steps, io, default_process_manager())
+}
+
+fn run_steps_inner_with_process<P: ProcessManager>(
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+    steps: &[Step],
+    io: ExecIo,
+    process: P,
+) -> Result<GuardedPath> {
     let mut resolver = PathResolver::new_guarded(fs_root.clone(), build_context.clone())?;
     resolver.set_workspace_root(build_context.clone());
-    run_steps_with_fs_with_io(Box::new(resolver), steps, io)
+    run_steps_with_manager(Box::new(resolver), steps, process, io)
+}
+
+fn enrich_exec_error(
+    err: anyhow::Error,
+    fs_root: &GuardedPath,
+    build_context: &GuardedPath,
+) -> anyhow::Error {
+    let chain = err.chain().map(|e| e.to_string()).collect::<Vec<_>>();
+    let mut primary = chain
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown error".into());
+    let rest = if chain.len() > 1 {
+        let first_cause = chain[1].clone();
+        primary = format!("{primary} ({first_cause})");
+        if chain.len() > 2 {
+            let causes = chain
+                .iter()
+                .skip(2)
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ");
+            format!("\ncauses:\n  {}", causes)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    let snapshot = match PathResolver::new(fs_root.as_path(), build_context.as_path()) {
+        Ok(fs) => {
+            let tree = describe_dir(&fs, fs_root, 2, 24);
+            format!(
+                "filesystem snapshot (root {}):\n{}",
+                fs_root.display(),
+                tree
+            )
+        }
+        Err(resolver_err) => {
+            format!("failed to capture filesystem snapshot: {}", resolver_err)
+        }
+    };
+    let msg = format!("{}{}\n{}", primary, rest, snapshot);
+    anyhow::anyhow!(msg)
 }
 
 pub fn run_steps_with_fs(

@@ -892,6 +892,7 @@ name = "oxdock-process"
 version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
+ "libc",
  "oxdock-fs",
  "oxdock-sys-test-utils",
 ]

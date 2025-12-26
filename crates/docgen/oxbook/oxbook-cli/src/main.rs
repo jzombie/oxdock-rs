@@ -5,27 +5,27 @@ use crossterm::{
         KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use oxbook_cli::WORKER_EVENT_PREFIX;
 use ratatui::{
+    Frame, Terminal,
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans, Text},
     widgets::{Block, Borders, Paragraph},
-    Frame, Terminal,
 };
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use oxbook_cli::WORKER_EVENT_PREFIX;
 
 const STATUS_ICON_READY: &str = "○";
 const STATUS_ICON_RUNNING: &str = "●";
@@ -54,9 +54,7 @@ fn main() -> Result<()> {
                 mode = LaunchMode::Tui
             }
             "--run-block" | "run-block" => {
-                let path = args
-                    .next()
-                    .context("expected path after --run-block")?;
+                let path = args.next().context("expected path after --run-block")?;
                 let line = args
                     .next()
                     .context("expected line number after --run-block")?
@@ -156,15 +154,11 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 let mut guard = logs.lock().unwrap();
                                 guard.push_back(LogRecord::new(
                                     LogSource::Stderr,
-                                    format!(
-                                        "failed to auto-run block at line {}: {}\n",
-                                        line, err
-                                    ),
+                                    format!("failed to auto-run block at line {}: {}\n", line, err),
                                 ));
                                 trim_logs(&mut guard, MAX_LOG_LINES);
-                                status = String::from(
-                                    "Auto-run failed; restart the server with 'r'",
-                                );
+                                status =
+                                    String::from("Auto-run failed; restart the server with 'r'");
                                 server_busy = false;
                                 if let Some(mut proc) = server.take() {
                                     let _ = proc.child.kill();
@@ -238,24 +232,58 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     CEvent::Mouse(mouse_event) => {
                         if let UiMode::Editor(editor) = &mut mode {
                             if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
-                                if let Some(line_idx) = editor
-                                    .hit_test_run_glyph(mouse_event.column, mouse_event.row)
+                                if let Some(line_idx) =
+                                    editor.hit_test_run_glyph(mouse_event.column, mouse_event.row)
                                 {
                                     let line_number = line_idx + 1;
                                     if let Some(server_proc) = server.as_mut() {
                                         if server_busy {
-                                            let mut guard = logs.lock().unwrap();
-                                            guard.push_back(LogRecord::new(
-                                                LogSource::Stdout,
-                                                format!(
-                                                    "server busy; wait for the current run before executing line {}\n",
-                                                    line_number
-                                                ),
-                                            ));
-                                            trim_logs(&mut guard, MAX_LOG_LINES);
-                                            status = String::from(
-                                                "Server busy; wait for current run to finish",
-                                            );
+                                            if Some(line_idx) == running_line {
+                                                match server_proc.send_stop_command() {
+                                                    Ok(()) => {
+                                                        let mut guard = logs.lock().unwrap();
+                                                        guard.push_back(LogRecord::new(
+                                                            LogSource::Stdout,
+                                                            format!(
+                                                                "stop requested for block at line {}\n",
+                                                                line_number
+                                                            ),
+                                                        ));
+                                                        trim_logs(&mut guard, MAX_LOG_LINES);
+                                                        status = format!(
+                                                            "Stop requested for block at line {}",
+                                                            line_number
+                                                        );
+                                                    }
+                                                    Err(err) => {
+                                                        let mut guard = logs.lock().unwrap();
+                                                        guard.push_back(LogRecord::new(
+                                                            LogSource::Stderr,
+                                                            format!(
+                                                                "failed to send stop command: {}\n",
+                                                                err
+                                                            ),
+                                                        ));
+                                                        trim_logs(&mut guard, MAX_LOG_LINES);
+                                                        status = String::from(
+                                                            "Stop request failed; check logs",
+                                                        );
+                                                    }
+                                                }
+                                            } else {
+                                                let mut guard = logs.lock().unwrap();
+                                                guard.push_back(LogRecord::new(
+                                                    LogSource::Stdout,
+                                                    format!(
+                                                        "server busy; wait for the current run before executing line {}\n",
+                                                        line_number
+                                                    ),
+                                                ));
+                                                trim_logs(&mut guard, MAX_LOG_LINES);
+                                                status = String::from(
+                                                    "Server busy; wait for current run to finish",
+                                                );
+                                            }
                                             continue;
                                         }
                                         if editor.is_dirty() {
@@ -305,7 +333,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             &mut pending_run_set,
                                             line_number,
                                         );
-                                        if let Err(err) = server_proc.send_run_command(line_number) {
+                                        if let Err(err) = server_proc.send_run_command(line_number)
+                                        {
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stderr,
@@ -324,17 +353,12 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stdout,
-                                                format!(
-                                                    "running block at line {}\n",
-                                                    line_number
-                                                ),
+                                                format!("running block at line {}\n", line_number),
                                             ));
                                             trim_logs(&mut guard, MAX_LOG_LINES);
                                             running_line = Some(line_idx);
-                                            status = format!(
-                                                "Running block at line {}...",
-                                                line_number
-                                            );
+                                            status =
+                                                format!("Running block at line {}...", line_number);
                                         }
                                     } else {
                                         let mut guard = logs.lock().unwrap();
@@ -394,21 +418,23 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                         }
                                     }
                                 }
-                                KeyCode::Char('e') => match EditorState::load(target_path.clone()) {
-                                    Ok(editor) => {
-                                        status = format!("Editing {}", editor.short_path());
-                                        mode = UiMode::Editor(editor);
+                                KeyCode::Char('e') => {
+                                    match EditorState::load(target_path.clone()) {
+                                        Ok(editor) => {
+                                            status = format!("Editing {}", editor.short_path());
+                                            mode = UiMode::Editor(editor);
+                                        }
+                                        Err(err) => {
+                                            let mut guard = logs.lock().unwrap();
+                                            guard.push_back(LogRecord::new(
+                                                LogSource::Stderr,
+                                                format!("editor load error: {err}\n"),
+                                            ));
+                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                            status = String::from("Editor failed");
+                                        }
                                     }
-                                    Err(err) => {
-                                        let mut guard = logs.lock().unwrap();
-                                        guard.push_back(LogRecord::new(
-                                            LogSource::Stderr,
-                                            format!("editor load error: {err}\n"),
-                                        ));
-                                        trim_logs(&mut guard, MAX_LOG_LINES);
-                                        status = String::from("Editor failed");
-                                    }
-                                },
+                                }
                                 _ => {}
                             },
                             UiMode::Editor(editor) => {
@@ -437,7 +463,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                             }
                         }
-                }
+                    }
                     _ => {}
                 }
             }
@@ -445,7 +471,11 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
     })();
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     result
 }
@@ -567,6 +597,18 @@ impl ServerProcess {
             ))
         }
     }
+
+    fn send_stop_command(&mut self) -> io::Result<()> {
+        if let Some(stdin) = &mut self.stdin {
+            writeln!(stdin, "STOP")?;
+            stdin.flush()
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "server stdin unavailable",
+            ))
+        }
+    }
 }
 
 impl EditorState {
@@ -615,7 +657,9 @@ impl EditorState {
     }
 
     fn disk_mtime(path: &Path) -> Option<SystemTime> {
-        fs::metadata(path).ok().and_then(|meta| meta.modified().ok())
+        fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
     }
 
     fn sync_with_disk(&mut self) -> Result<Option<String>> {
@@ -1107,7 +1151,6 @@ impl EditorState {
     }
 }
 
-
 struct HeaderView<'a> {
     text: &'a str,
 }
@@ -1184,11 +1227,9 @@ impl<'a> FramedView for EditorView<'a> {
 
         let viewport = inner.height as usize;
         self.editor.adjust_scroll(viewport);
-        let visible = self.editor.visible_lines_for_render(
-            viewport,
-            self.running_block,
-            self.can_run_blocks,
-        );
+        let visible =
+            self.editor
+                .visible_lines_for_render(viewport, self.running_block, self.can_run_blocks);
         let text = visible
             .lines
             .iter()
@@ -1308,10 +1349,7 @@ fn logs_to_text(entries: &VecDeque<LogRecord>, max_lines: usize) -> Text<'static
     let mut lines = Vec::new();
     for record in entries.iter().skip(start) {
         let mut spans = Vec::new();
-        spans.push(Span::styled(
-            record.source.label(),
-            record.source.style(),
-        ));
+        spans.push(Span::styled(record.source.label(), record.source.style()));
         spans.push(Span::raw(" "));
         let content = record.content.trim_end_matches(['\n', '\r']);
         spans.extend(parse_ansi_spans(content));
@@ -1372,7 +1410,13 @@ fn flush_span(buffer: &mut String, spans: &mut Vec<Span<'static>>, style: Style)
 fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
     let mut numbers: Vec<i32> = sequence
         .split(';')
-        .map(|part| if part.is_empty() { 0 } else { part.parse().unwrap_or(0) })
+        .map(|part| {
+            if part.is_empty() {
+                0
+            } else {
+                part.parse().unwrap_or(0)
+            }
+        })
         .collect();
     if numbers.is_empty() {
         numbers.push(0);
@@ -1427,7 +1471,11 @@ fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
                         5 => {
                             if let Some(idx) = iter.next() {
                                 let color = Color::Indexed(idx as u8);
-                                *style = if is_fg { style.fg(color) } else { style.bg(color) };
+                                *style = if is_fg {
+                                    style.fg(color)
+                                } else {
+                                    style.bg(color)
+                                };
                             }
                         }
                         2 => {
@@ -1435,7 +1483,11 @@ fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
                             let g = iter.next().unwrap_or(0) as u8;
                             let b = iter.next().unwrap_or(0) as u8;
                             let color = Color::Rgb(r, g, b);
-                            *style = if is_fg { style.fg(color) } else { style.bg(color) };
+                            *style = if is_fg {
+                                style.fg(color)
+                            } else {
+                                style.bg(color)
+                            };
                         }
                         _ => {}
                     }
@@ -1448,14 +1500,62 @@ fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
 
 fn ansi_basic_color(code: u8, bright: bool) -> Option<Color> {
     let color = match code {
-        0 => if bright { Color::DarkGray } else { Color::Black },
-        1 => if bright { Color::LightRed } else { Color::Red },
-        2 => if bright { Color::LightGreen } else { Color::Green },
-        3 => if bright { Color::LightYellow } else { Color::Yellow },
-        4 => if bright { Color::LightBlue } else { Color::Blue },
-        5 => if bright { Color::LightMagenta } else { Color::Magenta },
-        6 => if bright { Color::LightCyan } else { Color::Cyan },
-        7 => if bright { Color::White } else { Color::Gray },
+        0 => {
+            if bright {
+                Color::DarkGray
+            } else {
+                Color::Black
+            }
+        }
+        1 => {
+            if bright {
+                Color::LightRed
+            } else {
+                Color::Red
+            }
+        }
+        2 => {
+            if bright {
+                Color::LightGreen
+            } else {
+                Color::Green
+            }
+        }
+        3 => {
+            if bright {
+                Color::LightYellow
+            } else {
+                Color::Yellow
+            }
+        }
+        4 => {
+            if bright {
+                Color::LightBlue
+            } else {
+                Color::Blue
+            }
+        }
+        5 => {
+            if bright {
+                Color::LightMagenta
+            } else {
+                Color::Magenta
+            }
+        }
+        6 => {
+            if bright {
+                Color::LightCyan
+            } else {
+                Color::Cyan
+            }
+        }
+        7 => {
+            if bright {
+                Color::White
+            } else {
+                Color::Gray
+            }
+        }
         _ => return None,
     };
     Some(color)
@@ -1622,13 +1722,7 @@ fn spawn_log_reader<R: Read + Send + 'static>(
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     if !pending.is_empty() {
-                        dispatch_worker_line(
-                            &pending,
-                            &logs,
-                            max_logs,
-                            source,
-                            event_tx.as_ref(),
-                        );
+                        dispatch_worker_line(&pending, &logs, max_logs, source, event_tx.as_ref());
                         pending.clear();
                     }
                     break;
@@ -1637,13 +1731,7 @@ fn spawn_log_reader<R: Read + Send + 'static>(
                     pending.push_str(&String::from_utf8_lossy(&buffer[..n]));
                     while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
                         let line = pending[..idx].to_string();
-                        dispatch_worker_line(
-                            &line,
-                            &logs,
-                            max_logs,
-                            source,
-                            event_tx.as_ref(),
-                        );
+                        dispatch_worker_line(&line, &logs, max_logs, source, event_tx.as_ref());
                         let delim = pending.as_bytes()[idx];
                         let mut consume = idx + 1;
                         if delim == b'\r' {
@@ -1702,4 +1790,3 @@ fn dispatch_worker_line(
 
     push_log_line(logs, source, line, max_logs);
 }
-
