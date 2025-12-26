@@ -109,6 +109,22 @@ impl RunCoordinator {
         added
     }
 
+    pub fn contains(&self, line: usize) -> bool {
+        if self
+            .current
+            .as_ref()
+            .map(|active| active.line == line)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        self.queued.contains(&line)
+    }
+
+    pub fn has_queued(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     pub fn remove_from_queue(&mut self, line: usize) {
         if self.queued.remove(&line) {
             self.queue.retain(|&value| value != line);

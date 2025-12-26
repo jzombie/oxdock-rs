@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -119,6 +119,9 @@ pub fn start_session(config: SessionConfig) -> Result<(SessionHandle, SessionEve
         emit_block_events,
         run_control,
         coordinator: RunCoordinator::new(),
+        plan_locked: false,
+        deferred_lines: VecDeque::new(),
+        deferred_set: HashSet::new(),
         event_tx,
         completion_tx,
         completion_rx,
@@ -183,12 +186,39 @@ struct SessionState {
     emit_block_events: Arc<AtomicBool>,
     run_control: Arc<RunControl>,
     coordinator: RunCoordinator,
+    plan_locked: bool,
+    deferred_lines: VecDeque<usize>,
+    deferred_set: HashSet<usize>,
     event_tx: mpsc::Sender<SessionEvent>,
     completion_tx: mpsc::Sender<RunCompletion>,
     completion_rx: mpsc::Receiver<RunCompletion>,
 }
 
 impl SessionState {
+    fn lock_plan(&mut self) {
+        if !self.plan_locked {
+            self.plan_locked = true;
+        }
+    }
+
+    fn finish_plan_cycle(&mut self) {
+        self.plan_locked = false;
+        let mut scheduled = self.coordinator.has_queued();
+        if !self.deferred_lines.is_empty() {
+            let pending: Vec<usize> = self.deferred_lines.drain(..).collect();
+            self.deferred_set.clear();
+            let added = self.coordinator.enqueue_lines(&pending);
+            if !added.is_empty() {
+                scheduled = true;
+            }
+        } else {
+            self.deferred_set.clear();
+        }
+        if scheduled && !self.coordinator.has_active() {
+            self.start_next_queued();
+        }
+    }
+
     fn run(mut self, commands: mpsc::Receiver<SessionCommand>) {
         let mut shutdown_requested = false;
         loop {
@@ -234,7 +264,9 @@ impl SessionState {
     fn handle_command(&mut self, command: SessionCommand) -> bool {
         match command {
             SessionCommand::RunBlock { line } => {
-                self.coordinator.remove_from_queue(line);
+                if !self.plan_locked {
+                    self.coordinator.remove_from_queue(line);
+                }
                 match self.coordinator.request_run(line) {
                     RunDecision::Dispatch { line, token } => {
                         self.start_run(line, token);
@@ -248,18 +280,43 @@ impl SessionState {
                 }
             }
             SessionCommand::EnqueueBlocks { lines } => {
-                let added = self.coordinator.enqueue_lines(&lines);
-                let added_set: HashSet<usize> = added.iter().copied().collect();
-                for line in added {
-                    let _ = self.event_tx.send(SessionEvent::AutoRunQueued { line });
-                }
-                for line in lines {
-                    if !added_set.contains(&line) {
-                        let _ = self.event_tx.send(SessionEvent::AutoRunSkipped { line });
+                if self.plan_locked {
+                    let mut added = Vec::new();
+                    for &line in &lines {
+                        if line == 0 {
+                            continue;
+                        }
+                        if self.coordinator.contains(line) || self.deferred_set.contains(&line) {
+                            continue;
+                        }
+                        if self.deferred_set.insert(line) {
+                            self.deferred_lines.push_back(line);
+                            added.push(line);
+                        }
                     }
-                }
-                if !self.coordinator.has_active() {
-                    self.start_next_queued();
+                    let added_set: HashSet<usize> = added.iter().copied().collect();
+                    for line in added {
+                        let _ = self.event_tx.send(SessionEvent::AutoRunQueued { line });
+                    }
+                    for &line in &lines {
+                        if !added_set.contains(&line) {
+                            let _ = self.event_tx.send(SessionEvent::AutoRunSkipped { line });
+                        }
+                    }
+                } else {
+                    let added = self.coordinator.enqueue_lines(&lines);
+                    let added_set: HashSet<usize> = added.iter().copied().collect();
+                    for line in added {
+                        let _ = self.event_tx.send(SessionEvent::AutoRunQueued { line });
+                    }
+                    for line in lines {
+                        if !added_set.contains(&line) {
+                            let _ = self.event_tx.send(SessionEvent::AutoRunSkipped { line });
+                        }
+                    }
+                    if !self.coordinator.has_active() {
+                        self.start_next_queued();
+                    }
                 }
             }
             SessionCommand::StopActive { line } => {
@@ -313,6 +370,7 @@ impl SessionState {
     }
 
     fn start_run(&mut self, line: usize, token: RunToken) {
+        self.lock_plan();
         let observer = Arc::new(SessionOutputObserver::new(self.event_tx.clone()));
         let observer_for_run: Arc<dyn ExecutionOutputObserver> = observer.clone();
         let resolver = Arc::clone(&self.resolver);
@@ -428,6 +486,8 @@ impl SessionState {
                 }
                 if has_more_queued {
                     self.start_next_queued();
+                } else {
+                    self.finish_plan_cycle();
                 }
             }
             FinishDisposition::Unexpected { active_line } => {
@@ -442,6 +502,7 @@ impl SessionState {
                     .event_tx
                     .send(SessionEvent::RunFailed { line, error: err });
                 self.coordinator.clear_active();
+                self.finish_plan_cycle();
             }
         }
     }
