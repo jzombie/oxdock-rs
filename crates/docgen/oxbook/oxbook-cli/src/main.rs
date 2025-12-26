@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
@@ -91,6 +92,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let (worker_event_tx, worker_event_rx) = mpsc::channel();
         let mut running_line: Option<usize> = None;
         let mut server_busy = false;
+        let mut run_has_started = false;
+        let mut pending_stop_line: Option<usize> = None;
         let mut pending_runs: VecDeque<usize> = VecDeque::new();
         let mut pending_run_set: HashSet<usize> = HashSet::new();
         let mut mode = UiMode::Dashboard;
@@ -108,6 +111,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     status = String::from("Idle");
                     running_line = None;
                     server_busy = false;
+                    run_has_started = false;
+                    pending_stop_line = None;
                 }
             }
 
@@ -117,6 +122,33 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         running_line = Some(line.saturating_sub(1));
                         server_busy = true;
                         status = format!("Running block at line {}...", line);
+                        run_has_started = true;
+                        if pending_stop_line == Some(line) {
+                            if let Some(proc) = server.as_mut() {
+                                match proc.send_stop_command() {
+                                    Ok(()) => {
+                                        let mut guard = logs.lock().unwrap();
+                                        guard.push_back(LogRecord::new(
+                                            LogSource::Stdout,
+                                            format!("stop requested for block at line {}\n", line),
+                                        ));
+                                        trim_logs(&mut guard, MAX_LOG_LINES);
+                                        status =
+                                            format!("Stop requested for block at line {}", line);
+                                    }
+                                    Err(err) => {
+                                        let mut guard = logs.lock().unwrap();
+                                        guard.push_back(LogRecord::new(
+                                            LogSource::Stderr,
+                                            format!("failed to send stop command: {}\n", err),
+                                        ));
+                                        trim_logs(&mut guard, MAX_LOG_LINES);
+                                        status = String::from("Stop request failed; check logs");
+                                    }
+                                }
+                            }
+                            pending_stop_line = None;
+                        }
                     }
                     WorkerEvent::Done { line, success } => {
                         if let UiMode::Editor(editor) = &mut mode {
@@ -124,6 +156,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         }
                         running_line = None;
                         server_busy = false;
+                        run_has_started = false;
+                        pending_stop_line = None;
                         status = if success {
                             format!("Block at line {} completed", line)
                         } else {
@@ -135,12 +169,35 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
 
             if !server_busy {
                 if let Some(proc) = server.as_mut() {
-                    if let Some(&line) = pending_runs.front() {
+                    while let Some(&line) = pending_runs.front() {
+                        let mut skip_target = false;
+                        if let UiMode::Editor(editor) = &mut mode {
+                            if !editor.has_code_block_at_line(line) {
+                                let mut guard = logs.lock().unwrap();
+                                guard.push_back(LogRecord::new(
+                                    LogSource::Stdout,
+                                    format!(
+                                        "skipping auto-run for missing block at line {}\n",
+                                        line
+                                    ),
+                                ));
+                                trim_logs(&mut guard, MAX_LOG_LINES);
+                                pending_runs.pop_front();
+                                pending_run_set.remove(&line);
+                                skip_target = true;
+                            }
+                        }
+
+                        if skip_target {
+                            continue;
+                        }
+
                         match proc.send_run_command(line) {
                             Ok(()) => {
                                 let _ = pending_runs.pop_front();
                                 pending_run_set.remove(&line);
                                 server_busy = true;
+                                run_has_started = false;
                                 running_line = Some(line.saturating_sub(1));
                                 status = format!("Running block at line {}...", line);
                                 let mut guard = logs.lock().unwrap();
@@ -151,6 +208,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 trim_logs(&mut guard, MAX_LOG_LINES);
                             }
                             Err(err) => {
+                                run_has_started = false;
+                                pending_stop_line = None;
                                 let mut guard = logs.lock().unwrap();
                                 guard.push_back(LogRecord::new(
                                     LogSource::Stderr,
@@ -166,6 +225,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                             }
                         }
+
+                        break;
                     }
                 }
             }
@@ -239,36 +300,56 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     if let Some(server_proc) = server.as_mut() {
                                         if server_busy {
                                             if Some(line_idx) == running_line {
-                                                match server_proc.send_stop_command() {
-                                                    Ok(()) => {
+                                                if run_has_started {
+                                                    match server_proc.send_stop_command() {
+                                                        Ok(()) => {
+                                                            let mut guard = logs.lock().unwrap();
+                                                            guard.push_back(LogRecord::new(
+                                                                LogSource::Stdout,
+                                                                format!(
+                                                                    "stop requested for block at line {}\n",
+                                                                    line_number
+                                                                ),
+                                                            ));
+                                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                                            status = format!(
+                                                                "Stop requested for block at line {}",
+                                                                line_number
+                                                            );
+                                                        }
+                                                        Err(err) => {
+                                                            let mut guard = logs.lock().unwrap();
+                                                            guard.push_back(LogRecord::new(
+                                                                LogSource::Stderr,
+                                                                format!(
+                                                                    "failed to send stop command: {}\n",
+                                                                    err
+                                                                ),
+                                                            ));
+                                                            trim_logs(&mut guard, MAX_LOG_LINES);
+                                                            status = String::from(
+                                                                "Stop request failed; check logs",
+                                                            );
+                                                        }
+                                                    }
+                                                    pending_stop_line = None;
+                                                } else {
+                                                    if pending_stop_line != Some(line_number) {
+                                                        pending_stop_line = Some(line_number);
                                                         let mut guard = logs.lock().unwrap();
                                                         guard.push_back(LogRecord::new(
                                                             LogSource::Stdout,
                                                             format!(
-                                                                "stop requested for block at line {}\n",
+                                                                "stop queued for block at line {} (awaiting start)\n",
                                                                 line_number
                                                             ),
                                                         ));
                                                         trim_logs(&mut guard, MAX_LOG_LINES);
-                                                        status = format!(
-                                                            "Stop requested for block at line {}",
-                                                            line_number
-                                                        );
                                                     }
-                                                    Err(err) => {
-                                                        let mut guard = logs.lock().unwrap();
-                                                        guard.push_back(LogRecord::new(
-                                                            LogSource::Stderr,
-                                                            format!(
-                                                                "failed to send stop command: {}\n",
-                                                                err
-                                                            ),
-                                                        ));
-                                                        trim_logs(&mut guard, MAX_LOG_LINES);
-                                                        status = String::from(
-                                                            "Stop request failed; check logs",
-                                                        );
-                                                    }
+                                                    status = format!(
+                                                        "Stop queued for block at line {}",
+                                                        line_number
+                                                    );
                                                 }
                                             } else {
                                                 let mut guard = logs.lock().unwrap();
@@ -335,6 +416,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                         );
                                         if let Err(err) = server_proc.send_run_command(line_number)
                                         {
+                                            run_has_started = false;
+                                            pending_stop_line = None;
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stderr,
@@ -350,6 +433,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             );
                                         } else {
                                             server_busy = true;
+                                            run_has_started = false;
                                             let mut guard = logs.lock().unwrap();
                                             guard.push_back(LogRecord::new(
                                                 LogSource::Stdout,
@@ -1066,88 +1150,51 @@ impl EditorState {
             .any(|block| block.fence_line == line_idx && !block.is_generated_output())
     }
 
-    fn compute_code_blocks(lines: &[String]) -> Vec<CodeBlockMeta> {
-        #[derive(Clone)]
-        struct OpenBlock {
-            start: usize,
-            fence_char: char,
-            fence_len: usize,
-            info: String,
+    fn has_code_block_at_line(&mut self, line_number: usize) -> bool {
+        if line_number == 0 {
+            return false;
         }
-
-        let mut blocks = Vec::new();
-        let mut current: Option<OpenBlock> = None;
-
-        for (idx, line) in lines.iter().enumerate() {
-            let marker = Self::parse_fence_marker(line);
-            if let Some(open) = current.as_ref() {
-                if let Some((_, fence_char, fence_len, info)) = marker.as_ref() {
-                    if *fence_char == open.fence_char
-                        && *fence_len >= open.fence_len
-                        && info.is_empty()
-                    {
-                        blocks.push(CodeBlockMeta {
-                            fence_line: open.start,
-                            end_line: idx,
-                            info: open.info.clone(),
-                        });
-                        current = None;
-                        continue;
-                    }
-                }
-            }
-
-            if current.is_none() {
-                if let Some((_, fence_char, fence_len, info)) = marker {
-                    current = Some(OpenBlock {
-                        start: idx,
-                        fence_char,
-                        fence_len,
-                        info,
-                    });
-                }
-            }
-        }
-
-        if let Some(open) = current {
-            blocks.push(CodeBlockMeta {
-                fence_line: open.start,
-                end_line: lines.len().saturating_sub(1),
-                info: open.info,
-            });
-        }
-
-        blocks
+        self.ensure_code_blocks();
+        let idx = line_number.saturating_sub(1);
+        self.is_code_block_start(idx)
     }
 
-    fn parse_fence_marker(line: &str) -> Option<(usize, char, usize, String)> {
-        let bytes = line.as_bytes();
-        let mut idx = 0usize;
-        let mut ws = 0usize;
-        while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b'\t') {
-            ws += 1;
-            idx += 1;
-        }
-        if ws > 3 || idx >= bytes.len() {
-            return None;
+    fn compute_code_blocks(lines: &[String]) -> Vec<CodeBlockMeta> {
+        if lines.is_empty() {
+            return Vec::new();
         }
 
-        let fence_char = bytes[idx] as char;
-        if fence_char != '`' && fence_char != '~' {
-            return None;
-        }
-        idx += 1;
-        let mut fence_len = 1;
-        while idx < bytes.len() && bytes[idx] as char == fence_char {
-            fence_len += 1;
-            idx += 1;
-        }
-        if fence_len < 3 {
-            return None;
+        let contents = lines.join("\n");
+        let arena = Arena::new();
+        let mut options = Options::default();
+        options.render.sourcepos = true;
+        let root = parse_document(&arena, &contents, &options);
+
+        let mut blocks = Vec::new();
+        for node in root.descendants() {
+            let data = node.data.borrow();
+            if let NodeValue::CodeBlock(cb) = &data.value {
+                let start_line = data.sourcepos.start.line.saturating_sub(1);
+                if start_line >= lines.len() {
+                    continue;
+                }
+                let end_line = data
+                    .sourcepos
+                    .end
+                    .line
+                    .saturating_sub(1)
+                    .min(lines.len().saturating_sub(1));
+                let info = cb.info.trim().to_string();
+                blocks.push(CodeBlockMeta {
+                    fence_line: start_line,
+                    end_line,
+                    info,
+                });
+            }
         }
 
-        let rest = &line[idx..];
-        Some((ws, fence_char, fence_len, rest.trim().to_string()))
+        blocks.sort_by_key(|block| block.fence_line);
+        blocks
     }
 }
 
