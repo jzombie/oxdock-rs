@@ -3,12 +3,12 @@ use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use runbook_cli::session::{SessionConfig, SessionEvent, SessionLogSource, start_session};
 use ratatui::{
     Frame, Terminal,
     backend::{Backend, CrosstermBackend},
@@ -17,6 +17,7 @@ use ratatui::{
     text::{Span, Spans, Text},
     widgets::{Block, Borders, Paragraph},
 };
+use runbook_cli::session::{start_session, SessionConfig, SessionEvent, SessionHandle, SessionLogSource};
 use std::{
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     fs,
@@ -37,6 +38,42 @@ const RUN_BUTTON_DISABLED: &str = "·";
 const RUN_BUTTON_BLANK: &str = " ";
 const RUN_BUTTON_WIDTH: usize = 1;
 const MAX_LOG_LINES: usize = 800;
+
+#[derive(Clone, Copy)]
+struct KeyBinding {
+    code: KeyCode,
+    modifiers: KeyModifiers,
+}
+
+impl KeyBinding {
+    fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+        Self { code, modifiers }
+    }
+
+    fn matches(&self, event: &KeyEvent) -> bool {
+        event.code == self.code && event.modifiers == self.modifiers
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KeyBindings {
+    dashboard_quit: KeyBinding,
+    dashboard_open_editor: KeyBinding,
+    dashboard_ready: KeyBinding,
+    editor_run_block: KeyBinding,
+}
+
+impl KeyBindings {
+    fn default() -> Self {
+        let none = KeyModifiers::empty();
+        Self {
+            dashboard_quit: KeyBinding::new(KeyCode::Char('q'), none),
+            dashboard_open_editor: KeyBinding::new(KeyCode::Char('e'), none),
+            dashboard_ready: KeyBinding::new(KeyCode::Char('r'), none),
+            editor_run_block: KeyBinding::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        }
+    }
+}
 
 fn main() -> Result<()> {
     enum LaunchMode {
@@ -83,7 +120,16 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let keyboard_flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(keyboard_flags)
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -98,6 +144,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let session_handle = handle;
         let session_events = events;
         let mut running_line: Option<usize> = None;
+        let keymap = KeyBindings::default();
 
         loop {
             while let Some(event) = session_events.try_recv() {
@@ -261,7 +308,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             format!("Target: {}", cli_args.join(" "))
                         };
                         let mut controls_view = ControlsView::new(format!(
-                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor. In the editor view, click ▶ beside a code block to run it. Use 'q' to quit."
+                            "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor. In the editor view, click ▶ beside a code block or press Ctrl+R to run it. Use 'q' to quit."
                         ));
                         controls_view.render(f, mid[0]);
                     }
@@ -288,115 +335,15 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     editor.hit_test_run_glyph(mouse_event.column, mouse_event.row)
                                 {
                                     let line_number = line_idx + 1;
-                                    if let Some(active) = running_line {
-                                        if active == line_number {
-                                            match session_handle.stop_active(line_number) {
-                                                Ok(()) => {
-                                                    status = format!(
-                                                        "Stop requested for block at line {}",
-                                                        line_number
-                                                    );
-                                                }
-                                                Err(err) => {
-                                                    push_log_line(
-                                                        &logs,
-                                                        LogSource::Stderr,
-                                                        &format!(
-                                                            "stop request failed at line {}: {}",
-                                                            line_number, err
-                                                        ),
-                                                        MAX_LOG_LINES,
-                                                    );
-                                                    status = String::from(
-                                                        "Stop request failed; check logs",
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            push_log_line(
-                                                &logs,
-                                                LogSource::Stdout,
-                                                &format!(
-                                                    "run in progress; block {} is active",
-                                                    active
-                                                ),
-                                                MAX_LOG_LINES,
-                                            );
-                                            status = String::from(
-                                                "Run in progress; wait for current block",
-                                            );
-                                        }
+                                    if run_block_via_session(
+                                        editor,
+                                        &session_handle,
+                                        &logs,
+                                        &mut status,
+                                        running_line,
+                                        line_number,
+                                    ) {
                                         continue;
-                                    }
-
-                                    if editor.is_dirty() {
-                                        if let Err(err) = editor.save() {
-                                            push_log_line(
-                                                &logs,
-                                                LogSource::Stderr,
-                                                &format!(
-                                                    "save failed before running block at line {}: {}",
-                                                    line_number, err
-                                                ),
-                                                MAX_LOG_LINES,
-                                            );
-                                            status = format!(
-                                                "Save failed before running block (line {})",
-                                                line_number
-                                            );
-                                            continue;
-                                        }
-                                        let saved_blocks = editor.take_recently_saved_blocks();
-                                        let other_blocks: Vec<usize> = saved_blocks
-                                            .into_iter()
-                                            .filter(|line| *line != line_number)
-                                            .collect();
-                                        if !other_blocks.is_empty() {
-                                            if let Err(err) =
-                                                session_handle.enqueue_blocks(other_blocks)
-                                            {
-                                                push_log_line(
-                                                    &logs,
-                                                    LogSource::Stderr,
-                                                    &format!("queue update failed: {}", err),
-                                                    MAX_LOG_LINES,
-                                                );
-                                            }
-                                        }
-                                        push_log_line(
-                                            &logs,
-                                            LogSource::Stdout,
-                                            &format!(
-                                                "saved {} before running block at line {}",
-                                                editor.short_path(),
-                                                line_number
-                                            ),
-                                            MAX_LOG_LINES,
-                                        );
-                                    }
-
-                                    match session_handle.run_block(line_number) {
-                                        Ok(()) => {
-                                            status = format!(
-                                                "Starting block at line {}...",
-                                                line_number
-                                            );
-                                        }
-                                        Err(err) => {
-                                            push_log_line(
-                                                &logs,
-                                                LogSource::Stderr,
-                                                &format!(
-                                                    "run-block error at line {}: {}",
-                                                    line_number, err
-                                                ),
-                                                MAX_LOG_LINES,
-                                            );
-                                            status = format!(
-                                                "Snippet start failed at line {}",
-                                                line_number
-                                            );
-                                        }
                                     }
                                 }
                             }
@@ -407,12 +354,11 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             continue;
                         }
                         match &mut mode {
-                            UiMode::Dashboard => match key_event.code {
-                                KeyCode::Char('q') => {
+                            UiMode::Dashboard => {
+                                if keymap.dashboard_quit.matches(&key_event) {
                                     let _ = session_handle.shutdown();
                                     break Ok(());
-                                }
-                                KeyCode::Char('e') => {
+                                } else if keymap.dashboard_open_editor.matches(&key_event) {
                                     match EditorState::load(target_path.clone()) {
                                         Ok(editor) => {
                                             status = format!("Editing {}", editor.short_path());
@@ -428,15 +374,32 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             status = String::from("Editor failed");
                                         }
                                     }
-                                }
-                                KeyCode::Char('r') => {
+                                } else if keymap.dashboard_ready.matches(&key_event) {
                                     status = String::from(
                                         "Session ready; open the editor to run blocks",
                                     );
                                 }
-                                _ => {}
-                            },
+                            }
                             UiMode::Editor(editor) => {
+                                if keymap.editor_run_block.matches(&key_event) {
+                                    if let Some(line_number) = editor.block_start_for_cursor() {
+                                        if run_block_via_session(
+                                            editor,
+                                            &session_handle,
+                                            &logs,
+                                            &mut status,
+                                            running_line,
+                                            line_number,
+                                        ) {
+                                            continue;
+                                        }
+                                    } else {
+                                        status = String::from(
+                                            "Move the cursor inside a runnable block",
+                                        );
+                                        continue;
+                                    }
+                                }
                                 let action = editor.handle_key(key_event)?;
                                 let message = editor.take_status_message();
                                 let changed_blocks = editor.take_recently_saved_blocks();
@@ -475,7 +438,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        PopKeyboardEnhancementFlags
     )?;
     terminal.show_cursor()?;
     result
@@ -1027,6 +991,19 @@ impl EditorState {
         self.is_code_block_start(idx)
     }
 
+    fn block_start_for_cursor(&mut self) -> Option<usize> {
+        self.ensure_code_blocks();
+        let row = self.cursor_row;
+        self.code_blocks
+            .iter()
+            .find(|block| {
+                !block.is_generated_output()
+                    && row >= block.fence_line
+                    && row <= block.end_line
+            })
+            .map(|block| block.fence_line + 1)
+    }
+
     fn compute_code_blocks(lines: &[String]) -> Vec<CodeBlockMeta> {
         if lines.is_empty() {
             return Vec::new();
@@ -1245,6 +1222,104 @@ fn trim_logs(logs: &mut VecDeque<LogRecord>, max: usize) {
     while logs.len() > max {
         logs.pop_front();
     }
+}
+
+fn run_block_via_session(
+    editor: &mut EditorState,
+    session_handle: &SessionHandle,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    status: &mut String,
+    running_line: Option<usize>,
+    line_number: usize,
+) -> bool {
+    if line_number == 0 {
+        return false;
+    }
+
+    if let Some(active) = running_line {
+        if active == line_number {
+            match session_handle.stop_active(line_number) {
+                Ok(()) => {
+                    *status = format!("Stop requested for block at line {}", line_number);
+                }
+                Err(err) => {
+                    push_log_line(
+                        logs,
+                        LogSource::Stderr,
+                        &format!("stop request failed at line {}: {}", line_number, err),
+                        MAX_LOG_LINES,
+                    );
+                    *status = String::from("Stop request failed; check logs");
+                }
+            }
+        } else {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("run in progress; block {} is active", active),
+                MAX_LOG_LINES,
+            );
+            *status = String::from("Run in progress; wait for current block");
+        }
+        return true;
+    }
+
+    if editor.is_dirty() {
+        if let Err(err) = editor.save() {
+            push_log_line(
+                logs,
+                LogSource::Stderr,
+                &format!(
+                    "save failed before running block at line {}: {}",
+                    line_number, err
+                ),
+                MAX_LOG_LINES,
+            );
+            *status = format!("Save failed before running block (line {})", line_number);
+            return true;
+        }
+        let saved_blocks = editor.take_recently_saved_blocks();
+        let other_blocks: Vec<usize> = saved_blocks
+            .into_iter()
+            .filter(|line| *line != line_number)
+            .collect();
+        if !other_blocks.is_empty() {
+            if let Err(err) = session_handle.enqueue_blocks(other_blocks) {
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("queue update failed: {}", err),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+        push_log_line(
+            logs,
+            LogSource::Stdout,
+            &format!(
+                "saved {} before running block at line {}",
+                editor.short_path(),
+                line_number
+            ),
+            MAX_LOG_LINES,
+        );
+    }
+
+    match session_handle.run_block(line_number) {
+        Ok(()) => {
+            *status = format!("Starting block at line {}...", line_number);
+        }
+        Err(err) => {
+            push_log_line(
+                logs,
+                LogSource::Stderr,
+                &format!("run-block error at line {}: {}", line_number, err),
+                MAX_LOG_LINES,
+            );
+            *status = format!("Snippet start failed at line {}", line_number);
+        }
+    }
+    true
 }
 
 fn digits(mut value: usize) -> usize {
