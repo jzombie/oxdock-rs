@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/runbook/runbook",
     "crates/runbook/runbook-cli",
     "crates/oxdock-core",
     "crates/oxdock-embed",

@@ -1152,6 +1152,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "runbook"
+version = "0.6.0-alpha"
+
+[[package]]
 name = "runbook-cli"
 version = "0.6.0-alpha"
 dependencies = [
