@@ -8,7 +8,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use oxbook_cli::session::{SessionConfig, SessionEvent, SessionLogSource, start_session};
+use runbook_cli::session::{SessionConfig, SessionEvent, SessionLogSource, start_session};
 use ratatui::{
     Frame, Terminal,
     backend::{Backend, CrosstermBackend},
@@ -69,8 +69,8 @@ fn main() -> Result<()> {
 
     match mode {
         LaunchMode::Tui => run_tui(cli_args),
-        LaunchMode::RunBlock { path, line } => oxbook_cli::run_block(&path, line),
-        LaunchMode::Default => oxbook_cli::run(),
+        LaunchMode::RunBlock { path, line } => runbook_cli::run_block(&path, line),
+        LaunchMode::Default => runbook_cli::run(),
     }
 }
 
@@ -242,7 +242,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     .split(size);
 
                 let header_text = match mode {
-                    UiMode::Dashboard => "Oxbook TUI — 'e' edit • 'q' quit",
+                    UiMode::Dashboard => "RunBook TUI — 'e' edit • 'q' quit",
                     UiMode::Editor(_) => "Editor — Esc close • Ctrl-S save • arrows move",
                 };
                 let mut header_view = HeaderView::new(header_text);
@@ -549,7 +549,7 @@ impl CodeBlockMeta {
     fn is_generated_output(&self) -> bool {
         self.info
             .split_whitespace()
-            .any(|token| token.eq_ignore_ascii_case("oxbook"))
+            .any(|token| token.eq_ignore_ascii_case("runbook"))
     }
 }
 
@@ -1078,7 +1078,7 @@ impl<'a> HeaderView<'a> {
 
 impl<'a> FramedView for HeaderView<'a> {
     fn block<'b>(&'b self) -> Block<'b> {
-        Block::default().borders(Borders::ALL).title("oxbook-cli")
+        Block::default().borders(Borders::ALL).title("runbook-cli")
     }
 
     fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {

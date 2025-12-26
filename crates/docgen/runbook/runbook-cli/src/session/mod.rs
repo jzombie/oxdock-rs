@@ -128,7 +128,7 @@ pub fn start_session(config: SessionConfig) -> Result<(SessionHandle, SessionEve
     };
 
     thread::Builder::new()
-        .name("oxbook-run-session".to_string())
+        .name("runbook-run-session".to_string())
         .spawn(move || state.run(command_rx))
         .context("spawn runoff session thread")?;
 

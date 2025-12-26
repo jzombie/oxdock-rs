@@ -278,8 +278,8 @@ impl ProcessManager for ShellProcessManager {
         script: &str,
         options: CommandOptions,
     ) -> Result<CommandResult<Self::Handle>> {
-        if std::env::var_os("OXBOOK_DEBUG").is_some() {
-            eprintln!("oxbook run_command: {script}");
+        if std::env::var_os("RUNBOOK_DEBUG").is_some() {
+            eprintln!("runbook run_command: {script}");
         }
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
@@ -380,8 +380,8 @@ impl ProcessManager for InterruptibleProcessManager {
         script: &str,
         options: CommandOptions,
     ) -> Result<CommandResult<Self::Handle>> {
-        if std::env::var_os("OXBOOK_DEBUG").is_some() {
-            eprintln!("oxbook interruptible run_command: {script}");
+        if std::env::var_os("RUNBOOK_DEBUG").is_some() {
+            eprintln!("runbook interruptible run_command: {script}");
         }
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);

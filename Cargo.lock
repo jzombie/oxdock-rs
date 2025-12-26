@@ -753,25 +753,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxbook-cli"
-version = "0.6.0-alpha"
-dependencies = [
- "anyhow",
- "comrak",
- "crossterm 0.27.0",
- "indoc",
- "notify",
- "once_cell",
- "os_pipe",
- "oxdock-core",
- "oxdock-fs",
- "oxdock-parser",
- "oxdock-process",
- "ratatui",
- "sha2",
-]
-
-[[package]]
 name = "oxdock-buildtime-helpers"
 version = "0.6.0-alpha"
 dependencies = [
@@ -1169,6 +1150,25 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+
+[[package]]
+name = "runbook-cli"
+version = "0.6.0-alpha"
+dependencies = [
+ "anyhow",
+ "comrak",
+ "crossterm 0.27.0",
+ "indoc",
+ "notify",
+ "once_cell",
+ "os_pipe",
+ "oxdock-core",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "ratatui",
+ "sha2",
+]
 
 [[package]]
 name = "rustix"

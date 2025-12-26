@@ -1,5 +1,5 @@
 [package]
-name = "oxbook-cli"
+name = "runbook-cli"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 # TODO: Change to true once crate is finalized for publishing
 publish = false
 
-default-run = "oxbook-cli"
+default-run = "runbook-cli"
 
 [dependencies]
 anyhow.workspace = true

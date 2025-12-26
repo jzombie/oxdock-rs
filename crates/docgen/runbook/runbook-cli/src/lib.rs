@@ -27,17 +27,17 @@ use std::time::Duration;
 const STABLE_READ_RETRIES: usize = 5;
 const STABLE_READ_DELAY: Duration = Duration::from_millis(30);
 const MAX_FENCE_PREFIX_WS: usize = 3;
-const OUTPUT_BEGIN: &str = "<!-- oxbook-output:begin -->";
-const OUTPUT_END: &str = "<!-- oxbook-output:end -->";
-const OUTPUT_META_PREFIX: &str = "<!-- oxbook-output:meta";
+const OUTPUT_BEGIN: &str = "<!-- runbook-output:begin -->";
+const OUTPUT_END: &str = "<!-- runbook-output:end -->";
+const OUTPUT_META_PREFIX: &str = "<!-- runbook-output:meta";
 const WATCH_DEBOUNCE_WINDOW: Duration = Duration::from_millis(120);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(75);
 const SHORT_HASH_LEN: usize = 32;
 // If set to "0" disables terminal streaming; otherwise auto-on when stdout is a TTY.
-const STREAM_STDOUT_ENV: &str = "OXBOOK_STREAM_STDOUT";
+const STREAM_STDOUT_ENV: &str = "RUNBOOK_STREAM_STDOUT";
 const PIPE_SETUP: &str = "setup";
 const PIPE_SNIPPET: &str = "snippet";
-pub const BLOCK_EVENT_ENV: &str = "OXBOOK_EMIT_BLOCK_EVENTS";
+pub const BLOCK_EVENT_ENV: &str = "RUNBOOK_EMIT_BLOCK_EVENTS";
 pub const WORKER_EVENT_PREFIX: &str = "@@WORKER:";
 
 #[derive(Debug)]
@@ -60,7 +60,7 @@ struct OutputBlock {
     stdout: String,
     stderr: String,
 }
-const STDERR_MARKER: &str = "<!-- oxbook-output:stderr -->";
+const STDERR_MARKER: &str = "<!-- runbook-output:stderr -->";
 
 struct FenceInfo {
     language: Option<String>,
@@ -427,7 +427,7 @@ fn parse_target_path() -> Result<String> {
             eprintln!("No path provided, defaulting to README.md");
             Ok(String::from("README.md"))
         }
-        _ => bail!("Usage: oxbook-cli <path-to-markdown>"),
+        _ => bail!("Usage: runbook-cli <path-to-markdown>"),
     }
 }
 
@@ -1532,10 +1532,10 @@ fn parse_inline_meta(
     let mut tokens = trimmed.trim_start_matches('`').split_whitespace();
     // Skip the fence language token if present.
     let _ = tokens.next();
-    let mut saw_oxbook = false;
+    let mut saw_runbook = false;
     for token in tokens {
-        if token == "oxbook" {
-            saw_oxbook = true;
+        if token == "runbook" {
+            saw_runbook = true;
             continue;
         }
         if let Some(value) = token.strip_prefix("code=") {
@@ -1544,7 +1544,7 @@ fn parse_inline_meta(
             combined_hash.get_or_insert_with(|| value.to_string());
         }
     }
-    saw_oxbook
+    saw_runbook
 }
 
 fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<String> {
@@ -1556,7 +1556,7 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
     let combined_hash_short = short_hash(&combined_hash);
     // First fenced block: stdout (may be empty). Keep it minimal for humans.
     lines.push(format!(
-        "```text oxbook code={code_hash_short} hash={combined_hash_short}"
+        "```text runbook code={code_hash_short} hash={combined_hash_short}"
     ));
     if !stdout_norm.is_empty() {
         for line in stdout_norm.lines() {
@@ -1570,7 +1570,7 @@ fn format_output_block(code_hash: &str, stdout: &str, stderr: &str) -> Vec<Strin
     if !stderr_norm.is_empty() {
         lines.push(String::new());
         lines.push(format!(
-            "```text oxbook code={code_hash_short} hash={combined_hash_short}"
+            "```text runbook code={code_hash_short} hash={combined_hash_short}"
         ));
         let mut s_lines = stderr_norm.lines();
         if let Some(first) = s_lines.next() {
@@ -1688,7 +1688,7 @@ fn resolve_oxfile_path(
         return Ok(Some(guarded));
     }
 
-    let filename = format!("oxbook.{language}.oxfile");
+    let filename = format!("runbook.{language}.oxfile");
     let local = source_dir.join(&filename)?;
     if resolver.entry_kind(&local).is_ok() {
         return Ok(Some(local));
@@ -1700,7 +1700,7 @@ fn resolve_oxfile_path(
     }
 
     // Fallback: also look for the temp.runner naming convention to support
-    // in-repo runners without requiring the oxbook.<lang> alias.
+    // in-repo runners without requiring the runbook.<lang> alias.
     let temp_name_runner = format!("temp.runner.{language}.oxfile");
     let temp_local_runner = source_dir.join(&temp_name_runner)?;
     if resolver.entry_kind(&temp_local_runner).is_ok() {
@@ -1855,7 +1855,7 @@ fn build_env_from_oxfile(
     let output_buf = Arc::new(Mutex::new(Vec::new()));
 
     // Stream build/compile chatter to the user's terminal when available, while still
-    // capturing for diagnostics. Allow opt-out via OXBOOK_STREAM_STDOUT=0.
+    // capturing for diagnostics. Allow opt-out via RUNBOOK_STREAM_STDOUT=0.
     let stream_build_to_terminal = match std::env::var_os(STREAM_STDOUT_ENV) {
         Some(val) => val != "0",
         None => std::io::stdout().is_terminal(),
@@ -1871,7 +1871,7 @@ fn build_env_from_oxfile(
     };
 
     let mut io_cfg = ExecIo::new();
-    io_cfg.insert_inherit_env("OXBOOK_RUNNER_DIR", runner_rel.clone());
+    io_cfg.insert_inherit_env("RUNBOOK_RUNNER_DIR", runner_rel.clone());
     io_cfg.set_stdout(Some(build_stdout.clone()));
     io_cfg.set_stderr(Some(build_stdout.clone()));
     io_cfg.insert_output_pipe_stdout_inherit(PIPE_SETUP);
@@ -2057,11 +2057,11 @@ fn run_in_env_with_resolver(
                 }
             })
             .collect();
-        let snippet_name = format!("oxbook-snippet.{lang_safe}");
+        let snippet_name = format!("runbook-snippet.{lang_safe}");
         let snippets_dir = workspace_resolver
             .root()
             .join("target")?
-            .join("oxbook")?
+            .join("runbook")?
             .join("snippets")?;
         workspace_resolver
             .create_dir_all(&snippets_dir)
@@ -2074,7 +2074,7 @@ fn run_in_env_with_resolver(
             .with_context(|| format!("write {}", snippet_path.display()))?;
 
         // Use the previous fence's stdout (if any) as stdin; the snippet
-        // itself is provided via OXBOOK_SNIPPET_PATH.
+        // itself is provided via RUNBOOK_SNIPPET_PATH.
         let input_stream = stdin;
 
         // Prepare stdout: if provided, use it; otherwise create a capture
@@ -2113,9 +2113,9 @@ fn run_in_env_with_resolver(
             };
 
         let mut io_cfg = ExecIo::new();
-        io_cfg.insert_inherit_env("OXBOOK_SNIPPET_PATH", snippet_path.display().to_string());
-        io_cfg.insert_inherit_env("OXBOOK_SNIPPET_DIR", snippets_dir.display().to_string());
-        io_cfg.insert_inherit_env("OXBOOK_RUNNER_DIR", runner_dir_value.clone());
+        io_cfg.insert_inherit_env("RUNBOOK_SNIPPET_PATH", snippet_path.display().to_string());
+        io_cfg.insert_inherit_env("RUNBOOK_SNIPPET_DIR", snippets_dir.display().to_string());
+        io_cfg.insert_inherit_env("RUNBOOK_RUNNER_DIR", runner_dir_value.clone());
         io_cfg.set_stdin(input_stream);
         io_cfg.set_stdout(Some(use_stdout.clone()));
         io_cfg.set_stderr(Some(use_stderr.clone()));
@@ -2275,10 +2275,10 @@ mod tests {
     fn snippet_env_hidden_without_inherit() -> Result<()> {
         let script = indoc! {
             r#"
-            [env:OXBOOK_SNIPPET_PATH]
-            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
-            [env:OXBOOK_SNIPPET_DIR]
-            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            [env:RUNBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:RUNBOOK_SNIPPET_PATH }}"
+            [env:RUNBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:RUNBOOK_SNIPPET_DIR }}"
             "#
         };
 
@@ -2294,11 +2294,11 @@ mod tests {
     fn snippet_env_available_with_inherit() -> Result<()> {
         let script = indoc! {
             r#"
-            INHERIT_ENV [OXBOOK_SNIPPET_PATH, OXBOOK_SNIPPET_DIR]
-            [env:OXBOOK_SNIPPET_PATH]
-            WRITE leak-path.txt "path={{ env:OXBOOK_SNIPPET_PATH }}"
-            [env:OXBOOK_SNIPPET_DIR]
-            WRITE leak-dir.txt "dir={{ env:OXBOOK_SNIPPET_DIR }}"
+            INHERIT_ENV [RUNBOOK_SNIPPET_PATH, RUNBOOK_SNIPPET_DIR]
+            [env:RUNBOOK_SNIPPET_PATH]
+            WRITE leak-path.txt "path={{ env:RUNBOOK_SNIPPET_PATH }}"
+            [env:RUNBOOK_SNIPPET_DIR]
+            WRITE leak-dir.txt "dir={{ env:RUNBOOK_SNIPPET_DIR }}"
             "#
         };
 
@@ -2315,7 +2315,7 @@ mod tests {
         let expected_dir = resolver
             .root()
             .join("target")?
-            .join("oxbook")?
+            .join("runbook")?
             .join("snippets")?;
         assert_eq!(
             parsed_dir.as_path(),
@@ -2325,7 +2325,7 @@ mod tests {
 
         let path_raw = path_value.trim_start_matches("path=");
         let parsed_path = resolver.parse_env_path(resolver.root(), path_raw)?;
-        let expected_path = expected_dir.join("oxbook-snippet.probe")?;
+        let expected_path = expected_dir.join("runbook-snippet.probe")?;
         assert_eq!(
             parsed_path.as_path(),
             expected_path.as_path(),
