@@ -115,6 +115,10 @@ impl RunCoordinator {
         }
     }
 
+    pub fn queued_lines(&self) -> Vec<usize> {
+        self.queue.iter().copied().collect()
+    }
+
     pub fn request_run(&mut self, line: usize) -> RunDecision {
         if let Some(active) = &self.current {
             return RunDecision::Busy {

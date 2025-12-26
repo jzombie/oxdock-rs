@@ -14,6 +14,8 @@ use oxdock_process::{
     SharedOutput,
 };
 
+pub mod session;
+
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -81,12 +83,12 @@ struct RunnerEnv {
 }
 
 #[derive(Default)]
-struct RunnerCache {
+pub(crate) struct RunnerCache {
     envs: HashMap<String, RunnerEnv>,
 }
 
 #[derive(Default)]
-struct RunControl {
+pub(crate) struct RunControl {
     token: CancellationToken,
     active: AtomicBool,
 }
@@ -99,7 +101,7 @@ impl RunControl {
         }
     }
 
-    fn begin(&self) -> RunGuard<'_> {
+    pub(crate) fn begin(&self) -> RunGuard<'_> {
         self.token.reset();
         self.active.store(true, Ordering::SeqCst);
         RunGuard { control: self }
@@ -109,7 +111,7 @@ impl RunControl {
         self.active.store(false, Ordering::SeqCst);
     }
 
-    fn request_cancel(&self) -> bool {
+    pub(crate) fn request_cancel(&self) -> bool {
         if self.active.load(Ordering::SeqCst) {
             self.token.cancel();
             true
@@ -118,12 +120,12 @@ impl RunControl {
         }
     }
 
-    fn token(&self) -> &CancellationToken {
+    pub(crate) fn token(&self) -> &CancellationToken {
         &self.token
     }
 }
 
-struct RunGuard<'a> {
+pub(crate) struct RunGuard<'a> {
     control: &'a RunControl,
 }
 
@@ -131,6 +133,11 @@ impl Drop for RunGuard<'_> {
     fn drop(&mut self) {
         self.control.finish();
     }
+}
+
+pub trait ExecutionOutputObserver: Send + Sync {
+    fn on_stdout(&self, _chunk: &[u8]) {}
+    fn on_stderr(&self, _chunk: &[u8]) {}
 }
 
 pub fn run() -> Result<()> {
@@ -183,6 +190,7 @@ pub fn run() -> Result<()> {
             None,
             emit_block_events.load(Ordering::Relaxed),
             Some(run_control.token()),
+            None,
         )?
     };
     if rendered != initial_contents {
@@ -243,6 +251,7 @@ pub fn run_block(path: &str, line: usize) -> Result<()> {
         &mut last_contents,
         target_line,
         emit_block_events,
+        None,
         None,
     )?;
 
@@ -435,7 +444,7 @@ fn emit_block_events_enabled() -> bool {
     }
 }
 
-fn read_stable_contents(resolver: &PathResolver, path: &GuardedPath) -> Result<String> {
+pub(crate) fn read_stable_contents(resolver: &PathResolver, path: &GuardedPath) -> Result<String> {
     let mut last = read_contents(resolver, path)?;
     for _ in 0..STABLE_READ_RETRIES {
         std::thread::sleep(STABLE_READ_DELAY);
@@ -552,6 +561,7 @@ fn run_watch_loop(
                     None,
                     emit_block_events.load(Ordering::Relaxed),
                     Some(run_control.token()),
+                    None,
                 )?
             };
             if rendered != new_contents {
@@ -621,6 +631,7 @@ fn handle_server_command(
                 target_line,
                 emit_block_events.clone(),
                 Some(run_control.token()),
+                None,
             )?;
 
             if result.is_none() {
@@ -638,7 +649,7 @@ fn handle_server_command(
     Ok(())
 }
 
-fn run_block_in_place(
+pub(crate) fn run_block_in_place(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
     watched: &GuardedPath,
@@ -648,6 +659,7 @@ fn run_block_in_place(
     target_line: usize,
     emit_block_events: Arc<AtomicBool>,
     cancel_token: Option<&CancellationToken>,
+    output_observer: Option<Arc<dyn ExecutionOutputObserver>>,
 ) -> Result<Option<BlockExecution>> {
     let contents = read_stable_contents(resolver, watched)?;
     let fences = parse_fences(&contents);
@@ -683,6 +695,7 @@ fn run_block_in_place(
             Some(&mut callback),
             emit_block_events.load(Ordering::Relaxed),
             cancel_token,
+            output_observer.clone(),
         )?;
 
         if rendered != contents {
@@ -969,6 +982,7 @@ fn render_shell_outputs(
     on_block_run: Option<&mut dyn FnMut(BlockExecution)>,
     emit_block_events: bool,
     cancel_token: Option<&CancellationToken>,
+    output_observer: Option<Arc<dyn ExecutionOutputObserver>>,
 ) -> Result<String> {
     let lines: Vec<&str> = contents.lines().collect();
     use comrak::{Arena, nodes::NodeValue, parse_document};
@@ -1118,9 +1132,13 @@ fn render_shell_outputs(
                 struct TeeWriter {
                     cap: Arc<Mutex<Vec<u8>>>,
                     pipe: Arc<Mutex<dyn std::io::Write + Send>>,
+                    observer: Option<Arc<dyn ExecutionOutputObserver>>,
                 }
                 impl std::io::Write for TeeWriter {
                     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        if let Some(obs) = &self.observer {
+                            obs.on_stdout(buf);
+                        }
                         if let Ok(mut g) = self.cap.lock() {
                             let _ = std::io::Write::write_all(&mut *g, buf);
                         }
@@ -1142,9 +1160,13 @@ fn render_shell_outputs(
 
                 struct CaptureWriter {
                     cap: Arc<Mutex<Vec<u8>>>,
+                    observer: Option<Arc<dyn ExecutionOutputObserver>>,
                 }
                 impl std::io::Write for CaptureWriter {
                     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        if let Some(obs) = &self.observer {
+                            obs.on_stderr(buf);
+                        }
                         if let Ok(mut g) = self.cap.lock() {
                             let _ = std::io::Write::write_all(&mut *g, buf);
                         }
@@ -1161,10 +1183,12 @@ fn render_shell_outputs(
                 let tee = TeeWriter {
                     cap: capture_stdout.clone(),
                     pipe: writer_shared.clone(),
+                    observer: output_observer.clone(),
                 };
                 let stdout_writer: SharedOutput = Arc::new(Mutex::new(tee));
                 let stderr_writer: SharedOutput = Arc::new(Mutex::new(CaptureWriter {
                     cap: capture_stderr.clone(),
+                    observer: output_observer.clone(),
                 }));
 
                 let run_res = run_runner(
@@ -1722,7 +1746,7 @@ fn get_registered_oxfile(language: &str) -> Option<String> {
     clippy::disallowed_methods,
     clippy::collapsible_if
 )]
-fn scan_and_register_runners(workspace_root: &GuardedPath) {
+pub(crate) fn scan_and_register_runners(workspace_root: &GuardedPath) {
     let root = workspace_root.root();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
