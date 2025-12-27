@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use arboard::Clipboard;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use ratatui::Frame;
@@ -13,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Span, Spans, Text};
 use ratatui::widgets::Paragraph;
+use oxdock_fs::{GuardedPath, PathResolver, normalized_path, to_forward_slashes};
 
 use super::config::{SELECTION_BG, SELECTION_FG};
 use super::views::FramedView;
@@ -33,7 +33,8 @@ pub(crate) enum EditorAction {
 }
 
 pub(crate) struct EditorState {
-    pub path: PathBuf,
+    path: GuardedPath,
+    resolver: Arc<PathResolver>,
     pub lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
@@ -123,9 +124,9 @@ impl<'a> FramedView for EditorView<'a> {
 
         let viewport = inner.height as usize;
         self.editor.adjust_scroll(viewport);
-        let visible = self
-            .editor
-            .visible_lines_for_render(viewport, self.running_block, self.can_run_blocks);
+        let visible =
+            self.editor
+                .visible_lines_for_render(viewport, self.running_block, self.can_run_blocks);
         let selection_style = Style::default().fg(SELECTION_FG).bg(SELECTION_BG);
         let mut lines = Vec::with_capacity(visible.lines.len());
         let base_row = self.editor.scroll_row();
@@ -137,8 +138,7 @@ impl<'a> FramedView for EditorView<'a> {
             ));
             let absolute_row = base_row + idx;
             if let Some((start, end)) = self.editor.selection_columns_for_line(absolute_row) {
-                let (before, selected, after) =
-                    split_content_segments(&line.content, start, end);
+                let (before, selected, after) = split_content_segments(&line.content, start, end);
                 if !before.is_empty() {
                     spans.push(Span::raw(before));
                 }
@@ -156,34 +156,31 @@ impl<'a> FramedView for EditorView<'a> {
         frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 
         let mut copy_button_rect: Option<Rect> = None;
-        if let Some((_start, end)) = self.editor.normalized_selection_range() {
-            if !self.editor.mouse_selecting {
-                let end_row = end.row;
-                if end_row >= self.editor.scroll_row {
-                    let rel_row = end_row - self.editor.scroll_row;
-                    if rel_row < visible.lines.len() {
-                        let line = &visible.lines[rel_row];
-                        let prefix = line.prefix_width.min(inner.width as usize) as u16;
-                        let content_col = end.col as u16;
-                        let button_text = "[Copy]";
-                        let button_width = button_text.chars().count() as u16 + 1;
-                        let mut x = inner.x + prefix + content_col;
-                        if x + button_width > inner.x + inner.width {
-                            if inner.x + inner.width > button_width {
-                                x = inner.x + inner.width - button_width;
-                            } else {
-                                x = inner.x;
-                            }
-                        }
-                        let y = inner.y + rel_row as u16;
-                        copy_button_rect = Some(Rect {
-                            x,
-                            y,
-                            width: button_width,
-                            height: 1,
-                        });
+        if let Some((_start, end)) = self.editor.normalized_selection_range()
+            && !self.editor.mouse_selecting
+            && end.row >= self.editor.scroll_row
+        {
+            let rel_row = end.row - self.editor.scroll_row;
+            if let Some(line) = visible.lines.get(rel_row) {
+                let prefix = line.prefix_width.min(inner.width as usize) as u16;
+                let content_col = end.col as u16;
+                let button_text = "[Copy]";
+                let button_width = button_text.chars().count() as u16 + 1;
+                let mut x = inner.x + prefix + content_col;
+                if x + button_width > inner.x + inner.width {
+                    if inner.x + inner.width > button_width {
+                        x = inner.x + inner.width - button_width;
+                    } else {
+                        x = inner.x;
                     }
                 }
+                let y = inner.y + rel_row as u16;
+                copy_button_rect = Some(Rect {
+                    x,
+                    y,
+                    width: button_width,
+                    height: 1,
+                });
             }
         }
         self.editor.render_info = Some(EditorRenderInfo {
@@ -222,24 +219,25 @@ impl<'a> FramedView for EditorView<'a> {
             }
         }
 
-        if let Some(info) = self.editor.render_info.as_ref() {
-            if let Some(rect) = info.copy_button {
-                let txt = Paragraph::new("[Copy]")
-                    .style(Style::default().fg(Color::Black).bg(Color::White))
-                    .alignment(ratatui::layout::Alignment::Center);
-                frame.render_widget(txt, rect);
-            }
+        if let Some(info) = self.editor.render_info.as_ref()
+            && let Some(rect) = info.copy_button
+        {
+            let txt = Paragraph::new("[Copy]")
+                .style(Style::default().fg(Color::Black).bg(Color::White))
+                .alignment(ratatui::layout::Alignment::Center);
+            frame.render_widget(txt, rect);
         }
     }
 }
 
 impl EditorState {
-    pub(crate) fn load(path: PathBuf) -> Result<Self> {
-        let (lines, last_disk_mtime) = Self::read_disk_snapshot(&path)?;
+    pub(crate) fn load(path: GuardedPath, resolver: Arc<PathResolver>) -> Result<Self> {
+        let (lines, last_disk_mtime) = Self::read_disk_snapshot(&resolver, &path)?;
         let code_blocks = Self::compute_code_blocks(&lines);
         let saved_block_hashes = Self::compute_block_hashes(&lines, &code_blocks);
         Ok(Self {
             path,
+            resolver,
             lines,
             cursor_row: 0,
             cursor_col: 0,
@@ -259,14 +257,22 @@ impl EditorState {
         })
     }
 
-    pub(crate) fn read_disk_snapshot(path: &Path) -> Result<(Vec<String>, Option<SystemTime>)> {
-        let contents = match fs::read_to_string(path) {
+    pub(crate) fn read_disk_snapshot(
+        resolver: &PathResolver,
+        path: &GuardedPath,
+    ) -> Result<(Vec<String>, Option<SystemTime>)> {
+        let contents = match resolver.read_to_string(path) {
             Ok(buf) => buf,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(err.into()),
+            Err(err) => {
+                if Self::is_not_found(&err) {
+                    String::new()
+                } else {
+                    return Err(err);
+                }
+            }
         };
         let lines = Self::split_into_lines(contents);
-        let modified = Self::disk_mtime(path);
+        let modified = Self::disk_mtime(resolver, path);
         Ok((lines, modified))
     }
 
@@ -275,15 +281,20 @@ impl EditorState {
             return Ok(None);
         }
 
-        let modified = Self::disk_mtime(&self.path);
+        let modified = Self::disk_mtime(&self.resolver, &self.path);
         if modified == self.last_disk_mtime {
             return Ok(None);
         }
 
-        let contents = match fs::read_to_string(&self.path) {
+        let contents = match self.resolver.read_to_string(&self.path) {
             Ok(buf) => buf,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(err.into()),
+            Err(err) => {
+                if Self::is_not_found(&err) {
+                    String::new()
+                } else {
+                    return Err(err);
+                }
+            }
         };
         let new_lines = Self::split_into_lines(contents);
         if new_lines == self.lines {
@@ -302,6 +313,12 @@ impl EditorState {
         Ok(Some(format!("Reloaded {}", self.short_path())))
     }
 
+    fn is_not_found(err: &anyhow::Error) -> bool {
+        err.downcast_ref::<std::io::Error>()
+            .map(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+            .unwrap_or(false)
+    }
+
     pub(crate) fn take_status_message(&mut self) -> Option<String> {
         self.pending_status.take()
     }
@@ -315,9 +332,10 @@ impl EditorState {
 
     pub(crate) fn save(&mut self) -> Result<()> {
         let contents = self.lines.join("\n");
-        fs::write(&self.path, contents)?;
+        self.resolver
+            .write_file(&self.path, contents.as_bytes())?;
         self.dirty = false;
-        self.last_disk_mtime = Self::disk_mtime(&self.path);
+        self.last_disk_mtime = Self::disk_mtime(&self.resolver, &self.path);
         self.ensure_code_blocks();
         let new_hashes = Self::compute_block_hashes(&self.lines, &self.code_blocks);
         let mut changed = Vec::new();
@@ -335,14 +353,13 @@ impl EditorState {
 
     pub(crate) fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Result<EditorAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char(ch) = key.code {
-                if matches!(ch, 's' | 'S') {
-                    self.save()?;
-                    self.pending_status = Some(format!("Saved {}", self.short_path()));
-                    return Ok(EditorAction::Continue);
-                }
-            }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && let KeyCode::Char(ch) = key.code
+            && matches!(ch, 's' | 'S')
+        {
+            self.save()?;
+            self.pending_status = Some(format!("Saved {}", self.short_path()));
+            return Ok(EditorAction::Continue);
         }
         if let Some((_start, _end)) = self.normalized_selection_range() {
             match key.code {
@@ -402,20 +419,27 @@ impl EditorState {
         self.code_blocks
             .iter()
             .find(|block| {
-                !block.is_generated_output()
-                    && row >= block.fence_line
-                    && row <= block.end_line
+                !block.is_generated_output() && row >= block.fence_line && row <= block.end_line
             })
             .map(|block| block.fence_line + 1)
     }
 
     pub(crate) fn short_path(&self) -> String {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(stripped) = self.path.strip_prefix(&cwd) {
-                return stripped.display().to_string();
-            }
+        let path = self.path.as_path();
+
+        if let Some(workspace_root) = self.resolver.workspace_root()
+            && let Ok(stripped) = path.strip_prefix(workspace_root.as_path())
+        {
+            let rel = stripped.to_string_lossy();
+            return to_forward_slashes(rel.as_ref());
         }
-        self.path.display().to_string()
+
+        if let Ok(stripped) = path.strip_prefix(self.resolver.root().as_path()) {
+            let rel = stripped.to_string_lossy();
+            return to_forward_slashes(rel.as_ref());
+        }
+
+        normalized_path(&self.path)
     }
 
     pub(crate) fn cursor_col(&self) -> usize {
@@ -447,10 +471,7 @@ impl EditorState {
         if viewport_height == 0 || delta == 0 {
             return;
         }
-        let max_scroll = self
-            .lines
-            .len()
-            .saturating_sub(viewport_height.max(1));
+        let max_scroll = self.lines.len().saturating_sub(viewport_height.max(1));
         if delta > 0 {
             let delta = delta as usize;
             self.scroll_row = (self.scroll_row + delta).min(max_scroll);
@@ -577,11 +598,7 @@ impl EditorState {
         let absolute_row = self.scroll_row + rel_y;
         let row_idx = absolute_row.min(self.lines.len().saturating_sub(1));
         let prefix_width = info.prefix_width;
-        let col = if rel_x < prefix_width {
-            0
-        } else {
-            rel_x - prefix_width
-        };
+        let col = rel_x.saturating_sub(prefix_width);
         let line_len = self.lines[row_idx].len();
         let col_idx = col.min(line_len);
         Some(TextPosition::new(row_idx, col_idx))
@@ -652,11 +669,7 @@ impl EditorState {
                 buffer.push('\n');
             }
         }
-        if wrote_any {
-            Some(buffer)
-        } else {
-            None
-        }
+        if wrote_any { Some(buffer) } else { None }
     }
 
     pub(crate) fn copy_selection_to_clipboard(&self, clipboard: &mut Clipboard) -> Result<bool> {
@@ -729,10 +742,6 @@ impl EditorState {
         self.clear_selection();
         self.dirty = true;
         self.invalidate_layout();
-    }
-
-    pub(crate) fn begin_drag_scroll(&mut self, direction: isize) {
-        self.drag_scroll = direction;
     }
 
     pub(crate) fn normalized_selection_range(&self) -> Option<(TextPosition, TextPosition)> {
@@ -820,16 +829,16 @@ impl EditorState {
     pub(crate) fn update_drag_selection_edge(&mut self, viewport: usize, upwards: bool) {
         if upwards {
             let head_row = self.scroll_row;
-            let col = self.cursor_col.min(
-                self.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
-            );
+            let col = self
+                .cursor_col
+                .min(self.lines.get(head_row).map(|l| l.len()).unwrap_or(0));
             self.update_mouse_selection(TextPosition::new(head_row, col));
         } else {
             let head_row = self.scroll_row.saturating_add(viewport.saturating_sub(1));
             let head_row = head_row.min(self.lines.len().saturating_sub(1));
-            let col = self.cursor_col.min(
-                self.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
-            );
+            let col = self
+                .cursor_col
+                .min(self.lines.get(head_row).map(|l| l.len()).unwrap_or(0));
             self.update_mouse_selection(TextPosition::new(head_row, col));
         }
     }
@@ -862,8 +871,9 @@ impl EditorState {
         lines
     }
 
-    fn disk_mtime(path: &Path) -> Option<SystemTime> {
-        fs::metadata(path)
+    fn disk_mtime(resolver: &PathResolver, path: &GuardedPath) -> Option<SystemTime> {
+        resolver
+            .metadata(path)
             .ok()
             .and_then(|meta| meta.modified().ok())
     }
@@ -932,13 +942,13 @@ impl EditorState {
     }
 
     fn delete_forward(&mut self) {
-        if let Some(line) = self.lines.get_mut(self.cursor_row) {
-            if self.cursor_col < line.len() {
-                line.remove(self.cursor_col);
-                self.dirty = true;
-                self.invalidate_layout();
-                return;
-            }
+        if let Some(line) = self.lines.get_mut(self.cursor_row)
+            && self.cursor_col < line.len()
+        {
+            line.remove(self.cursor_col);
+            self.dirty = true;
+            self.invalidate_layout();
+            return;
         }
         if self.cursor_row + 1 < self.lines.len() {
             let next_line = self.lines.remove(self.cursor_row + 1);

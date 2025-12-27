@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
-use crate::{run, run_block};
 use crate::tui;
+use crate::{run, run_block};
 
 #[derive(Debug, Clone)]
 pub enum LaunchMode {
@@ -26,9 +26,7 @@ impl LaunchMode {
                     mode = LaunchMode::Tui;
                 }
                 "--run-block" | "run-block" => {
-                    let path = iter
-                        .next()
-                        .context("expected path after --run-block")?;
+                    let path = iter.next().context("expected path after --run-block")?;
                     let line = iter
                         .next()
                         .context("expected line number after --run-block")?

@@ -55,7 +55,7 @@ pub enum StopCommand {
     NoActiveRun,
     WrongRun { active_line: usize },
     AlreadyStopping,
-    QueueUntilStart { token: RunToken },
+    QueueUntilStart,
     SendNow { token: RunToken },
 }
 
@@ -172,25 +172,23 @@ impl RunCoordinator {
             ActiveState::Started => StopCommand::SendNow {
                 token: active.token,
             },
-            ActiveState::AwaitingStart => StopCommand::QueueUntilStart {
-                token: active.token,
-            },
+            ActiveState::AwaitingStart => StopCommand::QueueUntilStart,
         }
     }
 
     pub fn confirm_stop_sent(&mut self, token: RunToken) {
-        if let Some(active) = self.current.as_mut() {
-            if active.token == token {
-                active.stop_sent = true;
-            }
+        if let Some(active) = self.current.as_mut()
+            && active.token == token
+        {
+            active.stop_sent = true;
         }
     }
 
     pub fn stop_failed(&mut self, token: RunToken) {
-        if let Some(active) = self.current.as_mut() {
-            if active.token == token {
-                active.stop_sent = false;
-            }
+        if let Some(active) = self.current.as_mut()
+            && active.token == token
+        {
+            active.stop_sent = false;
         }
     }
 
@@ -241,13 +239,11 @@ impl RunCoordinator {
     }
 
     fn prepare_next_internal(&mut self) -> Option<RunRequest> {
-        while let Some(line) = self.queue.pop_front() {
-            self.queued.remove(&line);
-            let token = self.next_token();
-            self.current = Some(ActiveRun::new(line, token));
-            return Some(RunRequest { line, token });
-        }
-        None
+        let line = self.queue.pop_front()?;
+        self.queued.remove(&line);
+        let token = self.next_token();
+        self.current = Some(ActiveRun::new(line, token));
+        Some(RunRequest { line, token })
     }
 
     fn next_token(&mut self) -> RunToken {

@@ -14,14 +14,15 @@ use oxdock_process::{
     SharedOutput,
 };
 
+pub mod cli;
 pub mod session;
 pub mod tui;
-pub mod cli;
 
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Cursor, IsTerminal, Stdout, Write};
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -62,7 +63,6 @@ struct OutputBlock {
     stdout: String,
     stderr: String,
     stdout_newlines: Option<usize>,
-    stderr_newlines: Option<usize>,
 }
 const STDERR_MARKER: &str = "<!-- runbook-output:stderr -->";
 
@@ -133,9 +133,36 @@ fn mark_consumed(consumed: &mut [bool], start: usize, end: usize) {
     if consumed.is_empty() {
         return;
     }
-    let end = end.min(consumed.len());
-    for idx in start.min(end)..end {
-        consumed[idx] = true;
+    let len = consumed.len();
+    let start_idx = start.min(end).min(len);
+    let end_idx = end.min(len);
+    if start_idx < end_idx {
+        consumed[start_idx..end_idx].fill(true);
+    }
+}
+
+fn push_unconsumed_lines(
+    consumed: &[bool],
+    lines: &[&str],
+    range: Range<usize>,
+    out: &mut Vec<String>,
+) {
+    if consumed.is_empty() || lines.is_empty() {
+        return;
+    }
+    let len = consumed.len().min(lines.len());
+    let start = range.start.min(range.end).min(len);
+    let end = range.end.min(len);
+    if start >= end {
+        return;
+    }
+    for (flag, line) in consumed[start..end]
+        .iter()
+        .zip(&lines[start..end])
+    {
+        if !*flag {
+            out.push((*line).to_string());
+        }
     }
 }
 
@@ -153,9 +180,10 @@ fn take_detached_output_block(
             continue;
         }
         if let Some(block) = parse_output_block(lines, idx) {
-            let matches = block.code_hash.as_deref().map_or(false, |stored| {
-                stored == code_hash || stored == short
-            });
+            let matches = block
+                .code_hash
+                .as_deref()
+                .is_some_and(|stored| stored == code_hash || stored == short);
             if matches {
                 mark_consumed(consumed, block.start_index, block.end_index);
                 return Some(block);
@@ -171,7 +199,6 @@ fn take_detached_output_block(
 pub(crate) struct RunGuard<'a> {
     control: &'a RunControl,
 }
-
 impl Drop for RunGuard<'_> {
     fn drop(&mut self) {
         self.control.finish();
@@ -500,6 +527,7 @@ pub(crate) fn read_stable_contents(resolver: &PathResolver, path: &GuardedPath) 
     Ok(last)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_watch_loop(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
@@ -617,6 +645,7 @@ fn run_watch_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_server_commands(
     command_rx: Option<&mpsc::Receiver<ServerCommand>>,
     resolver: &PathResolver,
@@ -646,6 +675,7 @@ fn drain_server_commands(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_server_command(
     command: ServerCommand,
     resolver: &PathResolver,
@@ -692,6 +722,7 @@ fn handle_server_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_block_in_place(
     resolver: &PathResolver,
     workspace_root: &GuardedPath,
@@ -1014,6 +1045,7 @@ fn split_leading_ws(line: &str) -> (usize, &str) {
     (count, &line[count..])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_shell_outputs(
     contents: &str,
     resolver: &PathResolver,
@@ -1076,20 +1108,26 @@ fn render_shell_outputs(
         let start_clamped = std::cmp::max(start, cursor);
 
         // Copy lines up to the fence
-        for ln in cursor..start_clamped {
-            if !consumed_lines.get(ln).copied().unwrap_or(false) {
-                out_lines.push(lines[ln].to_string());
-            }
-        }
+        let copy_end = start_clamped.min(lines.len());
+        let copy_start = cursor.min(copy_end);
+        push_unconsumed_lines(
+            &consumed_lines,
+            &lines,
+            copy_start..copy_end,
+            &mut out_lines,
+        );
 
         // Copy the original fence lines (clamped)
         let fence_end = end.min(lines.len().saturating_sub(1));
         if fence_end >= start_clamped {
-            for ln in start_clamped..=fence_end {
-                if !consumed_lines.get(ln).copied().unwrap_or(false) {
-                    out_lines.push(lines[ln].to_string());
-                }
-            }
+            let end_exclusive = (fence_end + 1).min(lines.len());
+            let slice_start = start_clamped.min(end_exclusive);
+            push_unconsumed_lines(
+                &consumed_lines,
+                &lines,
+                slice_start..end_exclusive,
+                &mut out_lines,
+            );
         }
 
         // Determine existing output block after the fence
@@ -1106,7 +1144,7 @@ fn render_shell_outputs(
 
         let block_start_line = start + 1;
         let block_end_line = end + 1;
-        let forced = forced_lines.map_or(false, |set| {
+        let forced = forced_lines.is_some_and(|set| {
             (block_start_line..=block_end_line).any(|ln| set.contains(&ln))
         });
 
@@ -1159,7 +1197,7 @@ fn render_shell_outputs(
             }
 
             if should_run {
-                if cancel_token.map_or(false, |token| token.is_cancelled()) {
+                if cancel_token.is_some_and(|token| token.is_cancelled()) {
                     let output_block = format_output_block(&code_hash, "", "execution cancelled");
                     out_lines.extend(output_block);
                     cursor = adjacent_end.unwrap_or(fence_end + 1);
@@ -1383,60 +1421,42 @@ fn render_shell_outputs(
                 let output = format!("error: no runner registered for language '{}'", lang);
                 let output_block = format_output_block(&code_hash, "", &output);
                 out_lines.extend(output_block);
-                if forced {
-                    if let Some(cb) = on_block_run.as_mut() {
-                        cb(BlockExecution {
-                            start_line: block_start_line,
-                            end_line: block_end_line,
-                            success: false,
-                            stdout: String::new(),
-                            stderr: output.clone(),
-                        });
-                    }
-                }
-            } else if forced {
-                if let Some(cb) = on_block_run.as_mut() {
+                if forced && let Some(cb) = on_block_run.as_mut() {
                     cb(BlockExecution {
                         start_line: block_start_line,
                         end_line: block_end_line,
                         success: false,
                         stdout: String::new(),
-                        stderr: String::from("no runner configured for anonymous fence"),
+                        stderr: output.clone(),
                     });
                 }
+            } else if forced && let Some(cb) = on_block_run.as_mut() {
+                cb(BlockExecution {
+                    start_line: block_start_line,
+                    end_line: block_end_line,
+                    success: false,
+                    stdout: String::new(),
+                    stderr: String::from("no runner configured for anonymous fence"),
+                });
             }
             cursor = adjacent_end.unwrap_or(fence_end + 1);
         }
     }
 
     // Append remaining lines
-    for ln in cursor..lines.len() {
-        if !consumed_lines.get(ln).copied().unwrap_or(false) {
-            out_lines.push(lines[ln].to_string());
-        }
-    }
+    let tail_start = cursor.min(lines.len());
+    push_unconsumed_lines(
+        &consumed_lines,
+        &lines,
+        tail_start..lines.len(),
+        &mut out_lines,
+    );
 
     let mut rendered = out_lines.join("\n");
     if contents.ends_with('\n') {
         rendered.push('\n');
     }
     Ok(rendered)
-}
-
-fn is_fence_close(line: &str, fence_char: char, fence_len: usize) -> bool {
-    let trimmed = line.trim_end();
-    let mut count = 0;
-    for ch in trimmed.chars() {
-        if ch == fence_char {
-            count += 1;
-        } else {
-            break;
-        }
-    }
-    if count < fence_len {
-        return false;
-    }
-    trimmed[count..].trim().is_empty()
 }
 
 #[allow(unused_assignments)]
@@ -1488,7 +1508,7 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     if combined_hash.is_none() {
         combined_hash = inline_meta.combined_hash;
     }
-    let mut stdout_newlines = inline_meta.newline_count;
+    let stdout_newlines = inline_meta.newline_count;
 
     let is_text_output = inline_meta.language.as_deref() == Some("text");
     if !has_begin_marker
@@ -1504,7 +1524,6 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     let (stdout, mut idx) = parse_fenced_block(lines, idx)?;
     let mut stderr = String::new();
     let mut end_index = idx;
-    let mut stderr_newlines = None;
 
     // Look for an optional stderr block. In the legacy format this was
     // prefixed with a comment marker; the compact format omits the marker.
@@ -1523,7 +1542,6 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
         {
             let stderr_meta = parse_inline_meta(lines[stderr_start]);
             if stderr_meta.language.as_deref() == Some("text") {
-                stderr_newlines = stderr_meta.newline_count;
                 stderr = parsed_stderr;
                 end_index = next_idx;
                 idx = next_idx;
@@ -1535,7 +1553,6 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
     {
         let stderr_meta = parse_inline_meta(lines[peek_idx]);
         if stderr_meta.language.as_deref() == Some("text") && stderr_meta.saw_runbook {
-            stderr_newlines = stderr_meta.newline_count;
             stderr = parsed_stderr;
             end_index = next_idx;
             idx = next_idx;
@@ -1563,7 +1580,6 @@ fn parse_output_block(lines: &[&str], start: usize) -> Option<OutputBlock> {
         stdout,
         stderr,
         stdout_newlines,
-        stderr_newlines,
     })
 }
 
@@ -1628,8 +1644,10 @@ fn parse_inline_meta(line: &str) -> InlineFenceMeta {
         return InlineFenceMeta::default();
     }
     let mut tokens = trimmed.trim_start_matches('`').split_whitespace();
-    let mut meta = InlineFenceMeta::default();
-    meta.language = tokens.next().map(|tok| tok.to_string());
+    let mut meta = InlineFenceMeta {
+        language: tokens.next().map(|tok| tok.to_string()),
+        ..InlineFenceMeta::default()
+    };
     for token in tokens {
         if token == "runbook" {
             meta.saw_runbook = true;
@@ -1639,10 +1657,10 @@ fn parse_inline_meta(line: &str) -> InlineFenceMeta {
             meta.code_hash = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("hash=") {
             meta.combined_hash = Some(value.to_string());
-        } else if let Some(value) = token.strip_prefix("nl=") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                meta.newline_count = Some(parsed);
-            }
+        } else if let Some(value) = token.strip_prefix("nl=")
+            && let Ok(parsed) = value.parse::<usize>()
+        {
+            meta.newline_count = Some(parsed);
         }
     }
     meta
@@ -1713,15 +1731,11 @@ fn normalize_output(output: &str) -> String {
 }
 
 fn count_trailing_newlines(output: &str) -> usize {
-    output
-        .chars()
-        .rev()
-        .take_while(|ch| *ch == '\n')
-        .count()
+    output.chars().rev().take_while(|ch| *ch == '\n').count()
 }
 
 fn restore_with_trailing_newlines(value: &str, newline_count: Option<usize>) -> String {
-    let extra = newline_count.unwrap_or_else(|| if value.is_empty() { 0 } else { 1 });
+    let extra = newline_count.unwrap_or(if value.is_empty() { 0 } else { 1 });
     if extra == 0 {
         return value.to_string();
     }
@@ -2381,17 +2395,7 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
         };
 
         run_runner(
-            &resolver,
-            &workspace,
-            &workspace,
-            &mut cache,
-            &spec,
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
+            &resolver, &workspace, &workspace, &mut cache, &spec, "", None, None, None, None, None,
             None,
         )
         .context("execute probe runner")?;
@@ -2575,7 +2579,10 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             "cat block should succeed: {}",
             execution.stderr
         );
-        assert_eq!(execution.stdout, "alpha\n", "stdin should include previous stdout");
+        assert_eq!(
+            execution.stdout, "alpha\n",
+            "stdin should include previous stdout"
+        );
         assert!(
             last_contents.contains("```bash runbook\ncat\n```"),
             "cat block should remain in document"
@@ -2685,7 +2692,10 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             "python block should succeed: {}",
             execution.stderr
         );
-        assert_eq!(execution.stdout, "bravo\n", "stdin should include newline for input()");
+        assert_eq!(
+            execution.stdout, "bravo\n",
+            "stdin should include newline for input()"
+        );
         assert!(
             last_contents.contains("python3 -c 'print(input())'"),
             "python block should remain in document"
@@ -2736,9 +2746,7 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let appended = format!(
-            "{rendered}\n\n```bash runbook\ncat\n```\n"
-        );
+        let appended = format!("{rendered}\n\n```bash runbook\ncat\n```\n");
         resolver
             .write_file(&watched, appended.as_bytes())
             .context("append cat block")?;
@@ -2771,8 +2779,7 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             execution.stderr
         );
         assert_eq!(
-            execution.stdout,
-            "Hello world\n",
+            execution.stdout, "Hello world\n",
             "stdin should include previous stdout even when block appended"
         );
         Ok(())

@@ -2,10 +2,13 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use arboard::Clipboard;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyEvent, KeyEventKind, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyEvent, KeyEventKind,
+        MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -15,7 +18,9 @@ use ratatui::layout::{Constraint, Direction, Layout};
 
 use crate::session::{SessionConfig, SessionEvent, SessionHandle, SessionLogSource, start_session};
 
-use super::clipboard::{is_copy_shortcut, is_paste_shortcut, log_key_event, log_selection_state, run_copy_action};
+use super::clipboard::{
+    is_copy_shortcut, is_paste_shortcut, log_key_event, log_selection_state, run_copy_action,
+};
 use super::config::{MAX_LOG_LINES, TuiConfig};
 use super::editor::{EditorAction, EditorState, EditorView};
 use super::keymap::KeyBindings;
@@ -23,10 +28,16 @@ use super::layout::UiLayout;
 use super::logs::{LogRecord, LogScrollState, LogSource, LogsView, push_log_line, trim_logs};
 use super::utils::scroll_delta_for;
 use super::views::{ControlsView, FramedView, HeaderView, StatusView};
+use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
 
 pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
     let config = TuiConfig::default();
-    let target_path = resolve_target(&cli_args);
+    let workspace_root = discover_workspace_root().context("resolve workspace root")?;
+    let resolver = Arc::new(
+        PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
+            .context("workspace resolver")?,
+    );
+    let target_path = resolve_target(&cli_args, &resolver)?;
     let session_target = cli_args
         .first()
         .cloned()
@@ -78,7 +89,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     }
                     SessionEvent::RunCompleted { line, success } => {
                         running_line = None;
-                        if let UiMode::Editor(editor) = &mut mode {
+                        if let Some(editor) = mode.editor_mut() {
                             editor.mark_disk_stale();
                         }
                         if success {
@@ -101,7 +112,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     }
                     SessionEvent::RunFailed { line, error } => {
                         running_line = None;
-                        if let UiMode::Editor(editor) = &mut mode {
+                        if let Some(editor) = mode.editor_mut() {
                             editor.mark_disk_stale();
                         }
                         status = format!("Block at line {} failed", line);
@@ -184,26 +195,27 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                 }
             }
 
-            if let UiMode::Editor(editor) = &mut mode {
-                if let Some(message) = editor.sync_with_disk()? {
-                    status = message;
-                }
+            if let Some(editor) = mode.editor_mut()
+                && let Some(message) = editor.sync_with_disk()?
+            {
+                status = message;
             }
 
-            if let UiMode::Editor(editor) = &mut mode {
-                if editor.mouse_selecting && editor.drag_scroll != 0 {
-                    let viewport = editor
-                        .render_info
-                        .as_ref()
-                        .map(|i| i.inner_height as usize)
-                        .or_else(|| ui_layout.editor_area.map(|r| r.height as usize))
-                        .unwrap_or(1);
-                    editor.scroll_by(editor.drag_scroll, viewport);
-                    if editor.drag_scroll < 0 {
-                        editor.update_drag_selection_edge(viewport, true);
-                    } else {
-                        editor.update_drag_selection_edge(viewport, false);
-                    }
+            if let Some(editor) = mode.editor_mut()
+                && editor.mouse_selecting
+                && editor.drag_scroll != 0
+            {
+                let viewport = editor
+                    .render_info
+                    .as_ref()
+                    .map(|i| i.inner_height as usize)
+                    .or_else(|| ui_layout.editor_area.map(|r| r.height as usize))
+                    .unwrap_or(1);
+                editor.scroll_by(editor.drag_scroll, viewport);
+                if editor.drag_scroll < 0 {
+                    editor.update_drag_selection_edge(viewport, true);
+                } else {
+                    editor.update_drag_selection_edge(viewport, false);
                 }
             }
 
@@ -252,7 +264,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                     }
                     UiMode::Editor(editor) => {
                         let mut editor_view =
-                            EditorView::new(editor, running_line_idx, can_run_blocks);
+                            EditorView::new(editor.as_mut(), running_line_idx, can_run_blocks);
                         editor_view.render(f, mid[0]);
                         ui_layout_state.editor_area = Some(mid[0]);
                     }
@@ -273,35 +285,31 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                         if matches!(
                             mouse_event.kind,
                             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                        ) {
-                            if ui_layout.logs_contains(mouse_event.column, mouse_event.row) {
-                                let delta = scroll_delta_for(mouse_event.kind, &config);
-                                log_scroll_state.scroll(delta);
-                                handled = true;
-                            }
+                        ) && ui_layout.logs_contains(mouse_event.column, mouse_event.row)
+                        {
+                            let delta = scroll_delta_for(mouse_event.kind, &config);
+                            log_scroll_state.scroll(delta);
+                            handled = true;
                         }
                         if handled {
                             continue;
                         }
-                        if let UiMode::Editor(editor) = &mut mode {
+                        if let Some(editor) = mode.editor_mut() {
                             match mouse_event.kind {
                                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                                     if ui_layout
                                         .editor_contains(mouse_event.column, mouse_event.row)
+                                        && let Some(info) = editor.render_info.as_ref()
                                     {
-                                        if let Some(info) = editor.render_info.as_ref() {
-                                            let viewport = info.inner_height as usize;
-                                            let delta =
-                                                scroll_delta_for(mouse_event.kind, &config);
-                                            editor.scroll_by(delta, viewport);
-                                        }
+                                        let viewport = info.inner_height as usize;
+                                        let delta = scroll_delta_for(mouse_event.kind, &config);
+                                        editor.scroll_by(delta, viewport);
                                     }
                                 }
                                 MouseEventKind::Down(MouseButton::Left) => {
-                                    if editor.hit_test_copy_button(
-                                        mouse_event.column,
-                                        mouse_event.row,
-                                    ) {
+                                    if editor
+                                        .hit_test_copy_button(mouse_event.column, mouse_event.row)
+                                    {
                                         let s = run_copy_action(editor, &logs, &mut clipboard);
                                         status = s;
                                         continue;
@@ -322,20 +330,14 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                         }
                                     }
 
-                                    if let Some(position) = editor
-                                        .text_position_from_point(
-                                            mouse_event.column,
-                                            mouse_event.row,
-                                        )
-                                    {
+                                    if let Some(position) = editor.text_position_from_point(
+                                        mouse_event.column,
+                                        mouse_event.row,
+                                    ) {
                                         editor.clear_selection();
                                         editor.drag_scroll = 0;
                                         editor.begin_mouse_selection(position);
-                                        log_selection_state(
-                                            editor,
-                                            &logs,
-                                            "mouse-down selection",
-                                        );
+                                        log_selection_state(editor, &logs, "mouse-down selection");
                                     } else {
                                         editor.clear_selection();
                                         editor.mouse_selecting = false;
@@ -348,12 +350,10 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
                                     if editor.mouse_selecting {
-                                        if let Some(position) = editor
-                                            .text_position_from_point(
-                                                mouse_event.column,
-                                                mouse_event.row,
-                                            )
-                                        {
+                                        if let Some(position) = editor.text_position_from_point(
+                                            mouse_event.column,
+                                            mouse_event.row,
+                                        ) {
                                             editor.update_mouse_selection(position);
                                             editor.drag_scroll = 0;
                                             log_selection_state(
@@ -375,10 +375,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                 >= info.inner_y + info.inner_height
                                             {
                                                 editor.drag_scroll = 1;
-                                                editor.update_drag_selection_edge(
-                                                    viewport,
-                                                    false,
-                                                );
+                                                editor.update_drag_selection_edge(viewport, false);
                                                 log_selection_state(
                                                     editor,
                                                     &logs,
@@ -391,11 +388,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 MouseEventKind::Up(MouseButton::Left) => {
                                     if editor.mouse_selecting {
                                         editor.end_mouse_selection();
-                                        log_selection_state(
-                                            editor,
-                                            &logs,
-                                            "mouse-up selection",
-                                        );
+                                        log_selection_state(editor, &logs, "mouse-up selection");
                                     }
                                 }
                                 _ => {}
@@ -416,11 +409,13 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     &session_handle,
                                     &logs,
                                     &target_path,
+                                    &resolver,
                                 ) {
                                     break Ok(());
                                 }
                             }
                             UiMode::Editor(editor) => {
+                                let editor = editor.as_mut();
                                 if handle_editor_shortcuts(
                                     key_event,
                                     editor,
@@ -437,16 +432,16 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 let action = editor.handle_key(key_event)?;
                                 let message = editor.take_status_message();
                                 let changed_blocks = editor.take_recently_saved_blocks();
-                                if !changed_blocks.is_empty() {
-                                    if let Err(err) = session_handle.enqueue_blocks(changed_blocks)
-                                    {
-                                        push_log_line(
-                                            &logs,
-                                            LogSource::Stderr,
-                                            &format!("queue update failed: {}", err),
-                                            MAX_LOG_LINES,
-                                        );
-                                    }
+                                if !changed_blocks.is_empty()
+                                    && let Err(err) =
+                                        session_handle.enqueue_blocks(changed_blocks)
+                                {
+                                    push_log_line(
+                                        &logs,
+                                        LogSource::Stderr,
+                                        &format!("queue update failed: {}", err),
+                                        MAX_LOG_LINES,
+                                    );
                                 }
                                 if matches!(action, EditorAction::Exit) {
                                     let closed = editor.short_path();
@@ -479,14 +474,17 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
     result
 }
 
-fn resolve_target(cli_args: &[String]) -> std::path::PathBuf {
-    if let Some(first) = cli_args.first() {
-        std::path::PathBuf::from(first)
-    } else {
-        std::path::PathBuf::from("README.md")
-    }
+fn resolve_target(cli_args: &[String], resolver: &PathResolver) -> Result<GuardedPath> {
+    let raw = cli_args
+        .first()
+        .map(|s| s.as_str())
+        .unwrap_or("README.md");
+    resolver
+        .parse_env_path(resolver.root(), raw)
+        .with_context(|| format!("resolve editor target {raw}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_dashboard_keys(
     key_event: KeyEvent,
     status: &mut String,
@@ -494,16 +492,17 @@ fn handle_dashboard_keys(
     keymap: &KeyBindings,
     session_handle: &SessionHandle,
     logs: &Arc<Mutex<VecDeque<LogRecord>>>,
-    target_path: &std::path::PathBuf,
+    target_path: &GuardedPath,
+    resolver: &Arc<PathResolver>,
 ) -> bool {
     if keymap.dashboard_quit.matches(&key_event) {
         let _ = session_handle.shutdown();
         return true;
     } else if keymap.dashboard_open_editor.matches(&key_event) {
-        match EditorState::load(target_path.clone()) {
+        match EditorState::load(target_path.clone(), Arc::clone(resolver)) {
             Ok(editor) => {
                 *status = format!("Editing {}", editor.short_path());
-                *mode = UiMode::Editor(editor);
+                *mode = UiMode::Editor(Box::new(editor));
             }
             Err(err) => {
                 push_log_line(
@@ -618,10 +617,7 @@ fn run_block_via_session(
                     push_log_line(
                         logs,
                         LogSource::Stderr,
-                        &format!(
-                            "stop request failed at line {}: {}",
-                            line_number, err
-                        ),
+                        &format!("stop request failed at line {}: {}", line_number, err),
                         MAX_LOG_LINES,
                     );
                     *status = String::from("Stop request failed; check logs");
@@ -658,15 +654,15 @@ fn run_block_via_session(
             .into_iter()
             .filter(|line| *line != line_number)
             .collect();
-        if !other_blocks.is_empty() {
-            if let Err(err) = session_handle.enqueue_blocks(other_blocks) {
-                push_log_line(
-                    logs,
-                    LogSource::Stderr,
-                    &format!("queue update failed: {}", err),
-                    MAX_LOG_LINES,
-                );
-            }
+        if !other_blocks.is_empty()
+            && let Err(err) = session_handle.enqueue_blocks(other_blocks)
+        {
+            push_log_line(
+                logs,
+                LogSource::Stderr,
+                &format!("queue update failed: {}", err),
+                MAX_LOG_LINES,
+            );
         }
         push_log_line(
             logs,
@@ -699,5 +695,14 @@ fn run_block_via_session(
 
 enum UiMode {
     Dashboard,
-    Editor(EditorState),
+    Editor(Box<EditorState>),
+}
+
+impl UiMode {
+    fn editor_mut(&mut self) -> Option<&mut EditorState> {
+        match self {
+            UiMode::Dashboard => None,
+            UiMode::Editor(editor) => Some(editor.as_mut()),
+        }
+    }
 }

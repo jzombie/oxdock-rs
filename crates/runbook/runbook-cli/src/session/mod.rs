@@ -348,7 +348,7 @@ impl SessionState {
             StopCommand::AlreadyStopping => {
                 let _ = self.event_tx.send(SessionEvent::StopIgnored { line });
             }
-            StopCommand::QueueUntilStart { .. } => {
+            StopCommand::QueueUntilStart => {
                 let _ = self.event_tx.send(SessionEvent::StopQueued { line });
             }
             StopCommand::SendNow { token } => {
@@ -394,8 +394,8 @@ impl SessionState {
                     &workspace_root,
                     &watched,
                     &source_dir,
-                    &mut *cache_guard,
-                    &mut *last_guard,
+                    &mut cache_guard,
+                    &mut last_guard,
                     line,
                     emit_block_events,
                     Some(&cancel_token),
@@ -548,7 +548,7 @@ impl SessionOutputObserver {
         let mut guard = buffer.lock().unwrap();
         guard.extend_from_slice(chunk);
         while let Some(pos) = guard.iter().position(|&b| b == b'\n') {
-            let mut line = guard.drain(..=pos).collect::<Vec<u8>>();
+            let line = guard.drain(..=pos).collect::<Vec<u8>>();
             let message = String::from_utf8_lossy(&line).to_string();
             let _ = self.tx.send(SessionEvent::Log { source, message });
         }

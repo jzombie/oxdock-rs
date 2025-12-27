@@ -539,10 +539,10 @@ impl BackgroundHandle for ChildHandle {
         if self.child.try_wait()?.is_none() {
             #[cfg(unix)]
             {
-                if let Err(err) = kill_process_group(self.pgid) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(anyhow!(err));
-                    }
+                match kill_process_group(self.pgid) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(anyhow!(err)),
                 }
             }
             let _ = self.child.kill();

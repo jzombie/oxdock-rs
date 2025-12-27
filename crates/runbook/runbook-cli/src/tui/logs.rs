@@ -77,21 +77,21 @@ impl<'a> FramedView for LogsView<'a> {
         };
         frame.render_widget(Paragraph::new(text), inner);
 
-        if let Some(label) = self.scroll.indicator_text() {
-            if inner.width > 0 {
-                let width = inner.width.min(16);
-                let x = inner.x + inner.width - width;
-                let rect = Rect {
-                    x,
-                    y: inner.y,
-                    width,
-                    height: 1,
-                };
-                let indicator = Paragraph::new(label)
-                    .alignment(ratatui::layout::Alignment::Right)
-                    .style(Style::default().fg(Color::DarkGray));
-                frame.render_widget(indicator, rect);
-            }
+        if let Some(label) = self.scroll.indicator_text()
+            && inner.width > 0
+        {
+            let width = inner.width.min(16);
+            let x = inner.x + inner.width - width;
+            let rect = Rect {
+                x,
+                y: inner.y,
+                width,
+                height: 1,
+            };
+            let indicator = Paragraph::new(label)
+                .alignment(ratatui::layout::Alignment::Right)
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(indicator, rect);
         }
     }
 }
@@ -199,7 +199,11 @@ pub(crate) fn logs_to_text_window(
     let clamped_start = start.min(entries.len());
     let end = (clamped_start + max_lines).min(entries.len());
     let mut lines = Vec::new();
-    for record in entries.iter().skip(clamped_start).take(end.saturating_sub(clamped_start)) {
+    for record in entries
+        .iter()
+        .skip(clamped_start)
+        .take(end.saturating_sub(clamped_start))
+    {
         let mut spans = Vec::new();
         spans.push(Span::styled(record.source.label(), record.source.style()));
         spans.push(Span::raw(" "));
@@ -225,7 +229,7 @@ fn parse_ansi_spans(input: &str) -> Vec<Span<'static>> {
                 chars.next();
                 flush_span(&mut buffer, &mut spans, style);
                 let mut seq = String::new();
-                while let Some(next) = chars.next() {
+                for next in chars.by_ref() {
                     if next.is_ascii_alphabetic() {
                         if next == 'm' {
                             apply_sgr_sequence(&seq, &mut style);

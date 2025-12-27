@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use arboard::Clipboard;
-use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::config::MAX_LOG_LINES;
@@ -149,11 +149,7 @@ pub(crate) fn log_selection_state(
     );
 }
 
-pub(crate) fn log_key_event(
-    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
-    label: &str,
-    event: &KeyEvent,
-) {
+pub(crate) fn log_key_event(logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str, event: &KeyEvent) {
     push_log_line(
         logs,
         LogSource::Stdout,
@@ -164,4 +160,3 @@ pub(crate) fn log_key_event(
         MAX_LOG_LINES,
     );
 }
-
