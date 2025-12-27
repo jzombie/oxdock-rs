@@ -15,6 +15,8 @@ use oxdock_process::{
 };
 
 pub mod session;
+pub mod tui;
+pub mod cli;
 
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
