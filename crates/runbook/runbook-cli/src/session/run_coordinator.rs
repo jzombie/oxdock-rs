@@ -252,3 +252,65 @@ impl RunCoordinator {
         token
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FinishDisposition, RunCoordinator, RunDecision, StartDisposition, StopCommand};
+
+    #[test]
+    fn enqueue_tracks_unique_lines() {
+        let mut coordinator = RunCoordinator::new();
+        let added = coordinator.enqueue_lines(&[0, 3, 3, 5]);
+        assert_eq!(added, vec![3, 5]);
+        assert_eq!(coordinator.queued_lines(), vec![3, 5]);
+    }
+
+    #[test]
+    fn request_run_busy_when_active() {
+        let mut coordinator = RunCoordinator::new();
+        let first = coordinator.request_run(10);
+        assert!(matches!(first, RunDecision::Dispatch { line: 10, .. }));
+        let second = coordinator.request_run(11);
+        assert!(matches!(second, RunDecision::Busy { current_line: 10 }));
+    }
+
+    #[test]
+    fn stop_before_start_is_queued_then_sent_on_start() {
+        let mut coordinator = RunCoordinator::new();
+        let decision = coordinator.request_run(7);
+        let (line, token) = match decision {
+            RunDecision::Dispatch { line, token } => (line, token),
+            _ => panic!("expected dispatch"),
+        };
+
+        let stop = coordinator.request_stop(line);
+        assert!(matches!(stop, StopCommand::QueueUntilStart));
+
+        match coordinator.start_result(line) {
+            StartDisposition::Expected { send_stop: Some(sent) } => {
+                assert_eq!(sent, token);
+            }
+            _ => panic!("unexpected start disposition"),
+        }
+
+        match coordinator.finish_result(line) {
+            FinishDisposition::Expected { has_more_queued } => {
+                assert!(!has_more_queued);
+            }
+            _ => panic!("unexpected finish disposition"),
+        }
+    }
+
+    #[test]
+    fn stop_after_start_sends_immediately() {
+        let mut coordinator = RunCoordinator::new();
+        coordinator.enqueue_lines(&[2]);
+        let request = coordinator.prepare_next_queued().expect("queued");
+        assert_eq!(request.line, 2);
+        let start = coordinator.start_result(2);
+        assert!(matches!(start, StartDisposition::Expected { send_stop: None }));
+
+        let stop = coordinator.request_stop(2);
+        assert!(matches!(stop, StopCommand::SendNow { .. }));
+    }
+}

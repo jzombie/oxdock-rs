@@ -34,3 +34,36 @@ pub(crate) fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     let line = row as u32;
     col >= x && col < x + width && line >= y && line < y + height
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{UiLayout, rect_contains};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn rect_contains_bounds() {
+        let rect = Rect::new(2, 3, 4, 5);
+        assert!(rect_contains(rect, 2, 3));
+        assert!(rect_contains(rect, 5, 7));
+        assert!(!rect_contains(rect, 6, 7));
+        assert!(!rect_contains(rect, 5, 8));
+    }
+
+    #[test]
+    fn layout_tracks_editor_and_logs() {
+        let mut layout = UiLayout::default();
+        let editor = Rect::new(0, 0, 10, 2);
+        let logs = Rect::new(0, 3, 10, 2);
+        layout.editor_area = Some(editor);
+        layout.logs_area = Some(logs);
+
+        assert!(layout.editor_contains(1, 1));
+        assert!(!layout.editor_contains(1, 4));
+        assert!(layout.logs_contains(1, 4));
+        assert!(!layout.logs_contains(1, 1));
+
+        layout.reset();
+        assert!(!layout.editor_contains(1, 1));
+        assert!(!layout.logs_contains(1, 4));
+    }
+}

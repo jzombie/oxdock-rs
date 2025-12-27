@@ -35,3 +35,22 @@ impl KeyBindings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::KeyBindings;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn default_key_bindings_match() {
+        let bindings = KeyBindings::default();
+        let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty());
+        let run = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        let other = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty());
+
+        assert!(bindings.dashboard_quit.matches(&quit));
+        assert!(bindings.editor_run_block.matches(&run));
+        assert!(!bindings.dashboard_quit.matches(&other));
+        assert!(!bindings.editor_run_block.matches(&other));
+    }
+}

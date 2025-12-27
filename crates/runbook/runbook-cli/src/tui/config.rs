@@ -17,3 +17,14 @@ impl Default for TuiConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_SCROLL_LINES_PER_TICK, TuiConfig};
+
+    #[test]
+    fn default_scroll_lines_per_tick() {
+        let config = TuiConfig::default();
+        assert_eq!(config.scroll_lines_per_tick, DEFAULT_SCROLL_LINES_PER_TICK);
+    }
+}

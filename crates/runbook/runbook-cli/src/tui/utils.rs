@@ -9,3 +9,19 @@ pub(crate) fn scroll_delta_for(kind: MouseEventKind, config: &TuiConfig) -> isiz
         _ => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{scroll_delta_for, TuiConfig};
+    use crossterm::event::MouseEventKind;
+
+    #[test]
+    fn scroll_delta_for_mouse_wheel() {
+        let config = TuiConfig {
+            scroll_lines_per_tick: 4,
+        };
+        assert_eq!(scroll_delta_for(MouseEventKind::ScrollUp, &config), -4);
+        assert_eq!(scroll_delta_for(MouseEventKind::ScrollDown, &config), 4);
+        assert_eq!(scroll_delta_for(MouseEventKind::Moved, &config), 0);
+    }
+}

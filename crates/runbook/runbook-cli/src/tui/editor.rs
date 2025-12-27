@@ -1115,3 +1115,138 @@ fn digits(mut value: usize) -> usize {
     }
     width
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EditorRenderInfo, EditorState, TextPosition, VisibleLines, digits, split_content_segments,
+    };
+    use oxdock_fs::{GuardedPath, PathResolver};
+    use std::sync::Arc;
+
+    fn make_editor(lines: &[&str]) -> EditorState {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            Arc::new(PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver"));
+        let path = root.join("doc.md").expect("doc path");
+        let mut line_vec: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        if line_vec.is_empty() {
+            line_vec.push(String::new());
+        }
+        let code_blocks = EditorState::compute_code_blocks(&line_vec);
+        let saved_block_hashes = EditorState::compute_block_hashes(&line_vec, &code_blocks);
+        EditorState {
+            path,
+            resolver,
+            lines: line_vec,
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_row: 0,
+            dirty: false,
+            last_disk_mtime: None,
+            pending_status: None,
+            code_blocks,
+            code_blocks_dirty: false,
+            render_info: None,
+            saved_block_hashes,
+            recently_saved_blocks: Vec::new(),
+            selection_anchor: None,
+            selection_head: None,
+            mouse_selecting: false,
+            drag_scroll: 0,
+        }
+    }
+
+    #[test]
+    fn split_content_segments_handles_ranges() {
+        let (before, selected, after) = split_content_segments("hello", 1, 4);
+        assert_eq!(before, "h");
+        assert_eq!(selected, "ell");
+        assert_eq!(after, "o");
+
+        let (before, selected, after) = split_content_segments("hi", 3, 5);
+        assert_eq!(before, "hi");
+        assert_eq!(selected, "");
+        assert_eq!(after, "");
+    }
+
+    #[test]
+    fn digits_counts_width() {
+        assert_eq!(digits(0), 1);
+        assert_eq!(digits(9), 1);
+        assert_eq!(digits(10), 2);
+        assert_eq!(digits(999), 3);
+    }
+
+    #[test]
+    fn selection_text_and_delete_across_lines() {
+        let mut editor = make_editor(&["hello", "world"]);
+        editor.begin_mouse_selection(TextPosition::new(0, 2));
+        editor.update_mouse_selection(TextPosition::new(1, 1));
+        let eol = line_ending::LineEnding::from_current_platform().denormalize("\n");
+        let expected = format!("llo{eol}w");
+        assert_eq!(editor.selection_text().as_deref(), Some(expected.as_str()));
+
+        editor.delete_selection();
+        assert_eq!(editor.lines, vec![String::from("heorld")]);
+        assert_eq!(editor.cursor_col(), 2);
+        assert!(!editor.mouse_selecting);
+    }
+
+    #[test]
+    fn insert_text_at_cursor_handles_multiline() {
+        let mut editor = make_editor(&["hi"]);
+        editor.set_cursor_position(TextPosition::new(0, 1));
+        editor.insert_text_at_cursor("a\nb\nc");
+        assert_eq!(
+            editor.lines,
+            vec![String::from("ha"), String::from("b"), String::from("ci")]
+        );
+        assert_eq!(editor.cursor_row, 2);
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    fn render_and_store(editor: &mut EditorState, visible: &VisibleLines) {
+        editor.render_info = Some(EditorRenderInfo {
+            inner_x: 0,
+            inner_y: 0,
+            inner_width: 20,
+            inner_height: 4,
+            prefix_width: visible
+                .lines
+                .first()
+                .map(|line| line.prefix_width)
+                .unwrap_or(0),
+            arrow_width: visible.arrow_width,
+            arrow_offset: visible.arrow_offset,
+            copy_button: None,
+        });
+    }
+
+    #[test]
+    fn visible_lines_include_run_glyphs() {
+        let mut editor = make_editor(&["```sh", "echo", "```", "after"]);
+        let visible = editor.visible_lines_for_render(4, None, true);
+        let prefix = &visible.lines[0].prefix;
+        assert!(prefix.contains(super::STATUS_ICON_READY));
+        assert!(prefix.contains(super::RUN_BUTTON_READY));
+    }
+
+    #[test]
+    fn hit_test_run_glyph_and_text_position() {
+        let mut editor = make_editor(&["```sh", "echo", "```", "after"]);
+        let visible = editor.visible_lines_for_render(4, None, true);
+        render_and_store(&mut editor, &visible);
+
+        let col = visible.arrow_offset as u16;
+        assert_eq!(editor.hit_test_run_glyph(col, 0), Some(0));
+        assert_eq!(editor.hit_test_run_glyph(0, 3), None);
+
+        let pos = editor.text_position_from_point(
+            (visible.lines[0].prefix_width + 2) as u16,
+            0,
+        );
+        assert_eq!(pos, Some(TextPosition::new(0, 2)));
+    }
+}

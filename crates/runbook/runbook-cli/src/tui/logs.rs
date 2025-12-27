@@ -416,3 +416,111 @@ fn ansi_basic_color(code: u8, bright: bool) -> Option<Color> {
     };
     Some(color)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LogRecord, LogScrollState, LogSource, ansi_basic_color, apply_sgr_sequence,
+        logs_to_text_window, parse_ansi_spans, push_log_line, trim_logs,
+    };
+    use ratatui::style::{Color, Modifier, Style};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn log_source_label_and_style() {
+        let out = LogSource::Stdout;
+        let err = LogSource::Stderr;
+        assert_eq!(out.label(), "[out]");
+        assert_eq!(err.label(), "[err]");
+        assert_eq!(out.style().fg, Some(Color::LightGreen));
+        assert_eq!(err.style().fg, Some(Color::LightRed));
+    }
+
+    #[test]
+    fn scroll_state_tracks_offsets_and_indicator() {
+        let mut state = LogScrollState::default();
+        state.update_metrics(10, 4);
+        assert_eq!(state.offset(), 6);
+        assert_eq!(state.indicator_text().as_deref(), Some("7-10/10"));
+
+        state.scroll(-2);
+        assert_eq!(state.offset(), 4);
+        assert_eq!(state.indicator_text().as_deref(), Some("5-8/10"));
+
+        state.scroll(10);
+        assert_eq!(state.offset(), 6);
+        assert_eq!(state.indicator_text().as_deref(), Some("7-10/10"));
+    }
+
+    #[test]
+    fn push_log_line_trims() {
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        push_log_line(&logs, LogSource::Stdout, "one", 2);
+        push_log_line(&logs, LogSource::Stdout, "two", 2);
+        push_log_line(&logs, LogSource::Stdout, "three", 2);
+
+        let guard = logs.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        assert_eq!(guard[0].content, "two\n");
+        assert_eq!(guard[1].content, "three\n");
+    }
+
+    #[test]
+    fn trim_logs_removes_oldest() {
+        let mut logs = VecDeque::new();
+        logs.push_back(LogRecord::new(LogSource::Stdout, "a".to_string()));
+        logs.push_back(LogRecord::new(LogSource::Stdout, "b".to_string()));
+        logs.push_back(LogRecord::new(LogSource::Stdout, "c".to_string()));
+        trim_logs(&mut logs, 2);
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].content, "b");
+        assert_eq!(logs[1].content, "c");
+    }
+
+    #[test]
+    fn logs_to_text_window_parses_ansi() {
+        let mut entries = VecDeque::new();
+        entries.push_back(LogRecord::new(
+            LogSource::Stdout,
+            "hello \u{1b}[31mred\u{1b}[0m".to_string(),
+        ));
+        let text = logs_to_text_window(&entries, 0, 1);
+        let spans = &text.lines[0].0;
+        assert_eq!(spans[0].content.as_ref(), "[out]");
+        assert_eq!(spans[1].content.as_ref(), " ");
+        assert_eq!(spans[2].content.as_ref(), "hello ");
+        assert_eq!(spans[2].style, Style::default());
+        assert_eq!(spans[3].content.as_ref(), "red");
+        assert_eq!(spans[3].style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn parse_ansi_spans_resets_style() {
+        let spans = parse_ansi_spans("\u{1b}[1;32mgo\u{1b}[0m idle");
+        assert_eq!(spans[0].content.as_ref(), "go");
+        assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[0].style.fg, Some(Color::Green));
+        assert_eq!(spans[1].content.as_ref(), " idle");
+        assert_eq!(spans[1].style, Style::default());
+    }
+
+    #[test]
+    fn apply_sgr_sequence_handles_colors_and_modifiers() {
+        let mut style = Style::default();
+        apply_sgr_sequence("1;31", &mut style);
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style.fg, Some(Color::Red));
+
+        apply_sgr_sequence("22;39", &mut style);
+        assert!(!style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style.fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn ansi_basic_color_handles_bright() {
+        assert_eq!(ansi_basic_color(2, false), Some(Color::Green));
+        assert_eq!(ansi_basic_color(2, true), Some(Color::LightGreen));
+        assert_eq!(ansi_basic_color(9, true), None);
+    }
+}

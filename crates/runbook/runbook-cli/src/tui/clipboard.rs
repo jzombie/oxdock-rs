@@ -160,3 +160,33 @@ pub(crate) fn log_key_event(logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str,
         MAX_LOG_LINES,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{is_copy_shortcut, is_paste_shortcut};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn copy_shortcuts_match() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let cmd_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SUPER);
+        let insert = KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL);
+        let other = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(is_copy_shortcut(&ctrl_c));
+        assert!(is_copy_shortcut(&cmd_c));
+        assert!(is_copy_shortcut(&insert));
+        assert!(!is_copy_shortcut(&other));
+    }
+
+    #[test]
+    fn paste_shortcuts_match() {
+        let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        let cmd_v = KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SUPER);
+        let shift_insert = KeyEvent::new(KeyCode::Insert, KeyModifiers::SHIFT);
+        let other = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(is_paste_shortcut(&ctrl_v));
+        assert!(is_paste_shortcut(&cmd_v));
+        assert!(is_paste_shortcut(&shift_insert));
+        assert!(!is_paste_shortcut(&other));
+    }
+}

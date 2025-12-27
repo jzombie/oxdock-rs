@@ -582,3 +582,57 @@ impl ExecutionOutputObserver for SessionOutputObserver {
         self.push(chunk, SessionLogSource::Stderr);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ExecutionOutputObserver, SessionEvent, SessionLogSource, SessionOutputObserver};
+    use std::sync::mpsc;
+
+    #[test]
+    fn observer_splits_lines_and_flushes() {
+        let (tx, rx) = mpsc::channel();
+        let observer = SessionOutputObserver::new(tx);
+
+        observer.on_stdout(b"hello\nworld");
+        let event = rx.recv().expect("log event");
+        match event {
+            SessionEvent::Log { source, message } => {
+                assert_eq!(source, SessionLogSource::Stdout);
+                assert_eq!(message, "hello\n");
+            }
+            _ => panic!("unexpected event"),
+        }
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        observer.flush();
+        let event = rx.recv().expect("flush log event");
+        match event {
+            SessionEvent::Log { source, message } => {
+                assert_eq!(source, SessionLogSource::Stdout);
+                assert_eq!(message, "world");
+            }
+            _ => panic!("unexpected event"),
+        }
+    }
+
+    #[test]
+    fn observer_tracks_stderr_and_flush() {
+        let (tx, rx) = mpsc::channel();
+        let observer = SessionOutputObserver::new(tx);
+
+        observer.on_stderr(b"warn 1\nwarn 2\n");
+        for expected in ["warn 1\n", "warn 2\n"] {
+            let event = rx.recv().expect("stderr log");
+            match event {
+                SessionEvent::Log { source, message } => {
+                    assert_eq!(source, SessionLogSource::Stderr);
+                    assert_eq!(message, expected);
+                }
+                _ => panic!("unexpected event"),
+            }
+        }
+
+        observer.flush();
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+}
