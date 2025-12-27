@@ -407,9 +407,19 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                         )
                                     {
                                         editor.begin_mouse_selection(position);
+                                        log_selection_state(
+                                            editor,
+                                            &logs,
+                                            "mouse-down selection",
+                                        );
                                     } else {
                                         editor.clear_selection();
                                         editor.mouse_selecting = false;
+                                        log_selection_state(
+                                            editor,
+                                            &logs,
+                                            "mouse-down cleared selection",
+                                        );
                                     }
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
@@ -421,12 +431,22 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             )
                                         {
                                             editor.update_mouse_selection(position);
+                                            log_selection_state(
+                                                editor,
+                                                &logs,
+                                                "mouse-drag selection",
+                                            );
                                         }
                                     }
                                 }
                                 MouseEventKind::Up(MouseButton::Left) => {
                                     if editor.mouse_selecting {
                                         editor.end_mouse_selection();
+                                        log_selection_state(
+                                            editor,
+                                            &logs,
+                                            "mouse-up selection",
+                                        );
                                     }
                                 }
                                 _ => {}
@@ -466,6 +486,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             }
                             UiMode::Editor(editor) => {
                                 if is_copy_shortcut(&key_event) {
+                                    log_key_event(&logs, "copy shortcut", &key_event);
                                     if clipboard.is_none() {
                                         match Clipboard::new() {
                                             Ok(new_clip) => clipboard = Some(new_clip),
@@ -491,10 +512,20 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                 status = String::from(
                                                     "Selection copied to clipboard",
                                                 );
+                                                log_selection_state(
+                                                    editor,
+                                                    &logs,
+                                                    "copy success",
+                                                );
                                             }
                                             Ok(false) => {
                                                 status = String::from(
                                                     "Select text to copy",
+                                                );
+                                                log_selection_state(
+                                                    editor,
+                                                    &logs,
+                                                    "copy had no selection",
                                                 );
                                             }
                                             Err(err) => {
@@ -508,6 +539,11 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                 );
                                                 status = String::from(
                                                     "Clipboard copy failed; see logs",
+                                                );
+                                                log_selection_state(
+                                                    editor,
+                                                    &logs,
+                                                    "copy failed",
                                                 );
                                             }
                                         }
@@ -1482,6 +1518,24 @@ impl EditorState {
             Ok(false)
         }
     }
+
+    fn selection_debug_summary(&self) -> String {
+        if let Some((start, end)) = self.normalized_selection_range() {
+            let preview = self.selection_text().unwrap_or_default();
+            let preview_snippet: String = preview.chars().take(80).collect();
+            format!(
+                "start={}:{}, end={}:{}, len={}, preview={:?}",
+                start.row,
+                start.col,
+                end.row,
+                end.col,
+                preview.len(),
+                preview_snippet
+            )
+        } else {
+            "<none>".to_string()
+        }
+    }
 }
 
 struct HeaderView<'a> {
@@ -1746,6 +1800,28 @@ fn is_copy_shortcut(event: &KeyEvent) -> bool {
             .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT),
         _ => false,
     }
+}
+
+fn log_selection_state(editor: &EditorState, logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str) {
+    let summary = editor.selection_debug_summary();
+    push_log_line(
+        logs,
+        LogSource::Stdout,
+        &format!("[SEL] {label}: {summary}"),
+        MAX_LOG_LINES,
+    );
+}
+
+fn log_key_event(logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str, event: &KeyEvent) {
+    push_log_line(
+        logs,
+        LogSource::Stdout,
+        &format!(
+            "[KEY] {label}: code={:?}, modifiers={:?}, kind={:?}",
+            event.code, event.modifiers, event.kind
+        ),
+        MAX_LOG_LINES,
+    );
 }
 
 fn run_block_via_session(
