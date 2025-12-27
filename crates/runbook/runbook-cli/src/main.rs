@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use arboard::Clipboard;
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
+use base64::Engine as _;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use crossterm::{
     event::{
@@ -487,6 +489,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             UiMode::Editor(editor) => {
                                 if is_copy_shortcut(&key_event) {
                                     log_key_event(&logs, "copy shortcut", &key_event);
+                                    // attempt system clipboard first, fallback to OSC52 for SSH/TTY clients
+                                    let mut tried_clip = false;
                                     if clipboard.is_none() {
                                         match Clipboard::new() {
                                             Ok(new_clip) => clipboard = Some(new_clip),
@@ -499,14 +503,12 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                     ),
                                                     MAX_LOG_LINES,
                                                 );
-                                                status = String::from(
-                                                    "Clipboard unavailable in this terminal",
-                                                );
-                                                continue;
+                                                // continue to attempt OSC52 fallback below
                                             }
                                         }
                                     }
                                     if let Some(clip) = clipboard.as_mut() {
+                                        tried_clip = true;
                                         match editor.copy_selection_to_clipboard(clip) {
                                             Ok(true) => {
                                                 status = String::from(
@@ -517,15 +519,14 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                     &logs,
                                                     "copy success",
                                                 );
+                                                continue;
                                             }
                                             Ok(false) => {
-                                                status = String::from(
-                                                    "Select text to copy",
-                                                );
+                                                // fallthrough to OSC52 attempt
                                                 log_selection_state(
                                                     editor,
                                                     &logs,
-                                                    "copy had no selection",
+                                                    "copy had no selection via system clipboard",
                                                 );
                                             }
                                             Err(err) => {
@@ -537,15 +538,60 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                                     ),
                                                     MAX_LOG_LINES,
                                                 );
-                                                status = String::from(
-                                                    "Clipboard copy failed; see logs",
-                                                );
                                                 log_selection_state(
                                                     editor,
                                                     &logs,
-                                                    "copy failed",
+                                                    "copy failed via system clipboard",
                                                 );
                                             }
+                                        }
+                                    }
+
+                                    // if system clipboard not available or failed, try OSC52
+                                    match editor.selection_text() {
+                                        Some(text) => match osc52_copy(&text) {
+                                            Ok(()) => {
+                                                status = String::from("Selection copied via OSC52");
+                                                push_log_line(
+                                                    &logs,
+                                                    LogSource::Stdout,
+                                                    &format!(
+                                                        "osc52 copy: {}",
+                                                        editor.selection_debug_summary()
+                                                    ),
+                                                    MAX_LOG_LINES,
+                                                );
+                                            }
+                                            Err(err) => {
+                                                if !tried_clip {
+                                                    push_log_line(
+                                                        &logs,
+                                                        LogSource::Stderr,
+                                                        &format!(
+                                                            "clipboard unavailable and osc52 failed: {err}"
+                                                        ),
+                                                        MAX_LOG_LINES,
+                                                    );
+                                                    status = String::from(
+                                                        "Clipboard and OSC52 copy failed; see logs",
+                                                    );
+                                                } else {
+                                                    push_log_line(
+                                                        &logs,
+                                                        LogSource::Stderr,
+                                                        &format!(
+                                                            "OSC52 fallback failed after clipboard attempt: {err}"
+                                                        ),
+                                                        MAX_LOG_LINES,
+                                                    );
+                                                    status = String::from(
+                                                        "OSC52 copy failed; see logs",
+                                                    );
+                                                }
+                                            }
+                                        },
+                                        None => {
+                                            status = String::from("Select text to copy");
                                         }
                                     }
                                     continue;
@@ -1788,6 +1834,30 @@ fn scroll_delta_for(kind: MouseEventKind, config: &TuiConfig) -> isize {
         MouseEventKind::ScrollDown => config.scroll_lines_per_tick,
         _ => 0,
     }
+}
+
+fn osc52_copy(text: &str) -> Result<()> {
+    // Limit payload to avoid very large terminal transfers.
+    const MAX_OSC52_BYTES: usize = 100 * 1024; // 100 KiB
+    let mut payload = text.as_bytes();
+    let mut truncated = false;
+    if payload.len() > MAX_OSC52_BYTES {
+        payload = &payload[..MAX_OSC52_BYTES];
+        truncated = true;
+    }
+    let mut buf = Vec::with_capacity(payload.len() + 32);
+    buf.extend_from_slice(payload);
+    if truncated {
+        buf.extend_from_slice(b"...(truncated)");
+    }
+    let b64 = BASE64_STD.encode(&buf);
+    // OSC52 sequence: ESC ] 52 ; c ; <base64> BEL
+    let seq = format!("\x1b]52;c;{}\x07", b64);
+    use std::io::Write;
+    let mut out = io::stdout();
+    out.write_all(seq.as_bytes())?;
+    out.flush()?;
+    Ok(())
 }
 
 fn is_copy_shortcut(event: &KeyEvent) -> bool {

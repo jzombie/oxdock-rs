@@ -1405,6 +1405,7 @@ version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "arboard",
+ "base64",
  "comrak",
  "crossterm 0.27.0",
  "indoc",

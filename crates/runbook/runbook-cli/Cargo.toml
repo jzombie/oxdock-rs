@@ -27,6 +27,7 @@ comrak.workspace = true
 crossterm = "0.27"
 ratatui = "0.20"
 arboard = "3"
+base64 = "0.22"
 
 [lints]
 workspace = true
