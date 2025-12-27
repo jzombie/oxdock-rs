@@ -2195,7 +2195,12 @@ fn run_in_env_with_resolver(
                 }
             })
             .collect();
-        let snippet_name = format!("runbook-snippet.{lang_safe}");
+        let snippet_ext = if cfg!(windows) && spec.language == "bash" {
+            "ps1".to_string()
+        } else {
+            lang_safe.clone()
+        };
+        let snippet_name = format!("runbook-snippet.{snippet_ext}");
         let snippets_dir = workspace_resolver
             .root()
             .join("target")?
@@ -2361,16 +2366,23 @@ mod tests {
     use anyhow::{Context, Result};
     use indoc::indoc;
 
-    const BASH_RUNNER: &str = r#"
-INHERIT_ENV [
-    RUNBOOK_SNIPPET_PATH,
-    RUNBOOK_SNIPPET_DIR
-]
+    const RUNNER: &str = indoc! { r#"
+    INHERIT_ENV [
+        RUNBOOK_SNIPPET_PATH,
+        RUNBOOK_SNIPPET_DIR
+    ]
 
-[env:RUNBOOK_SNIPPET_PATH]
-WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
+    [env:RUNBOOK_SNIPPET_PATH] {
+        WITH_IO [stdin] {
+            [unix] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
+            [windows] RUN powershell -NoProfile -File {{ env:RUNBOOK_SNIPPET_PATH }}
+        }
+    }
+    "# };
 
-"#;
+    fn normalize_output(value: &str) -> String {
+        value.replace("\r\n", "\n")
+    }
 
     fn run_probe_runner(script: &str) -> Result<(GuardedPath, Option<String>, Option<String>)> {
         let temp = GuardedPath::tempdir().context("probe workspace tempdir")?;
@@ -2493,16 +2505,26 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
 
         let runner_path = workspace.join("temp.runner.bash.oxfile")?;
         resolver
-            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .write_file(&runner_path, RUNNER.as_bytes())
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = indoc! {
-            r#"
-            ```bash runbook
-            printf 'alpha\n'
-            ```
-            "#
+        let initial_doc = if cfg!(windows) {
+            indoc! {
+                r#"
+                ```bash runbook
+                [Console]::Out.WriteLine('alpha')
+                ```
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ```bash runbook
+                printf 'alpha\n'
+                ```
+                "#
+            }
         };
         resolver
             .write_file(&watched, initial_doc.as_bytes())
@@ -2528,12 +2550,22 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let insert_block = indoc! {
-            r#"
-            ```bash runbook
-            cat
-            ```
-            "#
+        let insert_block = if cfg!(windows) {
+            indoc! {
+                r#"
+                ```bash runbook
+                [Console]::Out.Write([Console]::In.ReadToEnd())
+                ```
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ```bash runbook
+                cat
+                ```
+                "#
+            }
         }
         .trim();
         let marker = "```text runbook";
@@ -2552,10 +2584,11 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .write_file(&watched, modified.as_bytes())
             .context("insert cat block")?;
 
+        let cat_marker = if cfg!(windows) { "ReadToEnd" } else { "cat" };
         let target_line = modified
             .lines()
             .enumerate()
-            .find(|(_, line)| line.trim() == "cat")
+            .find(|(_, line)| line.contains(cat_marker))
             .map(|(idx, _)| idx + 1)
             .expect("cat line present");
 
@@ -2580,15 +2613,21 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             execution.stderr
         );
         assert_eq!(
-            execution.stdout, "alpha\n",
+            normalize_output(&execution.stdout),
+            "alpha\n",
             "stdin should include previous stdout"
         );
+        let cat_block = if cfg!(windows) {
+            "```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```"
+        } else {
+            "```bash runbook\ncat\n```"
+        };
         assert!(
-            last_contents.contains("```bash runbook\ncat\n```"),
+            last_contents.contains(cat_block),
             "cat block should remain in document"
         );
         let cat_section = last_contents
-            .split("```bash runbook\ncat\n```")
+            .split(cat_block)
             .nth(1)
             .expect("cat block should have trailing output");
         assert!(
@@ -2607,16 +2646,26 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
 
         let runner_path = workspace.join("temp.runner.bash.oxfile")?;
         resolver
-            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .write_file(&runner_path, RUNNER.as_bytes())
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = indoc! {
-            r#"
-            ```bash runbook
-            printf 'bravo\n'
-            ```
-            "#
+        let initial_doc = if cfg!(windows) {
+            indoc! {
+                r#"
+                ```bash runbook
+                [Console]::Out.WriteLine('bravo')
+                ```
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ```bash runbook
+                printf 'bravo\n'
+                ```
+                "#
+            }
         };
         resolver
             .write_file(&watched, initial_doc.as_bytes())
@@ -2641,12 +2690,23 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let insert_block = indoc! {
-            r#"
-            ```bash runbook
-            python3 -c 'print(input())'
-            ```
-            "#
+        let insert_block = if cfg!(windows) {
+            indoc! {
+                r#"
+                ```bash runbook
+                $line = [Console]::In.ReadLine()
+                [Console]::Out.WriteLine($line)
+                ```
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ```bash runbook
+                python3 -c 'print(input())'
+                ```
+                "#
+            }
         }
         .trim();
         let marker = "```text runbook";
@@ -2665,10 +2725,15 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .write_file(&watched, modified.as_bytes())
             .context("insert python block")?;
 
+        let line_buffered_marker = if cfg!(windows) {
+            "ReadLine"
+        } else {
+            "python3 -c"
+        };
         let target_line = modified
             .lines()
             .enumerate()
-            .find(|(_, line)| line.contains("python3 -c"))
+            .find(|(_, line)| line.contains(line_buffered_marker))
             .map(|(idx, _)| idx + 1)
             .expect("python block present");
 
@@ -2693,11 +2758,17 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             execution.stderr
         );
         assert_eq!(
-            execution.stdout, "bravo\n",
+            normalize_output(&execution.stdout),
+            "bravo\n",
             "stdin should include newline for input()"
         );
+        let buffered_block = if cfg!(windows) {
+            "[Console]::In.ReadLine()"
+        } else {
+            "python3 -c 'print(input())'"
+        };
         assert!(
-            last_contents.contains("python3 -c 'print(input())'"),
+            last_contents.contains(buffered_block),
             "python block should remain in document"
         );
         Ok(())
@@ -2712,16 +2783,26 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
 
         let runner_path = workspace.join("temp.runner.bash.oxfile")?;
         resolver
-            .write_file(&runner_path, BASH_RUNNER.as_bytes())
+            .write_file(&runner_path, RUNNER.as_bytes())
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = indoc! {
-            r#"
-            ```bash runbook
-            echo "Hello world"
-            ```
-            "#
+        let initial_doc = if cfg!(windows) {
+            indoc! {
+                r#"
+                ```bash runbook
+                [Console]::Out.WriteLine('Hello world')
+                ```
+                "#
+            }
+        } else {
+            indoc! {
+                r#"
+                ```bash runbook
+                echo "Hello world"
+                ```
+                "#
+            }
         };
         resolver
             .write_file(&watched, initial_doc.as_bytes())
@@ -2746,15 +2827,22 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let appended = format!("{rendered}\n\n```bash runbook\ncat\n```\n");
+        let appended = if cfg!(windows) {
+            format!(
+                "{rendered}\n\n```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```\n"
+            )
+        } else {
+            format!("{rendered}\n\n```bash runbook\ncat\n```\n")
+        };
         resolver
             .write_file(&watched, appended.as_bytes())
             .context("append cat block")?;
 
+        let cat_marker = if cfg!(windows) { "ReadToEnd" } else { "cat" };
         let target_line = appended
             .lines()
             .enumerate()
-            .find(|(_, line)| line.trim() == "cat")
+            .find(|(_, line)| line.contains(cat_marker))
             .map(|(idx, _)| idx + 1)
             .expect("cat line present");
 
@@ -2779,7 +2867,8 @@ WITH_IO [stdin] RUN bash "{{ env:RUNBOOK_SNIPPET_PATH }}"
             execution.stderr
         );
         assert_eq!(
-            execution.stdout, "Hello world\n",
+            normalize_output(&execution.stdout),
+            "Hello world\n",
             "stdin should include previous stdout even when block appended"
         );
         Ok(())
