@@ -295,6 +295,35 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                 }
             }
 
+            // continuous drag-scroll when selection is being dragged outside editor bounds
+            if let UiMode::Editor(editor) = &mut mode {
+                if editor.mouse_selecting && editor.drag_scroll != 0 {
+                    // prefer render_info viewport, fall back to ui layout
+                    let viewport = editor
+                        .render_info
+                        .as_ref()
+                        .map(|i| i.inner_height as usize)
+                        .or_else(|| ui_layout.editor_area.map(|r| r.height as usize))
+                        .unwrap_or(1);
+                    editor.scroll_by(editor.drag_scroll, viewport);
+                    // update selection head to visible edge
+                    if editor.drag_scroll < 0 {
+                        let head_row = editor.scroll_row;
+                        let col = editor.cursor_col.min(
+                            editor.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
+                        );
+                        editor.update_mouse_selection(TextPosition::new(head_row, col));
+                    } else {
+                        let head_row = editor.scroll_row.saturating_add(viewport.saturating_sub(1));
+                        let head_row = head_row.min(editor.lines.len().saturating_sub(1));
+                        let col = editor.cursor_col.min(
+                            editor.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
+                        );
+                        editor.update_mouse_selection(TextPosition::new(head_row, col));
+                    }
+                }
+            }
+
             let running_line_idx = running_line.map(|line| line.saturating_sub(1));
             let can_run_blocks = running_line.is_none();
 
@@ -419,6 +448,10 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             mouse_event.row,
                                         )
                                     {
+                                        // start a fresh selection on click: clear any previous selection
+                                        editor.clear_selection();
+                                        // cancel any auto-scroll state
+                                        editor.drag_scroll = 0;
                                         editor.begin_mouse_selection(position);
                                         log_selection_state(
                                             editor,
@@ -437,6 +470,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                                 MouseEventKind::Drag(MouseButton::Left) => {
                                     if editor.mouse_selecting {
+                                        // If pointer is inside editor, update selection as usual and stop auto-scroll.
                                         if let Some(position) = editor
                                             .text_position_from_point(
                                                 mouse_event.column,
@@ -444,11 +478,41 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                             )
                                         {
                                             editor.update_mouse_selection(position);
+                                            editor.drag_scroll = 0;
                                             log_selection_state(
                                                 editor,
                                                 &logs,
                                                 "mouse-drag selection",
                                             );
+                                        } else if let Some(info) = editor.render_info.as_ref() {
+                                            // pointer moved outside editor: set drag_scroll direction to enable continuous scrolling
+                                            let viewport = info.inner_height as usize;
+                                            if mouse_event.row < info.inner_y {
+                                                editor.drag_scroll = -1;
+                                                // set selection head to first visible row
+                                                let head_row = editor.scroll_row;
+                                                let col = editor.cursor_col.min(
+                                                    editor.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
+                                                );
+                                                editor.update_mouse_selection(TextPosition::new(head_row, col));
+                                                log_selection_state(
+                                                    editor,
+                                                    &logs,
+                                                    "mouse-drag enter auto-scroll up",
+                                                );
+                                            } else if mouse_event.row >= info.inner_y + info.inner_height {
+                                                editor.drag_scroll = 1;
+                                                let head_row = editor.scroll_row.saturating_add(viewport.saturating_sub(1));
+                                                let col = editor.cursor_col.min(
+                                                    editor.lines.get(head_row).map(|l| l.len()).unwrap_or(0),
+                                                );
+                                                editor.update_mouse_selection(TextPosition::new(head_row, col));
+                                                log_selection_state(
+                                                    editor,
+                                                    &logs,
+                                                    "mouse-drag enter auto-scroll down",
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -718,6 +782,7 @@ struct EditorState {
     selection_anchor: Option<TextPosition>,
     selection_head: Option<TextPosition>,
     mouse_selecting: bool,
+    drag_scroll: isize,
 }
 
 struct LineRender {
@@ -902,6 +967,7 @@ impl EditorState {
             selection_anchor: None,
             selection_head: None,
             mouse_selecting: false,
+            drag_scroll: 0,
         })
     }
 
@@ -1514,6 +1580,7 @@ impl EditorState {
     }
 
     fn end_mouse_selection(&mut self) {
+        self.drag_scroll = 0;
         self.mouse_selecting = false;
         if let (Some(anchor), Some(head)) = (self.selection_anchor, self.selection_head) {
             if anchor == head {
@@ -1528,6 +1595,7 @@ impl EditorState {
         self.selection_anchor = None;
         self.selection_head = None;
         self.mouse_selecting = false;
+        self.drag_scroll = 0;
     }
 
     fn set_cursor_position(&mut self, position: TextPosition) {
@@ -1769,7 +1837,7 @@ impl<'a> FramedView for EditorView<'a> {
 
         // compute optional copy button rect if a normalized selection exists
         let mut copy_button_rect: Option<Rect> = None;
-        if let Some((start, end)) = self.editor.normalized_selection_range() {
+        if let Some((_start, end)) = self.editor.normalized_selection_range() {
             // only show when selection is finished and not being dragged
             if !self.editor.mouse_selecting {
                 let end_row = end.row;
