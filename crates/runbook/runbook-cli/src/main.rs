@@ -1110,6 +1110,22 @@ impl EditorState {
                 }
             }
         }
+        // If there's an active selection, certain keys operate on it.
+        if let Some((_start, _end)) = self.normalized_selection_range() {
+            match key.code {
+                KeyCode::Backspace => {
+                    // delete selection and move cursor to selection start
+                    self.delete_selection();
+                    return Ok(EditorAction::Continue);
+                }
+                KeyCode::Delete => {
+                    // delete selection, keep cursor at selection start
+                    self.delete_selection();
+                    return Ok(EditorAction::Continue);
+                }
+                _ => {}
+            }
+        }
 
         match key.code {
             KeyCode::Esc => {
@@ -1528,6 +1544,53 @@ impl EditorState {
         let line_len = self.lines[row].len();
         let col = position.col.min(line_len);
         TextPosition::new(row, col)
+    }
+
+    fn delete_selection(&mut self) {
+        let (start, end) = match self.normalized_selection_range() {
+            Some(range) => range,
+            None => return,
+        };
+
+        if start.row == end.row {
+            if let Some(line) = self.lines.get_mut(start.row) {
+                let s = start.col.min(line.len());
+                let e = end.col.min(line.len());
+                if s < e {
+                    line.replace_range(s..e, "");
+                }
+            }
+            self.cursor_row = start.row;
+            self.cursor_col = start.col.min(self.current_line_len());
+        } else {
+            // remove tail part of start line
+            if let Some(start_line) = self.lines.get_mut(start.row) {
+                let s = start.col.min(start_line.len());
+                start_line.truncate(s);
+            }
+            // remove head part of end line and capture remainder
+            let mut end_remainder = String::new();
+            if let Some(end_line) = self.lines.get(end.row) {
+                let e = end.col.min(end_line.len());
+                end_remainder = end_line[e..].to_string();
+            }
+            // remove intermediate lines
+            let remove_from = start.row + 1;
+            let remove_to = end.row;
+            if remove_to >= remove_from && remove_to < self.lines.len() {
+                self.lines.drain(remove_from..=remove_to);
+            }
+            // append remainder to start line
+            if let Some(start_line) = self.lines.get_mut(start.row) {
+                start_line.push_str(&end_remainder);
+            }
+            self.cursor_row = start.row;
+            self.cursor_col = start.col.min(self.current_line_len());
+        }
+
+        self.clear_selection();
+        self.dirty = true;
+        self.invalidate_layout();
     }
 
     fn selection_text(&self) -> Option<String> {
