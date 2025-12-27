@@ -2597,16 +2597,21 @@ mod tests {
         let marker_idx = rendered
             .find(marker)
             .context("initial run should emit output block")?;
-        let eol = LineEnding::from_current_platform().denormalize("\n");
-        let mut modified = String::new();
-        modified.push_str(&rendered[..marker_idx]);
-        if !modified.ends_with(&eol) {
-            modified.push_str(&eol);
-        }
-        modified.push_str(insert_block);
-        modified.push_str(&eol);
-        modified.push_str(&eol);
-        modified.push_str(&rendered[marker_idx..]);
+        let prefix = &rendered[..marker_idx];
+        let suffix = &rendered[marker_idx..];
+        let modified = {
+            let tmp = indoc::formatdoc!(
+                "{prefix}
+                {insert_block}
+
+                {suffix}",
+                prefix = prefix,
+                insert_block = insert_block,
+                suffix = suffix
+            );
+            let tmp = LineEnding::normalize(&tmp);
+            LineEnding::from_current_platform().denormalize(&tmp)
+        };
         resolver
             .write_file(&watched, modified.as_bytes())
             .context("insert cat block")?;
@@ -2768,14 +2773,21 @@ mod tests {
         let marker_idx = rendered
             .find(marker)
             .context("initial run should emit output block")?;
-        let mut modified = String::new();
-        modified.push_str(&rendered[..marker_idx]);
-        if !modified.ends_with('\n') {
-            modified.push('\n');
-        }
-        modified.push_str(insert_block);
-        modified.push_str("\n\n");
-        modified.push_str(&rendered[marker_idx..]);
+        let prefix = &rendered[..marker_idx];
+        let suffix = &rendered[marker_idx..];
+        let modified = {
+            let tmp = indoc::formatdoc!(
+                "{prefix}
+                {insert_block}
+
+                {suffix}",
+                prefix = prefix,
+                insert_block = insert_block,
+                suffix = suffix
+            );
+            let tmp = LineEnding::normalize(&tmp);
+            LineEnding::from_current_platform().denormalize(&tmp)
+        };
         resolver
             .write_file(&watched, modified.as_bytes())
             .context("insert python block")?;
@@ -2897,22 +2909,28 @@ mod tests {
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let eol = LineEnding::from_current_platform().denormalize("\n");
-        let appended = {
+        let cat_snippet = {
             #[cfg(windows)]
             {
-                format!(
-                    "{rendered}{eol}{eol}```bash runbook{eol}[Console]::Out.Write([Console]::In.ReadToEnd()){eol}```{eol}",
-                    eol = eol
-                )
+                "[Console]::Out.Write([Console]::In.ReadToEnd())"
             }
             #[cfg(not(windows))]
             {
-                format!(
-                    "{rendered}{eol}{eol}```bash runbook{eol}cat{eol}```{eol}",
-                    eol = eol
-                )
+                "cat"
             }
+        };
+        let appended = {
+            let tmp = indoc::formatdoc!(
+                "{rendered}
+
+                ```bash runbook
+                {cat_snippet}
+                ```",
+                rendered = &rendered,
+                cat_snippet = cat_snippet
+            );
+            let tmp = LineEnding::normalize(&tmp);
+            LineEnding::from_current_platform().denormalize(&tmp)
         };
         resolver
             .write_file(&watched, appended.as_bytes())
