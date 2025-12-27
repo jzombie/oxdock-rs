@@ -13,6 +13,7 @@ use oxdock_process::{
     CancellationToken, CommandCancelled, CommandOutput, InterruptibleProcessManager, SharedInput,
     SharedOutput,
 };
+use line_ending::LineEnding;
 
 pub mod cli;
 pub mod session;
@@ -951,6 +952,7 @@ fn display_info(info: &str) -> String {
 
 fn parse_fences(input: &str) -> Vec<FenceBlock> {
     let mut fences = Vec::new();
+    let eol = LineEnding::from_current_platform().denormalize("\n");
     let mut current: Option<FenceBlock> = None;
 
     for (line_idx, line) in input.lines().enumerate() {
@@ -972,7 +974,7 @@ fn parse_fences(input: &str) -> Vec<FenceBlock> {
                         fences.push(open);
                     } else {
                         open.content.push_str(line);
-                        open.content.push('\n');
+                        open.content.push_str(&eol);
                         current = Some(open);
                     }
                 }
@@ -993,7 +995,7 @@ fn parse_fences(input: &str) -> Vec<FenceBlock> {
 
         if let Some(block) = current.as_mut() {
             block.content.push_str(line);
-            block.content.push('\n');
+            block.content.push_str(&eol);
         }
     }
 
@@ -1448,9 +1450,13 @@ fn render_shell_outputs(
         &mut out_lines,
     );
 
-    let mut rendered = out_lines.join("\n");
-    if contents.ends_with('\n') {
-        rendered.push('\n');
+    let eol = LineEnding::from_current_platform().denormalize("\n");
+    let mut rendered = out_lines.join(&eol);
+    let trailing = count_trailing_newlines(contents);
+    if trailing > 0 {
+        for _ in 0..trailing {
+            rendered.push_str(&eol);
+        }
     }
     Ok(rendered)
 }
@@ -1723,11 +1729,13 @@ fn short_hash(full_hex: &str) -> String {
 }
 
 fn normalize_output(output: &str) -> String {
-    output.trim_end_matches('\n').to_string()
+    let norm = LineEnding::normalize(output);
+    norm.trim_end_matches('\n').to_string()
 }
 
 fn count_trailing_newlines(output: &str) -> usize {
-    output.chars().rev().take_while(|ch| *ch == '\n').count()
+    let norm = LineEnding::normalize(output);
+    norm.chars().rev().take_while(|ch| *ch == '\n').count()
 }
 
 fn restore_with_trailing_newlines(value: &str, newline_count: Option<usize>) -> String {
@@ -1735,10 +1743,11 @@ fn restore_with_trailing_newlines(value: &str, newline_count: Option<usize>) -> 
     if extra == 0 {
         return value.to_string();
     }
-    let mut restored = String::with_capacity(value.len() + extra);
+    let eol = LineEnding::from_current_platform().denormalize("\n");
+    let mut restored = String::with_capacity(value.len() + extra * eol.len());
     restored.push_str(value);
     for _ in 0..extra {
-        restored.push('\n');
+        restored.push_str(&eol);
     }
     restored
 }
@@ -2333,12 +2342,13 @@ fn command_output_to_string(output: &CommandOutput) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut combined = String::new();
+    let eol = LineEnding::from_current_platform().denormalize("\n");
     if !stdout.is_empty() {
         combined.push_str(&stdout);
     }
     if !stderr.is_empty() {
-        if !combined.is_empty() && !combined.ends_with('\n') {
-            combined.push('\n');
+        if !combined.is_empty() && !combined.ends_with('\n') && !combined.ends_with('\r') {
+            combined.push_str(&eol);
         }
         combined.push_str(&stderr);
     }
@@ -2587,13 +2597,15 @@ mod tests {
         let marker_idx = rendered
             .find(marker)
             .context("initial run should emit output block")?;
+        let eol = LineEnding::from_current_platform().denormalize("\n");
         let mut modified = String::new();
         modified.push_str(&rendered[..marker_idx]);
-        if !modified.ends_with('\n') {
-            modified.push('\n');
+        if !modified.ends_with(&eol) {
+            modified.push_str(&eol);
         }
         modified.push_str(insert_block);
-        modified.push_str("\n\n");
+        modified.push_str(&eol);
+        modified.push_str(&eol);
         modified.push_str(&rendered[marker_idx..]);
         resolver
             .write_file(&watched, modified.as_bytes())
@@ -2637,18 +2649,19 @@ mod tests {
             "alpha\n",
             "stdin should include previous stdout"
         );
+        let eol = LineEnding::from_current_platform().denormalize("\n");
         let cat_block = {
             #[cfg(windows)]
-            { "```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```" }
+            { format!("```bash runbook{}[Console]::Out.Write([Console]::In.ReadToEnd()){} ```", eol, eol) }
             #[cfg(not(windows))]
-            { "```bash runbook\ncat\n```" }
+            { format!("```bash runbook{}cat{} ```", eol, eol) }
         };
         assert!(
-            last_contents.contains(cat_block),
+            last_contents.contains(&cat_block),
             "cat block should remain in document"
         );
         let cat_section = last_contents
-            .split(cat_block)
+            .split(&cat_block)
             .nth(1)
             .expect("cat block should have trailing output");
         assert!(
@@ -2865,16 +2878,18 @@ mod tests {
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
+        let eol = LineEnding::from_current_platform().denormalize("\n");
         let appended = {
             #[cfg(windows)]
             {
                 format!(
-                    "{rendered}\n\n```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```\n"
+                    "{rendered}{eol}{eol}```bash runbook{eol}[Console]::Out.Write([Console]::In.ReadToEnd()){eol}```{eol}",
+                    eol = eol
                 )
             }
             #[cfg(not(windows))]
             {
-                format!("{rendered}\n\n```bash runbook\ncat\n```\n")
+                format!("{rendered}{eol}{eol}```bash runbook{eol}cat{eol}```{eol}", eol = eol)
             }
         };
         resolver

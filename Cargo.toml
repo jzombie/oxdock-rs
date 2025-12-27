@@ -48,11 +48,17 @@ proc-macro2 = "1.0.103"
 proptest = "1.9.0"
 quote = "1.0.42"
 sha2 = "0.10.9"
+line-ending = "1.5.1"
 syn = { version = "2.0", features = ["full", "visit"] }
 tempfile = "3.24.0"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
+crossterm = "0.27"
+ratatui = "0.20"
+arboard = "3"
+base64 = "0.22"
+
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"

@@ -13,6 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Span, Spans, Text};
 use ratatui::widgets::Paragraph;
+use line_ending::LineEnding;
 
 use super::config::{SELECTION_BG, SELECTION_FG};
 use super::views::FramedView;
@@ -644,6 +645,7 @@ impl EditorState {
         if start.row >= self.lines.len() {
             return None;
         }
+        let eol = LineEnding::from_current_platform().denormalize("\n");
         let mut buffer = String::new();
         let mut wrote_any = false;
         for row in start.row..=end.row {
@@ -665,7 +667,7 @@ impl EditorState {
             }
             if row != end.row {
                 wrote_any = true;
-                buffer.push('\n');
+                buffer.push_str(&eol);
             }
         }
         if wrote_any { Some(buffer) } else { None }

@@ -25,9 +25,10 @@ sha2.workspace = true
 
 comrak.workspace = true
 crossterm = "0.27"
-ratatui = "0.20"
-arboard = "3"
-base64 = "0.22"
+ratatui.workspace = true
+arboard.workspace = true
+base64.workspace = true
+line-ending.workspace = true
 
 [lints]
 workspace = true
