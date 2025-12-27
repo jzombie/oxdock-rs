@@ -386,6 +386,17 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                     }
                                 }
                                 MouseEventKind::Down(MouseButton::Left) => {
+                                        // check for click on copy button first
+                                        if let Some(info) = editor.render_info.as_ref() {
+                                            if let Some(btn) = info.copy_button {
+                                                if rect_contains(btn, mouse_event.column, mouse_event.row)
+                                                {
+                                                    let s = run_copy_action(editor, &logs, &mut clipboard);
+                                                    status = s;
+                                                    continue;
+                                                }
+                                            }
+                                        }
                                     if let Some(line_idx) = editor
                                         .hit_test_run_glyph(mouse_event.column, mouse_event.row)
                                     {
@@ -866,6 +877,7 @@ struct EditorRenderInfo {
     prefix_width: usize,
     arrow_width: usize,
     arrow_offset: usize,
+    copy_button: Option<Rect>,
 }
 
 impl EditorState {
@@ -1692,6 +1704,40 @@ impl<'a> FramedView for EditorView<'a> {
         }
         frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 
+        // compute optional copy button rect if a normalized selection exists
+        let mut copy_button_rect: Option<Rect> = None;
+        if let Some((start, end)) = self.editor.normalized_selection_range() {
+            // only show when selection is finished and not being dragged
+            if !self.editor.mouse_selecting {
+                let end_row = end.row;
+                if end_row >= self.editor.scroll_row {
+                    let rel_row = end_row - self.editor.scroll_row;
+                    if rel_row < visible.lines.len() {
+                        let line = &visible.lines[rel_row];
+                        let prefix = line.prefix_width.min(inner.width as usize) as u16;
+                        let content_col = end.col as u16;
+                        let button_text = "[Copy]";
+                        let button_width = button_text.chars().count() as u16 + 1;
+                        let mut x = inner.x + prefix + content_col;
+                        // keep button inside inner rect
+                        if x + button_width > inner.x + inner.width {
+                            if inner.x + inner.width > button_width {
+                                x = inner.x + inner.width - button_width;
+                            } else {
+                                x = inner.x;
+                            }
+                        }
+                        let y = inner.y + rel_row as u16;
+                        copy_button_rect = Some(Rect {
+                            x,
+                            y,
+                            width: button_width,
+                            height: 1,
+                        });
+                    }
+                }
+            }
+        }
         self.editor.render_info = Some(EditorRenderInfo {
             inner_x: inner.x,
             inner_y: inner.y,
@@ -1704,6 +1750,7 @@ impl<'a> FramedView for EditorView<'a> {
                 .unwrap_or(0),
             arrow_width: visible.arrow_width,
             arrow_offset: visible.arrow_offset,
+            copy_button: copy_button_rect,
         });
 
         let cursor_row = self
@@ -1724,6 +1771,15 @@ impl<'a> FramedView for EditorView<'a> {
                         inner.y + cursor_row as u16,
                     );
                 }
+            }
+        }
+        // render copy button if present
+        if let Some(info) = self.editor.render_info.as_ref() {
+            if let Some(rect) = info.copy_button {
+                let txt = Paragraph::new("[Copy]")
+                    .style(Style::default().fg(Color::Black).bg(Color::White))
+                    .alignment(Alignment::Center);
+                frame.render_widget(txt, rect);
             }
         }
     }
@@ -1858,6 +1914,88 @@ fn osc52_copy(text: &str) -> Result<()> {
     out.write_all(seq.as_bytes())?;
     out.flush()?;
     Ok(())
+}
+
+fn run_copy_action(
+    editor: &mut EditorState,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    clipboard: &mut Option<Clipboard>,
+) -> String {
+    let mut tried_clip = false;
+    if clipboard.is_none() {
+        match Clipboard::new() {
+            Ok(new_clip) => *clipboard = Some(new_clip),
+            Err(err) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("clipboard unavailable: {err}"),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+    }
+    if let Some(clip) = clipboard.as_mut() {
+        tried_clip = true;
+        match editor.copy_selection_to_clipboard(clip) {
+            Ok(true) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stdout,
+                    &format!("copy: {}", editor.selection_debug_summary()),
+                    MAX_LOG_LINES,
+                );
+                editor.clear_selection();
+                return String::from("Selection copied to clipboard");
+            }
+            Ok(false) => {
+                // fall through to OSC52
+            }
+            Err(err) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("clipboard copy failed: {err}"),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+    }
+
+    match editor.selection_text() {
+        Some(text) => match osc52_copy(&text) {
+            Ok(()) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stdout,
+                    &format!("osc52 copy: {}", editor.selection_debug_summary()),
+                    MAX_LOG_LINES,
+                );
+                editor.clear_selection();
+                String::from("Selection copied via OSC52")
+            }
+            Err(err) => {
+                if !tried_clip {
+                    push_log_line(
+                        logs,
+                        LogSource::Stderr,
+                        &format!("clipboard unavailable and osc52 failed: {err}"),
+                        MAX_LOG_LINES,
+                    );
+                    String::from("Clipboard and OSC52 copy failed; see logs")
+                } else {
+                    push_log_line(
+                        logs,
+                        LogSource::Stderr,
+                        &format!("OSC52 fallback failed after clipboard attempt: {err}"),
+                        MAX_LOG_LINES,
+                    );
+                    String::from("OSC52 copy failed; see logs")
+                }
+            }
+        },
+        None => String::from("Select text to copy"),
+    }
 }
 
 fn is_copy_shortcut(event: &KeyEvent) -> bool {
