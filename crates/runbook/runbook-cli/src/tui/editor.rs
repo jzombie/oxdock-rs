@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use anyhow::{Result, anyhow};
 use arboard::Clipboard;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
+use line_ending::LineEnding;
 use oxdock_fs::{GuardedPath, PathResolver, normalized_path, to_forward_slashes};
 use ratatui::Frame;
 use ratatui::backend::Backend;
@@ -13,7 +14,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Span, Spans, Text};
 use ratatui::widgets::Paragraph;
-use line_ending::LineEnding;
 
 use super::config::{SELECTION_BG, SELECTION_FG};
 use super::views::FramedView;

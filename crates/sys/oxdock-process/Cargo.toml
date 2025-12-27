@@ -13,6 +13,6 @@ mock-process = []
 
 [dependencies]
 anyhow.workspace = true
+libc = { workspace = true, optional = false }
 oxdock-fs.workspace = true
 oxdock-sys-test-utils.workspace = true
-libc = { workspace = true, optional = false }

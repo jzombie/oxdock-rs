@@ -13,7 +13,13 @@ default-run = "runbook-cli"
 
 [dependencies]
 anyhow.workspace = true
+arboard.workspace = true
+base64.workspace = true
+
+comrak.workspace = true
+crossterm = "0.27"
 indoc.workspace = true
+line-ending.workspace = true
 notify.workspace = true
 once_cell.workspace = true
 os_pipe.workspace = true
@@ -21,14 +27,8 @@ oxdock-core.workspace = true
 oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-process.workspace = true
-sha2.workspace = true
-
-comrak.workspace = true
-crossterm = "0.27"
 ratatui.workspace = true
-arboard.workspace = true
-base64.workspace = true
-line-ending.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use line_ending::LineEnding;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use os_pipe::pipe;
 use oxdock_core::{
@@ -13,7 +14,6 @@ use oxdock_process::{
     CancellationToken, CommandCancelled, CommandOutput, InterruptibleProcessManager, SharedInput,
     SharedOutput,
 };
-use line_ending::LineEnding;
 
 pub mod cli;
 pub mod session;
@@ -2613,9 +2613,13 @@ mod tests {
 
         let cat_marker = {
             #[cfg(windows)]
-            { "ReadToEnd" }
+            {
+                "ReadToEnd"
+            }
             #[cfg(not(windows))]
-            { "cat" }
+            {
+                "cat"
+            }
         };
         let target_line = modified
             .lines()
@@ -2652,9 +2656,16 @@ mod tests {
         let eol = LineEnding::from_current_platform().denormalize("\n");
         let cat_block = {
             #[cfg(windows)]
-            { format!("```bash runbook{}[Console]::Out.Write([Console]::In.ReadToEnd()){} ```", eol, eol) }
+            {
+                format!(
+                    "```bash runbook{}[Console]::Out.Write([Console]::In.ReadToEnd()){} ```",
+                    eol, eol
+                )
+            }
             #[cfg(not(windows))]
-            { format!("```bash runbook{}cat{} ```", eol, eol) }
+            {
+                format!("```bash runbook{}cat{} ```", eol, eol)
+            }
         };
         assert!(
             last_contents.contains(&cat_block),
@@ -2771,9 +2782,13 @@ mod tests {
 
         let line_buffered_marker = {
             #[cfg(windows)]
-            { "ReadLine" }
+            {
+                "ReadLine"
+            }
             #[cfg(not(windows))]
-            { "python3 -c" }
+            {
+                "python3 -c"
+            }
         };
         let target_line = modified
             .lines()
@@ -2809,9 +2824,13 @@ mod tests {
         );
         let buffered_block = {
             #[cfg(windows)]
-            { "[Console]::In.ReadLine()" }
+            {
+                "[Console]::In.ReadLine()"
+            }
             #[cfg(not(windows))]
-            { "python3 -c 'print(input())'" }
+            {
+                "python3 -c 'print(input())'"
+            }
         };
         assert!(
             last_contents.contains(buffered_block),
@@ -2889,7 +2908,10 @@ mod tests {
             }
             #[cfg(not(windows))]
             {
-                format!("{rendered}{eol}{eol}```bash runbook{eol}cat{eol}```{eol}", eol = eol)
+                format!(
+                    "{rendered}{eol}{eol}```bash runbook{eol}cat{eol}```{eol}",
+                    eol = eol
+                )
             }
         };
         resolver
@@ -2898,9 +2920,13 @@ mod tests {
 
         let cat_marker = {
             #[cfg(windows)]
-            { "ReadToEnd" }
+            {
+                "ReadToEnd"
+            }
             #[cfg(not(windows))]
-            { "cat" }
+            {
+                "cat"
+            }
         };
         let target_line = appended
             .lines()
