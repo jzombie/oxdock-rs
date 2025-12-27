@@ -421,7 +421,10 @@ fn quote_arg(s: &str) -> String {
     // (e.g. WRITE path <payload>) so arguments are never mistaken for subsequent tokens.
     // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit());
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        // Avoid unquoted args that equal command keywords (they would be parsed as commands
+        // when reconstructed from TokenStream). Quote them to preserve intent.
+        && super::Command::parse(s).is_none();
     if is_safe && !s.is_empty() {
         s.to_string()
     } else {
@@ -436,7 +439,9 @@ fn quote_msg(s: &str) -> String {
     // We also quote strings with spaces to be safe, as TokenStream does not preserve whitespace.
     // Also quote if it starts with a digit to avoid invalid Rust tokens.
     let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit());
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        // As with args, avoid leaving bare tokens that match command names.
+        && super::Command::parse(s).is_none();
 
     if is_safe && !s.is_empty() {
         s.to_string()
