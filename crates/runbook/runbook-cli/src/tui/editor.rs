@@ -6,13 +6,13 @@ use std::time::SystemTime;
 use anyhow::{Result, anyhow};
 use arboard::Clipboard;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
+use oxdock_fs::{GuardedPath, PathResolver, normalized_path, to_forward_slashes};
 use ratatui::Frame;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Span, Spans, Text};
 use ratatui::widgets::Paragraph;
-use oxdock_fs::{GuardedPath, PathResolver, normalized_path, to_forward_slashes};
 
 use super::config::{SELECTION_BG, SELECTION_FG};
 use super::views::FramedView;
@@ -332,8 +332,7 @@ impl EditorState {
 
     pub(crate) fn save(&mut self) -> Result<()> {
         let contents = self.lines.join("\n");
-        self.resolver
-            .write_file(&self.path, contents.as_bytes())?;
+        self.resolver.write_file(&self.path, contents.as_bytes())?;
         self.dirty = false;
         self.last_disk_mtime = Self::disk_mtime(&self.resolver, &self.path);
         self.ensure_code_blocks();

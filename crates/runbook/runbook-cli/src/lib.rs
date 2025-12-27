@@ -156,10 +156,7 @@ fn push_unconsumed_lines(
     if start >= end {
         return;
     }
-    for (flag, line) in consumed[start..end]
-        .iter()
-        .zip(&lines[start..end])
-    {
+    for (flag, line) in consumed[start..end].iter().zip(&lines[start..end]) {
         if !*flag {
             out.push((*line).to_string());
         }
@@ -1144,9 +1141,8 @@ fn render_shell_outputs(
 
         let block_start_line = start + 1;
         let block_end_line = end + 1;
-        let forced = forced_lines.is_some_and(|set| {
-            (block_start_line..=block_end_line).any(|ln| set.contains(&ln))
-        });
+        let forced = forced_lines
+            .is_some_and(|set| (block_start_line..=block_end_line).any(|ln| set.contains(&ln)));
 
         if let Some(spec) = runner_spec(&info, resolver, workspace_root, source_dir, cache)? {
             let code_hash = code_hash(&script, &spec);
@@ -2195,10 +2191,19 @@ fn run_in_env_with_resolver(
                 }
             })
             .collect();
-        let snippet_ext = if cfg!(windows) && spec.language == "bash" {
-            "ps1".to_string()
-        } else {
-            lang_safe.clone()
+        let snippet_ext = {
+            #[cfg(windows)]
+            {
+                if spec.language == "bash" {
+                    "ps1".to_string()
+                } else {
+                    lang_safe.clone()
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                lang_safe.clone()
+            }
         };
         let snippet_name = format!("runbook-snippet.{snippet_ext}");
         let snippets_dir = workspace_resolver
@@ -2509,21 +2514,26 @@ mod tests {
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = if cfg!(windows) {
-            indoc! {
-                r#"
-                ```bash runbook
-                [Console]::Out.WriteLine('alpha')
-                ```
-                "#
+        let initial_doc = {
+            #[cfg(windows)]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    [Console]::Out.WriteLine('alpha')
+                    ```
+                    "#
+                }
             }
-        } else {
-            indoc! {
-                r#"
-                ```bash runbook
-                printf 'alpha\n'
-                ```
-                "#
+            #[cfg(not(windows))]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    printf 'alpha\n'
+                    ```
+                    "#
+                }
             }
         };
         resolver
@@ -2550,21 +2560,26 @@ mod tests {
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let insert_block = if cfg!(windows) {
-            indoc! {
-                r#"
-                ```bash runbook
-                [Console]::Out.Write([Console]::In.ReadToEnd())
-                ```
-                "#
+        let insert_block = {
+            #[cfg(windows)]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    [Console]::Out.Write([Console]::In.ReadToEnd())
+                    ```
+                    "#
+                }
             }
-        } else {
-            indoc! {
-                r#"
-                ```bash runbook
-                cat
-                ```
-                "#
+            #[cfg(not(windows))]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    cat
+                    ```
+                    "#
+                }
             }
         }
         .trim();
@@ -2584,7 +2599,12 @@ mod tests {
             .write_file(&watched, modified.as_bytes())
             .context("insert cat block")?;
 
-        let cat_marker = if cfg!(windows) { "ReadToEnd" } else { "cat" };
+        let cat_marker = {
+            #[cfg(windows)]
+            { "ReadToEnd" }
+            #[cfg(not(windows))]
+            { "cat" }
+        };
         let target_line = modified
             .lines()
             .enumerate()
@@ -2617,10 +2637,11 @@ mod tests {
             "alpha\n",
             "stdin should include previous stdout"
         );
-        let cat_block = if cfg!(windows) {
-            "```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```"
-        } else {
-            "```bash runbook\ncat\n```"
+        let cat_block = {
+            #[cfg(windows)]
+            { "```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```" }
+            #[cfg(not(windows))]
+            { "```bash runbook\ncat\n```" }
         };
         assert!(
             last_contents.contains(cat_block),
@@ -2650,21 +2671,26 @@ mod tests {
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = if cfg!(windows) {
-            indoc! {
-                r#"
-                ```bash runbook
-                [Console]::Out.WriteLine('bravo')
-                ```
-                "#
+        let initial_doc = {
+            #[cfg(windows)]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    [Console]::Out.WriteLine('bravo')
+                    ```
+                    "#
+                }
             }
-        } else {
-            indoc! {
-                r#"
-                ```bash runbook
-                printf 'bravo\n'
-                ```
-                "#
+            #[cfg(not(windows))]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    printf 'bravo\n'
+                    ```
+                    "#
+                }
             }
         };
         resolver
@@ -2690,22 +2716,27 @@ mod tests {
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let insert_block = if cfg!(windows) {
-            indoc! {
-                r#"
-                ```bash runbook
-                $line = [Console]::In.ReadLine()
-                [Console]::Out.WriteLine($line)
-                ```
-                "#
+        let insert_block = {
+            #[cfg(windows)]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    $line = [Console]::In.ReadLine()
+                    [Console]::Out.WriteLine($line)
+                    ```
+                    "#
+                }
             }
-        } else {
-            indoc! {
-                r#"
-                ```bash runbook
-                python3 -c 'print(input())'
-                ```
-                "#
+            #[cfg(not(windows))]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    python3 -c 'print(input())'
+                    ```
+                    "#
+                }
             }
         }
         .trim();
@@ -2725,10 +2756,11 @@ mod tests {
             .write_file(&watched, modified.as_bytes())
             .context("insert python block")?;
 
-        let line_buffered_marker = if cfg!(windows) {
-            "ReadLine"
-        } else {
-            "python3 -c"
+        let line_buffered_marker = {
+            #[cfg(windows)]
+            { "ReadLine" }
+            #[cfg(not(windows))]
+            { "python3 -c" }
         };
         let target_line = modified
             .lines()
@@ -2762,10 +2794,11 @@ mod tests {
             "bravo\n",
             "stdin should include newline for input()"
         );
-        let buffered_block = if cfg!(windows) {
-            "[Console]::In.ReadLine()"
-        } else {
-            "python3 -c 'print(input())'"
+        let buffered_block = {
+            #[cfg(windows)]
+            { "[Console]::In.ReadLine()" }
+            #[cfg(not(windows))]
+            { "python3 -c 'print(input())'" }
         };
         assert!(
             last_contents.contains(buffered_block),
@@ -2787,21 +2820,26 @@ mod tests {
             .context("write bash runner")?;
 
         let watched = workspace.join("doc.md")?;
-        let initial_doc = if cfg!(windows) {
-            indoc! {
-                r#"
-                ```bash runbook
-                [Console]::Out.WriteLine('Hello world')
-                ```
-                "#
+        let initial_doc = {
+            #[cfg(windows)]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    [Console]::Out.WriteLine('Hello world')
+                    ```
+                    "#
+                }
             }
-        } else {
-            indoc! {
-                r#"
-                ```bash runbook
-                echo "Hello world"
-                ```
-                "#
+            #[cfg(not(windows))]
+            {
+                indoc! {
+                    r#"
+                    ```bash runbook
+                    echo "Hello world"
+                    ```
+                    "#
+                }
             }
         };
         resolver
@@ -2827,18 +2865,28 @@ mod tests {
             .context("persist initial render")?;
         let mut last_contents = rendered.clone();
 
-        let appended = if cfg!(windows) {
-            format!(
-                "{rendered}\n\n```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```\n"
-            )
-        } else {
-            format!("{rendered}\n\n```bash runbook\ncat\n```\n")
+        let appended = {
+            #[cfg(windows)]
+            {
+                format!(
+                    "{rendered}\n\n```bash runbook\n[Console]::Out.Write([Console]::In.ReadToEnd())\n```\n"
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                format!("{rendered}\n\n```bash runbook\ncat\n```\n")
+            }
         };
         resolver
             .write_file(&watched, appended.as_bytes())
             .context("append cat block")?;
 
-        let cat_marker = if cfg!(windows) { "ReadToEnd" } else { "cat" };
+        let cat_marker = {
+            #[cfg(windows)]
+            { "ReadToEnd" }
+            #[cfg(not(windows))]
+            { "cat" }
+        };
         let target_line = appended
             .lines()
             .enumerate()

@@ -433,8 +433,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 let message = editor.take_status_message();
                                 let changed_blocks = editor.take_recently_saved_blocks();
                                 if !changed_blocks.is_empty()
-                                    && let Err(err) =
-                                        session_handle.enqueue_blocks(changed_blocks)
+                                    && let Err(err) = session_handle.enqueue_blocks(changed_blocks)
                                 {
                                     push_log_line(
                                         &logs,
@@ -475,10 +474,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
 }
 
 fn resolve_target(cli_args: &[String], resolver: &PathResolver) -> Result<GuardedPath> {
-    let raw = cli_args
-        .first()
-        .map(|s| s.as_str())
-        .unwrap_or("README.md");
+    let raw = cli_args.first().map(|s| s.as_str()).unwrap_or("README.md");
     resolver
         .parse_env_path(resolver.root(), raw)
         .with_context(|| format!("resolve editor target {raw}"))
