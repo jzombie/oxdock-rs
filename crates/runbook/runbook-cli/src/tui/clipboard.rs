@@ -163,8 +163,13 @@ pub(crate) fn log_key_event(logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::{is_copy_shortcut, is_paste_shortcut};
+    use super::{is_copy_shortcut, is_paste_shortcut, log_key_event, log_selection_state};
+    use crate::tui::editor::{EditorState, TextPosition};
+    use crate::tui::logs::LogRecord;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use oxdock_fs::{GuardedPath, PathResolver};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn copy_shortcuts_match() {
@@ -188,5 +193,35 @@ mod tests {
         assert!(is_paste_shortcut(&cmd_v));
         assert!(is_paste_shortcut(&shift_insert));
         assert!(!is_paste_shortcut(&other));
+    }
+
+    fn make_editor() -> EditorState {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            Arc::new(PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver"));
+        let path = root.join("doc.md").expect("path");
+        resolver.write_file(&path, b"line1\nline2").expect("write");
+        EditorState::load(path, resolver).expect("load")
+    }
+
+    #[test]
+    fn log_key_event_appends_log() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        log_key_event(&logs, "test", &event);
+        let guard = logs.lock().unwrap();
+        assert!(guard[0].content.contains("code=Char('a')"));
+    }
+
+    #[test]
+    fn log_selection_state_appends_log() {
+        let mut editor = make_editor();
+        editor.begin_mouse_selection(TextPosition::new(0, 0));
+        editor.update_mouse_selection(TextPosition::new(0, 2));
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        log_selection_state(&editor, &logs, "sel");
+        let guard = logs.lock().unwrap();
+        assert!(guard[0].content.contains("[SEL] sel"));
     }
 }

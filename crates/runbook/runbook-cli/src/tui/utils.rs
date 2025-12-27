@@ -12,7 +12,7 @@ pub(crate) fn scroll_delta_for(kind: MouseEventKind, config: &TuiConfig) -> isiz
 
 #[cfg(test)]
 mod tests {
-    use super::{scroll_delta_for, TuiConfig};
+    use super::{TuiConfig, scroll_delta_for};
     use crossterm::event::MouseEventKind;
 
     #[test]

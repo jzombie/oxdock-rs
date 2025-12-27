@@ -2449,6 +2449,183 @@ mod tests {
     }
 
     #[test]
+    fn fence_helpers_parse_info_and_labels() {
+        assert_eq!(display_info(""), "plain");
+        assert_eq!(display_info("sh"), "sh");
+
+        let info = parse_fence_info("sh lang=\"bash\" key=value");
+        assert_eq!(info.language.as_deref(), Some("bash"));
+        assert_eq!(info.params.get("key").map(String::as_str), Some("value"));
+
+        let before = FenceBlock {
+            fence: '`',
+            fence_len: 3,
+            info: "sh".to_string(),
+            start_line: 1,
+            end_line: 2,
+            content: String::new(),
+        };
+        assert_eq!(fence_label(Some(&before), None), "(sh)");
+        assert_eq!(fence_label(None, None), "(plain)");
+    }
+
+    #[test]
+    fn fence_start_and_split_ws() {
+        assert_eq!(split_leading_ws("   abc"), (3, "abc"));
+        assert_eq!(split_leading_ws("\t\tx"), (2, "x"));
+
+        let (ch, len, info) = parse_fence_start("```rust").expect("fence");
+        assert_eq!(ch, '`');
+        assert_eq!(len, 3);
+        assert_eq!(info, "rust");
+        assert!(parse_fence_start("``nope").is_none());
+    }
+
+    #[test]
+    fn parse_inline_meta_and_output_meta() {
+        let meta = parse_inline_meta("```text runbook code=abc hash=def nl=2");
+        assert_eq!(meta.language.as_deref(), Some("text"));
+        assert_eq!(meta.code_hash.as_deref(), Some("abc"));
+        assert_eq!(meta.combined_hash.as_deref(), Some("def"));
+        assert_eq!(meta.newline_count, Some(2));
+        assert!(meta.saw_runbook);
+
+        let mut code = None;
+        let mut stdout = None;
+        let mut stderr = None;
+        let mut combined = None;
+        parse_output_meta(
+            "<!-- runbook-output:meta code=aa stdout=bb stderr=cc hash=dd -->",
+            &mut code,
+            &mut stdout,
+            &mut stderr,
+            &mut combined,
+        );
+        assert_eq!(code.as_deref(), Some("aa"));
+        assert_eq!(stdout.as_deref(), Some("bb"));
+        assert_eq!(stderr.as_deref(), Some("cc"));
+        assert_eq!(combined.as_deref(), Some("dd"));
+    }
+
+    #[test]
+    fn output_block_parsing_and_formatting() {
+        let lines = vec![
+            OUTPUT_BEGIN,
+            "<!-- runbook-output:meta code=abc hash=def -->",
+            "```text runbook code=abc hash=def nl=1",
+            "hello",
+            "```",
+            OUTPUT_END,
+        ];
+        let refs: Vec<&str> = lines.iter().copied().collect();
+        let block = parse_output_block(&refs, 0).expect("block");
+        assert_eq!(block.stdout, "hello");
+        assert_eq!(block.code_hash.as_deref(), Some("abc"));
+        assert_eq!(block.combined_hash.as_deref(), Some("def"));
+        assert_eq!(block.stdout_newlines, Some(1));
+
+        let rendered = format_output_block("abc", "out\n", "err\n");
+        assert!(rendered.iter().any(|line| line.contains("runbook")));
+        assert!(rendered.iter().any(|line| line.contains("ERROR: err")));
+    }
+
+    #[test]
+    fn output_normalization_and_restore() {
+        let normalized = normalize_output("hi\r\n");
+        assert!(!normalized.contains('\r'));
+        assert!(normalized.starts_with("hi"));
+        assert_eq!(count_trailing_newlines("hi\n\n"), 2);
+        assert_eq!(short_hash("abcdef"), "abcdef");
+
+        let restored = restore_with_trailing_newlines("ok", Some(2));
+        let eol = LineEnding::from_current_platform().denormalize("\n");
+        assert_eq!(restored, format!("ok{eol}{eol}"));
+    }
+
+    #[test]
+    fn consumed_line_helpers_track_ranges() {
+        let mut consumed = vec![false; 5];
+        mark_consumed(&mut consumed, 1, 4);
+        assert_eq!(consumed, vec![false, true, true, true, false]);
+
+        let lines = vec!["a", "b", "c", "d", "e"];
+        let mut out = Vec::new();
+        push_unconsumed_lines(&consumed, &lines, 0..5, &mut out);
+        assert_eq!(out, vec!["a".to_string(), "e".to_string()]);
+    }
+
+    #[test]
+    fn parse_fenced_blocks_with_stderr() {
+        let lines = vec![
+            "```text runbook code=abc hash=def nl=1",
+            "out",
+            "```",
+            "",
+            STDERR_MARKER,
+            "```text runbook code=abc hash=def nl=1",
+            "err",
+            "```",
+        ];
+        let refs: Vec<&str> = lines.iter().copied().collect();
+        let block = parse_output_block(&refs, 0).expect("block");
+        assert_eq!(block.stdout, "out");
+        assert_eq!(block.stderr, "err");
+    }
+
+    #[test]
+    fn take_detached_output_block_matches_hash() {
+        let code_hash = "abc";
+        let block_lines = vec![
+            OUTPUT_BEGIN,
+            "<!-- runbook-output:meta code=abc hash=def -->",
+            "```text runbook code=abc hash=def nl=1",
+            "out",
+            "```",
+            OUTPUT_END,
+        ];
+        let refs: Vec<&str> = block_lines.iter().copied().collect();
+        let mut consumed = vec![false; refs.len()];
+        let block = take_detached_output_block(&refs, 0, code_hash, &mut consumed).expect("block");
+        assert_eq!(block.stdout, "out");
+        assert!(consumed.iter().any(|flag| *flag));
+    }
+
+    #[test]
+    fn parse_fences_collects_blocks() {
+        let input = indoc! {r#"
+        prefix
+        ```sh
+        echo hi
+        ```
+        tail
+        "#};
+        let fences = parse_fences(input);
+        assert_eq!(fences.len(), 1);
+        assert_eq!(fences[0].info, "sh");
+        assert!(fences[0].content.contains("echo hi"));
+    }
+
+    #[test]
+    fn parse_fenced_block_requires_closing() {
+        let lines = vec!["```text", "out"];
+        let refs: Vec<&str> = lines.iter().copied().collect();
+        assert!(parse_fenced_block(&refs, 0).is_none());
+    }
+
+    #[test]
+    fn format_output_block_without_stderr() {
+        let lines = format_output_block("abc", "only\n", "");
+        assert!(lines.iter().any(|line| line.contains("```text")));
+        assert!(!lines.iter().any(|line| line.contains("ERROR:")));
+    }
+
+    #[test]
+    fn combined_hash_is_sha256_len() {
+        let hash = combined_output_hash("a", "b");
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
     fn snippet_env_hidden_without_inherit() -> Result<()> {
         let script = indoc! {
             r#"

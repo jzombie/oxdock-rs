@@ -585,8 +585,15 @@ impl ExecutionOutputObserver for SessionOutputObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionOutputObserver, SessionEvent, SessionLogSource, SessionOutputObserver};
-    use std::sync::mpsc;
+    use super::{
+        ExecutionOutputObserver, RunControl, RunnerCache, SessionCommand, SessionEvent,
+        SessionLogSource, SessionOutputObserver, SessionState,
+    };
+    use crate::session::run_coordinator::RunCoordinator;
+    use oxdock_fs::{GuardedPath, PathResolver};
+    use std::collections::{HashSet, VecDeque};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex, mpsc};
 
     #[test]
     fn observer_splits_lines_and_flushes() {
@@ -634,5 +641,112 @@ mod tests {
 
         observer.flush();
         assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    fn make_state() -> (SessionState, mpsc::Receiver<SessionEvent>) {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            Arc::new(PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver"));
+        let (event_tx, event_rx) = mpsc::channel();
+        let (completion_tx, completion_rx) = mpsc::channel();
+        let state = SessionState {
+            resolver,
+            workspace_root: root.clone(),
+            watched: root.clone(),
+            source_dir: root.clone(),
+            cache: Arc::new(Mutex::new(RunnerCache::default())),
+            last_contents: Arc::new(Mutex::new(String::new())),
+            emit_block_events: Arc::new(AtomicBool::new(false)),
+            run_control: Arc::new(RunControl::new()),
+            coordinator: RunCoordinator::new(),
+            plan_locked: true,
+            deferred_lines: VecDeque::new(),
+            deferred_set: HashSet::new(),
+            event_tx,
+            completion_tx,
+            completion_rx,
+        };
+        (state, event_rx)
+    }
+
+    #[test]
+    fn handle_command_enqueue_blocks_queues_events() {
+        let (mut state, event_rx) = make_state();
+        state.handle_command(SessionCommand::EnqueueBlocks {
+            lines: vec![1, 2, 2, 0],
+        });
+        let mut queued = Vec::new();
+        let mut skipped = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                SessionEvent::AutoRunQueued { line } => queued.push(line),
+                SessionEvent::AutoRunSkipped { line } => skipped.push(line),
+                _ => {}
+            }
+        }
+        queued.sort_unstable();
+        skipped.sort_unstable();
+        assert_eq!(queued, vec![1, 2]);
+        assert_eq!(skipped, vec![0]);
+    }
+
+    #[test]
+    fn handle_stop_request_sends_stop_issued() {
+        let (mut state, event_rx) = make_state();
+        let run_control = Arc::clone(&state.run_control);
+        let _guard = run_control.begin();
+        let decision = state.coordinator.request_run(5);
+        match decision {
+            super::run_coordinator::RunDecision::Dispatch { line, .. } => {
+                state.coordinator.start_result(line);
+            }
+            _ => panic!("expected dispatch"),
+        }
+        state.handle_stop_request(5);
+        let mut saw_stop = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::StopIssued { line } = event {
+                assert_eq!(line, 5);
+                saw_stop = true;
+            }
+        }
+        assert!(saw_stop);
+    }
+
+    #[test]
+    fn handle_stop_request_no_active() {
+        let (mut state, event_rx) = make_state();
+        state.handle_stop_request(3);
+        let mut saw_ignored = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::StopIgnored { line } = event {
+                assert_eq!(line, 3);
+                saw_ignored = true;
+            }
+        }
+        assert!(saw_ignored);
+    }
+
+    #[test]
+    fn handle_stop_request_wrong_line_reports_busy() {
+        let (mut state, event_rx) = make_state();
+        let decision = state.coordinator.request_run(5);
+        match decision {
+            super::run_coordinator::RunDecision::Dispatch { line, .. } => {
+                state.coordinator.start_result(line);
+            }
+            _ => panic!("expected dispatch"),
+        }
+        state.handle_stop_request(3);
+        let mut saw_busy = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::Busy { requested, active } = event {
+                assert_eq!(requested, 3);
+                assert_eq!(active, 5);
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy);
     }
 }

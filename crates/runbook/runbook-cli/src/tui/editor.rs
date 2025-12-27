@@ -1243,10 +1243,47 @@ mod tests {
         assert_eq!(editor.hit_test_run_glyph(col, 0), Some(0));
         assert_eq!(editor.hit_test_run_glyph(0, 3), None);
 
-        let pos = editor.text_position_from_point(
-            (visible.lines[0].prefix_width + 2) as u16,
-            0,
-        );
+        let pos = editor.text_position_from_point((visible.lines[0].prefix_width + 2) as u16, 0);
         assert_eq!(pos, Some(TextPosition::new(0, 2)));
+    }
+
+    #[test]
+    fn cursor_movement_and_editing() {
+        let mut editor = make_editor(&["ab", "cd"]);
+        editor.move_right();
+        assert_eq!(editor.cursor_col(), 1);
+        editor.move_left();
+        assert_eq!(editor.cursor_col(), 0);
+        editor.move_down();
+        assert_eq!(editor.cursor_row, 1);
+        editor.move_up();
+        assert_eq!(editor.cursor_row, 0);
+
+        editor.move_line_end();
+        editor.backspace();
+        assert_eq!(editor.lines[0], "a");
+
+        editor.move_line_end();
+        editor.insert_newline();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.cursor_row, 1);
+
+        editor.delete_forward();
+        assert_eq!(editor.lines[1], "cd");
+    }
+
+    #[test]
+    fn scroll_and_selection_columns() {
+        let mut editor = make_editor(&["one", "two", "three"]);
+        editor.scroll_by(1, 1);
+        assert_eq!(editor.scroll_row(), 1);
+        editor.scroll_by(-1, 1);
+        assert_eq!(editor.scroll_row(), 0);
+
+        editor.begin_mouse_selection(TextPosition::new(0, 1));
+        editor.update_mouse_selection(TextPosition::new(1, 2));
+        assert_eq!(editor.selection_columns_for_line(0), Some((1, 3)));
+        assert_eq!(editor.selection_columns_for_line(1), Some((0, 2)));
+        assert_eq!(editor.selection_columns_for_line(2), None);
     }
 }

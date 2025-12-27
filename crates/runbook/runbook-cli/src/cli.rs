@@ -65,40 +65,37 @@ mod tests {
 
     #[test]
     fn parse_default_args() {
-        let (mode, args) = LaunchMode::from_args(std::iter::empty::<String>())
-            .expect("parse default");
+        let (mode, args) =
+            LaunchMode::from_args(std::iter::empty::<String>()).expect("parse default");
         assert!(matches!(mode, LaunchMode::Default));
         assert!(args.is_empty());
     }
 
     #[test]
     fn parse_tui_flag() {
-        let (mode, args) = LaunchMode::from_args(["--tui", "notes.md"])
-            .expect("parse tui");
+        let (mode, args) = LaunchMode::from_args(["--tui", "notes.md"]).expect("parse tui");
         assert!(matches!(mode, LaunchMode::Tui));
         assert_eq!(args, vec!["notes.md"]);
     }
 
     #[test]
     fn parse_tui_subcommand() {
-        let (mode, args) = LaunchMode::from_args(["tui", "notes.md"])
-            .expect("parse tui");
+        let (mode, args) = LaunchMode::from_args(["tui", "notes.md"]).expect("parse tui");
         assert!(matches!(mode, LaunchMode::Tui));
         assert_eq!(args, vec!["notes.md"]);
     }
 
     #[test]
     fn parse_tui_as_positional_after_args() {
-        let (mode, args) = LaunchMode::from_args(["notes.md", "tui"])
-            .expect("parse args");
+        let (mode, args) = LaunchMode::from_args(["notes.md", "tui"]).expect("parse args");
         assert!(matches!(mode, LaunchMode::Default));
         assert_eq!(args, vec!["notes.md", "tui"]);
     }
 
     #[test]
     fn parse_run_block() {
-        let (mode, args) = LaunchMode::from_args(["--run-block", "notes.md", "42"])
-            .expect("parse run-block");
+        let (mode, args) =
+            LaunchMode::from_args(["--run-block", "notes.md", "42"]).expect("parse run-block");
         assert!(args.is_empty());
         match mode {
             LaunchMode::RunBlock { path, line } => {
@@ -111,8 +108,8 @@ mod tests {
 
     #[test]
     fn parse_run_block_rejects_invalid_line() {
-        let err = LaunchMode::from_args(["--run-block", "notes.md", "nope"])
-            .expect_err("invalid line");
+        let err =
+            LaunchMode::from_args(["--run-block", "notes.md", "nope"]).expect_err("invalid line");
         let message = err.to_string();
         assert!(
             message.contains("invalid line number"),

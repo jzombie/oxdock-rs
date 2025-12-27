@@ -30,6 +30,31 @@ use super::utils::scroll_delta_for;
 use super::views::{ControlsView, FramedView, HeaderView, StatusView};
 use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
 
+trait SessionActions {
+    fn run_block(&self, line: usize) -> Result<()>;
+    fn stop_active(&self, line: usize) -> Result<()>;
+    fn enqueue_blocks(&self, lines: Vec<usize>) -> Result<()>;
+    fn shutdown(&self) -> Result<()>;
+}
+
+impl SessionActions for SessionHandle {
+    fn run_block(&self, line: usize) -> Result<()> {
+        SessionHandle::run_block(self, line)
+    }
+
+    fn stop_active(&self, line: usize) -> Result<()> {
+        SessionHandle::stop_active(self, line)
+    }
+
+    fn enqueue_blocks(&self, lines: Vec<usize>) -> Result<()> {
+        SessionHandle::enqueue_blocks(self, lines)
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        SessionHandle::shutdown(self)
+    }
+}
+
 pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
     let config = TuiConfig::default();
     let workspace_root = discover_workspace_root().context("resolve workspace root")?;
@@ -76,123 +101,7 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
 
         loop {
             while let Some(event) = session_events.try_recv() {
-                match event {
-                    SessionEvent::RunStarted { line } => {
-                        running_line = Some(line);
-                        status = format!("Running block at line {}...", line);
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("running block at line {}", line),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                    SessionEvent::RunCompleted { line, success } => {
-                        running_line = None;
-                        if let Some(editor) = mode.editor_mut() {
-                            editor.mark_disk_stale();
-                        }
-                        if success {
-                            status = format!("Block at line {} completed", line);
-                            push_log_line(
-                                &logs,
-                                LogSource::Stdout,
-                                &format!("block at line {} completed", line),
-                                MAX_LOG_LINES,
-                            );
-                        } else {
-                            status = format!("Block at line {} failed", line);
-                            push_log_line(
-                                &logs,
-                                LogSource::Stderr,
-                                &format!("block at line {} failed", line),
-                                MAX_LOG_LINES,
-                            );
-                        }
-                    }
-                    SessionEvent::RunFailed { line, error } => {
-                        running_line = None;
-                        if let Some(editor) = mode.editor_mut() {
-                            editor.mark_disk_stale();
-                        }
-                        status = format!("Block at line {} failed", line);
-                        push_log_line(
-                            &logs,
-                            LogSource::Stderr,
-                            &format!("block at line {} error: {}", line, error),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                    SessionEvent::Log { source, message } => {
-                        let log_source = match source {
-                            SessionLogSource::Stdout => LogSource::Stdout,
-                            SessionLogSource::Stderr => LogSource::Stderr,
-                        };
-                        let line = if message.ends_with('\n') {
-                            message
-                        } else {
-                            format!("{message}\n")
-                        };
-                        let mut guard = logs.lock().unwrap();
-                        guard.push_back(LogRecord::new(log_source, line));
-                        trim_logs(&mut guard, MAX_LOG_LINES);
-                    }
-                    SessionEvent::AutoRunQueued { line } => {
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("queued auto-run for block at line {}", line),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                    SessionEvent::AutoRunSkipped { line } => {
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("block at line {} already queued", line),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                    SessionEvent::Busy { requested, active } => {
-                        status = String::from("Run in progress; wait for current block");
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!(
-                                "run for line {} deferred; block {} is active",
-                                requested, active
-                            ),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                    SessionEvent::StopQueued { line } => {
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("stop will be requested once block at line {} starts", line),
-                            MAX_LOG_LINES,
-                        );
-                        status =
-                            format!("Stop queued for block at line {}; waiting to start", line);
-                    }
-                    SessionEvent::StopIssued { line } => {
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("stop requested for block at line {}", line),
-                            MAX_LOG_LINES,
-                        );
-                        status = format!("Stop requested for block at line {}", line);
-                    }
-                    SessionEvent::StopIgnored { line } => {
-                        push_log_line(
-                            &logs,
-                            LogSource::Stdout,
-                            &format!("no active run to stop at line {}", line),
-                            MAX_LOG_LINES,
-                        );
-                    }
-                }
+                apply_session_event(event, &logs, &mut status, &mut running_line, &mut mode);
             }
 
             if let Some(editor) = mode.editor_mut()
@@ -480,13 +389,138 @@ fn resolve_target(cli_args: &[String], resolver: &PathResolver) -> Result<Guarde
         .with_context(|| format!("resolve editor target {raw}"))
 }
 
+fn apply_session_event(
+    event: SessionEvent,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    status: &mut String,
+    running_line: &mut Option<usize>,
+    mode: &mut UiMode,
+) {
+    match event {
+        SessionEvent::RunStarted { line } => {
+            *running_line = Some(line);
+            *status = format!("Running block at line {}...", line);
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("running block at line {}", line),
+                MAX_LOG_LINES,
+            );
+        }
+        SessionEvent::RunCompleted { line, success } => {
+            *running_line = None;
+            if let Some(editor) = mode.editor_mut() {
+                editor.mark_disk_stale();
+            }
+            if success {
+                *status = format!("Block at line {} completed", line);
+                push_log_line(
+                    logs,
+                    LogSource::Stdout,
+                    &format!("block at line {} completed", line),
+                    MAX_LOG_LINES,
+                );
+            } else {
+                *status = format!("Block at line {} failed", line);
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("block at line {} failed", line),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+        SessionEvent::RunFailed { line, error } => {
+            *running_line = None;
+            if let Some(editor) = mode.editor_mut() {
+                editor.mark_disk_stale();
+            }
+            *status = format!("Block at line {} failed", line);
+            push_log_line(
+                logs,
+                LogSource::Stderr,
+                &format!("block at line {} error: {}", line, error),
+                MAX_LOG_LINES,
+            );
+        }
+        SessionEvent::Log { source, message } => {
+            let log_source = match source {
+                SessionLogSource::Stdout => LogSource::Stdout,
+                SessionLogSource::Stderr => LogSource::Stderr,
+            };
+            let line = if message.ends_with('\n') {
+                message
+            } else {
+                format!("{message}\n")
+            };
+            let mut guard = logs.lock().unwrap();
+            guard.push_back(LogRecord::new(log_source, line));
+            trim_logs(&mut guard, MAX_LOG_LINES);
+        }
+        SessionEvent::AutoRunQueued { line } => {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("queued auto-run for block at line {}", line),
+                MAX_LOG_LINES,
+            );
+        }
+        SessionEvent::AutoRunSkipped { line } => {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("block at line {} already queued", line),
+                MAX_LOG_LINES,
+            );
+        }
+        SessionEvent::Busy { requested, active } => {
+            *status = String::from("Run in progress; wait for current block");
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!(
+                    "run for line {} deferred; block {} is active",
+                    requested, active
+                ),
+                MAX_LOG_LINES,
+            );
+        }
+        SessionEvent::StopQueued { line } => {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("stop will be requested once block at line {} starts", line),
+                MAX_LOG_LINES,
+            );
+            *status = format!("Stop queued for block at line {}; waiting to start", line);
+        }
+        SessionEvent::StopIssued { line } => {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("stop requested for block at line {}", line),
+                MAX_LOG_LINES,
+            );
+            *status = format!("Stop requested for block at line {}", line);
+        }
+        SessionEvent::StopIgnored { line } => {
+            push_log_line(
+                logs,
+                LogSource::Stdout,
+                &format!("no active run to stop at line {}", line),
+                MAX_LOG_LINES,
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_dashboard_keys(
     key_event: KeyEvent,
     status: &mut String,
     mode: &mut UiMode,
     keymap: &KeyBindings,
-    session_handle: &SessionHandle,
+    session_handle: &impl SessionActions,
     logs: &Arc<Mutex<VecDeque<LogRecord>>>,
     target_path: &GuardedPath,
     resolver: &Arc<PathResolver>,
@@ -523,7 +557,7 @@ fn handle_editor_shortcuts(
     clipboard: &mut Option<Clipboard>,
     logs: &Arc<Mutex<VecDeque<LogRecord>>>,
     status: &mut String,
-    session_handle: &SessionHandle,
+    session_handle: &impl SessionActions,
     keymap: &KeyBindings,
     running_line: Option<usize>,
 ) -> Result<bool> {
@@ -593,7 +627,7 @@ fn handle_editor_shortcuts(
 
 fn run_block_via_session(
     editor: &mut EditorState,
-    session_handle: &SessionHandle,
+    session_handle: &impl SessionActions,
     logs: &Arc<Mutex<VecDeque<LogRecord>>>,
     status: &mut String,
     running_line: Option<usize>,
@@ -700,5 +734,287 @@ impl UiMode {
             UiMode::Dashboard => None,
             UiMode::Editor(editor) => Some(editor.as_mut()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SessionActions, UiMode, apply_session_event, handle_dashboard_keys, resolve_target,
+        run_block_via_session,
+    };
+    use crate::session::{SessionEvent, SessionLogSource};
+    use crate::tui::editor::{EditorState, TextPosition};
+    use crate::tui::keymap::KeyBindings;
+    use crate::tui::logs::{LogRecord, LogSource};
+    use anyhow::{Result, anyhow};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use oxdock_fs::{GuardedPath, PathResolver};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct FakeSession {
+        run_calls: Mutex<Vec<usize>>,
+        stop_calls: Mutex<Vec<usize>>,
+        enqueue_calls: Mutex<Vec<Vec<usize>>>,
+        shutdown_calls: Mutex<usize>,
+        fail_run: bool,
+        fail_stop: bool,
+        fail_enqueue: bool,
+        fail_shutdown: bool,
+    }
+
+    impl SessionActions for FakeSession {
+        fn run_block(&self, line: usize) -> Result<()> {
+            if self.fail_run {
+                Err(anyhow!("run failed"))
+            } else {
+                self.run_calls.lock().unwrap().push(line);
+                Ok(())
+            }
+        }
+
+        fn stop_active(&self, line: usize) -> Result<()> {
+            if self.fail_stop {
+                Err(anyhow!("stop failed"))
+            } else {
+                self.stop_calls.lock().unwrap().push(line);
+                Ok(())
+            }
+        }
+
+        fn enqueue_blocks(&self, lines: Vec<usize>) -> Result<()> {
+            if self.fail_enqueue {
+                Err(anyhow!("enqueue failed"))
+            } else {
+                self.enqueue_calls.lock().unwrap().push(lines);
+                Ok(())
+            }
+        }
+
+        fn shutdown(&self) -> Result<()> {
+            if self.fail_shutdown {
+                Err(anyhow!("shutdown failed"))
+            } else {
+                let mut guard = self.shutdown_calls.lock().unwrap();
+                *guard += 1;
+                Ok(())
+            }
+        }
+    }
+
+    fn make_resolver() -> (GuardedPath, Arc<PathResolver>) {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            Arc::new(PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver"));
+        (root, resolver)
+    }
+
+    fn make_editor(contents: &str) -> EditorState {
+        let (root, resolver) = make_resolver();
+        let path = root.join("doc.md").expect("path");
+        resolver
+            .write_file(&path, contents.as_bytes())
+            .expect("write");
+        EditorState::load(path, resolver).expect("load")
+    }
+
+    #[test]
+    fn resolve_target_defaults_to_readme() {
+        let (root, resolver) = make_resolver();
+        let target = resolve_target(&[], &resolver).expect("resolve");
+        let expected = root.join("README.md").expect("join");
+        assert_eq!(target, expected);
+    }
+
+    #[test]
+    fn apply_session_event_updates_status_and_logs() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::from("Idle");
+        let mut running = None;
+        let mut mode = UiMode::Dashboard;
+        apply_session_event(
+            SessionEvent::RunStarted { line: 3 },
+            &logs,
+            &mut status,
+            &mut running,
+            &mut mode,
+        );
+        assert_eq!(running, Some(3));
+        assert!(status.contains("Running block at line 3"));
+        let guard = logs.lock().unwrap();
+        assert!(guard[0].content.contains("running block at line 3"));
+    }
+
+    #[test]
+    fn apply_session_event_appends_log_newline() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::from("Idle");
+        let mut running = None;
+        let mut mode = UiMode::Dashboard;
+        apply_session_event(
+            SessionEvent::Log {
+                source: SessionLogSource::Stdout,
+                message: String::from("hello"),
+            },
+            &logs,
+            &mut status,
+            &mut running,
+            &mut mode,
+        );
+        let guard = logs.lock().unwrap();
+        match guard[0].source {
+            LogSource::Stdout => {}
+            LogSource::Stderr => panic!("expected stdout log source"),
+        }
+        assert_eq!(guard[0].content, "hello\n");
+    }
+
+    #[test]
+    fn handle_dashboard_keys_opens_editor() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let (root, resolver) = make_resolver();
+        let target_path = root.join("notes.md").expect("path");
+        resolver
+            .write_file(&target_path, b"# Notes")
+            .expect("write");
+        let mut status = String::new();
+        let mut mode = UiMode::Dashboard;
+        let keymap = KeyBindings::default();
+        let session = FakeSession::default();
+        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty());
+        let done = handle_dashboard_keys(
+            key,
+            &mut status,
+            &mut mode,
+            &keymap,
+            &session,
+            &logs,
+            &target_path,
+            &resolver,
+        );
+        assert!(!done);
+        assert!(matches!(mode, UiMode::Editor(_)));
+        assert!(status.contains("Editing"));
+    }
+
+    #[test]
+    fn handle_dashboard_keys_quits() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let (root, resolver) = make_resolver();
+        let target_path = root.join("notes.md").expect("path");
+        let mut status = String::new();
+        let mut mode = UiMode::Dashboard;
+        let keymap = KeyBindings::default();
+        let session = FakeSession::default();
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty());
+        let done = handle_dashboard_keys(
+            key,
+            &mut status,
+            &mut mode,
+            &keymap,
+            &session,
+            &logs,
+            &target_path,
+            &resolver,
+        );
+        assert!(done);
+    }
+
+    #[test]
+    fn run_block_via_session_requests_stop_when_running() {
+        let mut editor = make_editor("```sh\necho hi\n```\n");
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::new();
+        let session = FakeSession::default();
+        let handled = run_block_via_session(&mut editor, &session, &logs, &mut status, Some(2), 2);
+        assert!(handled);
+        assert!(status.contains("Stop requested"));
+    }
+
+    #[test]
+    fn run_block_via_session_runs_when_idle() {
+        let mut editor = make_editor("```sh\necho hi\n```\n");
+        editor.set_cursor_position(TextPosition::new(1, 0));
+        editor.insert_text_at_cursor("#");
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::new();
+        let session = FakeSession::default();
+        let handled = run_block_via_session(&mut editor, &session, &logs, &mut status, None, 2);
+        assert!(handled);
+        assert!(status.contains("Starting block at line 2"));
+    }
+
+    #[test]
+    fn handle_editor_shortcuts_requires_runnable_block() {
+        let mut editor = make_editor("no blocks here");
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::new();
+        let session = FakeSession::default();
+        let keymap = KeyBindings::default();
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        let handled = super::handle_editor_shortcuts(
+            key,
+            &mut editor,
+            &mut None,
+            &logs,
+            &mut status,
+            &session,
+            &keymap,
+            None,
+        )
+        .expect("shortcut");
+        assert!(handled);
+        assert!(status.contains("Move the cursor inside a runnable block"));
+    }
+
+    #[test]
+    fn apply_session_event_handles_stop_and_busy() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::from("Idle");
+        let mut running = Some(1);
+        let mut mode = UiMode::Dashboard;
+        apply_session_event(
+            SessionEvent::Busy {
+                requested: 2,
+                active: 1,
+            },
+            &logs,
+            &mut status,
+            &mut running,
+            &mut mode,
+        );
+        assert!(status.contains("Run in progress"));
+
+        apply_session_event(
+            SessionEvent::StopQueued { line: 2 },
+            &logs,
+            &mut status,
+            &mut running,
+            &mut mode,
+        );
+        assert!(status.contains("Stop queued"));
+
+        apply_session_event(
+            SessionEvent::StopIssued { line: 2 },
+            &logs,
+            &mut status,
+            &mut running,
+            &mut mode,
+        );
+        assert!(status.contains("Stop requested"));
+    }
+
+    #[test]
+    fn run_block_via_session_reports_busy_on_other_active() {
+        let mut editor = make_editor("```sh\necho hi\n```\n");
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut status = String::new();
+        let session = FakeSession::default();
+        let handled = run_block_via_session(&mut editor, &session, &logs, &mut status, Some(3), 2);
+        assert!(handled);
+        assert!(status.contains("Run in progress"));
     }
 }

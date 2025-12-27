@@ -287,7 +287,9 @@ mod tests {
         assert!(matches!(stop, StopCommand::QueueUntilStart));
 
         match coordinator.start_result(line) {
-            StartDisposition::Expected { send_stop: Some(sent) } => {
+            StartDisposition::Expected {
+                send_stop: Some(sent),
+            } => {
                 assert_eq!(sent, token);
             }
             _ => panic!("unexpected start disposition"),
@@ -308,7 +310,10 @@ mod tests {
         let request = coordinator.prepare_next_queued().expect("queued");
         assert_eq!(request.line, 2);
         let start = coordinator.start_result(2);
-        assert!(matches!(start, StartDisposition::Expected { send_stop: None }));
+        assert!(matches!(
+            start,
+            StartDisposition::Expected { send_stop: None }
+        ));
 
         let stop = coordinator.request_stop(2);
         assert!(matches!(stop, StopCommand::SendNow { .. }));
