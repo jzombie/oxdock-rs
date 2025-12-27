@@ -63,3 +63,22 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 disallowed_methods = "deny"
 disallowed_types = "deny"
 disallowed_macros = "deny"
+
+# Workspace-level patch to substitute an actively-maintained fork for
+# the unmaintained `yaml-rust` crate. The RustSec advisory
+# RUSTSEC-2024-0320 flags `yaml-rust` as unmaintained; `syntect`
+# depends on it via `comrak`. Rather than modifying transitive
+# dependencies directly, we patch `crates-io` to use `yaml-rust2`.
+#
+# Note: This is specifically tied to the RunBook integration and is
+# further consideration for isolating RunBook from OxDock once development
+# progresses.
+#
+# See:
+# - Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0320
+# - Fork: https://github.com/Ethiraric/yaml-rust2
+#
+[patch.crates-io]
+# Use the yaml-rust2 fork as a drop-in replacement for yaml-rust
+# until upstream `yaml-rust` is maintained again.
+yaml-rust = { path = "crates/vendor/yaml-rust" }
