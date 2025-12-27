@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use arboard::Clipboard;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use crossterm::{
     event::{
@@ -38,6 +39,9 @@ const RUN_BUTTON_DISABLED: &str = "·";
 const RUN_BUTTON_BLANK: &str = " ";
 const RUN_BUTTON_WIDTH: usize = 1;
 const MAX_LOG_LINES: usize = 800;
+const SCROLL_LINES_PER_TICK: isize = 3;
+const SELECTION_FG: Color = Color::Black;
+const SELECTION_BG: Color = Color::LightCyan;
 
 #[derive(Clone, Copy)]
 struct KeyBinding {
@@ -145,6 +149,8 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let session_events = events;
         let mut running_line: Option<usize> = None;
         let keymap = KeyBindings::default();
+        let mut ui_layout = UiLayout::default();
+        let mut log_scroll_state = LogScrollState::default();
 
         loop {
             while let Some(event) = session_events.try_recv() {
@@ -276,7 +282,10 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
             let running_line_idx = running_line.map(|line| line.saturating_sub(1));
             let can_run_blocks = running_line.is_none();
 
+            let ui_layout_state = &mut ui_layout;
+            let logs_scroll = &mut log_scroll_state;
             terminal.draw(|f| {
+                ui_layout_state.reset();
                 let size = f.size();
                 let layout = Layout::default()
                     .direction(Direction::Vertical)
@@ -311,16 +320,19 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             "Watch + Logs\n\n{target_info}\nPress 'e' to open the inline editor. In the editor view, click ▶ beside a code block or press Ctrl+R to run it. Use 'q' to quit."
                         ));
                         controls_view.render(f, mid[0]);
+                        ui_layout_state.editor_area = None;
                     }
                     UiMode::Editor(editor) => {
                         let mut editor_view =
                             EditorView::new(editor, running_line_idx, can_run_blocks);
                         editor_view.render(f, mid[0]);
+                        ui_layout_state.editor_area = Some(mid[0]);
                     }
                 }
 
-                let mut logs_view = LogsView::new(&logs);
+                let mut logs_view = LogsView::new(&logs, logs_scroll);
                 logs_view.render(f, mid[1]);
+                ui_layout_state.logs_area = Some(mid[1]);
 
                 let mut status_view = StatusView::new(status.clone());
                 status_view.render(f, layout[2]);
@@ -329,23 +341,91 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
             if event::poll(Duration::from_millis(120))? {
                 match event::read()? {
                     CEvent::Mouse(mouse_event) => {
-                        if let UiMode::Editor(editor) = &mut mode {
-                            if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
-                                if let Some(line_idx) =
-                                    editor.hit_test_run_glyph(mouse_event.column, mouse_event.row)
+                        let mut handled = false;
+                        if matches!(
+                            mouse_event.kind,
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        ) {
+                            if ui_layout.logs_contains(mouse_event.column, mouse_event.row) {
+                                let delta = if matches!(mouse_event.kind, MouseEventKind::ScrollUp)
                                 {
-                                    let line_number = line_idx + 1;
-                                    if run_block_via_session(
-                                        editor,
-                                        &session_handle,
-                                        &logs,
-                                        &mut status,
-                                        running_line,
-                                        line_number,
-                                    ) {
-                                        continue;
+                                    -SCROLL_LINES_PER_TICK
+                                } else {
+                                    SCROLL_LINES_PER_TICK
+                                };
+                                log_scroll_state.scroll(delta);
+                                handled = true;
+                            }
+                        }
+                        if handled {
+                            continue;
+                        }
+                        if let UiMode::Editor(editor) = &mut mode {
+                            match mouse_event.kind {
+                                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                    if ui_layout
+                                        .editor_contains(mouse_event.column, mouse_event.row)
+                                    {
+                                        if let Some(info) = editor.render_info.as_ref() {
+                                            let viewport = info.inner_height as usize;
+                                            let delta =
+                                                if matches!(mouse_event.kind, MouseEventKind::ScrollUp)
+                                                {
+                                                    -SCROLL_LINES_PER_TICK
+                                                } else {
+                                                    SCROLL_LINES_PER_TICK
+                                                };
+                                            editor.scroll_by(delta, viewport);
+                                        }
                                     }
                                 }
+                                MouseEventKind::Down(MouseButton::Left) => {
+                                    if let Some(line_idx) = editor
+                                        .hit_test_run_glyph(mouse_event.column, mouse_event.row)
+                                    {
+                                        let line_number = line_idx + 1;
+                                        if run_block_via_session(
+                                            editor,
+                                            &session_handle,
+                                            &logs,
+                                            &mut status,
+                                            running_line,
+                                            line_number,
+                                        ) {
+                                            continue;
+                                        }
+                                    }
+
+                                    if let Some(position) = editor
+                                        .text_position_from_point(
+                                            mouse_event.column,
+                                            mouse_event.row,
+                                        )
+                                    {
+                                        editor.begin_mouse_selection(position);
+                                    } else {
+                                        editor.clear_selection();
+                                        editor.mouse_selecting = false;
+                                    }
+                                }
+                                MouseEventKind::Drag(MouseButton::Left) => {
+                                    if editor.mouse_selecting {
+                                        if let Some(position) = editor
+                                            .text_position_from_point(
+                                                mouse_event.column,
+                                                mouse_event.row,
+                                            )
+                                        {
+                                            editor.update_mouse_selection(position);
+                                        }
+                                    }
+                                }
+                                MouseEventKind::Up(MouseButton::Left) => {
+                                    if editor.mouse_selecting {
+                                        editor.end_mouse_selection();
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -489,10 +569,14 @@ struct EditorState {
     render_info: Option<EditorRenderInfo>,
     saved_block_hashes: HashMap<usize, u64>,
     recently_saved_blocks: Vec<usize>,
+    selection_anchor: Option<TextPosition>,
+    selection_head: Option<TextPosition>,
+    mouse_selecting: bool,
 }
 
 struct LineRender {
-    display: String,
+    prefix: String,
+    content: String,
     prefix_width: usize,
 }
 
@@ -500,6 +584,121 @@ struct VisibleLines {
     lines: Vec<LineRender>,
     arrow_width: usize,
     arrow_offset: usize,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug)]
+struct TextPosition {
+    row: usize,
+    col: usize,
+}
+
+impl TextPosition {
+    fn new(row: usize, col: usize) -> Self {
+        Self { row, col }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct UiLayout {
+    editor_area: Option<Rect>,
+    logs_area: Option<Rect>,
+}
+
+impl UiLayout {
+    fn reset(&mut self) {
+        self.editor_area = None;
+        self.logs_area = None;
+    }
+
+    fn editor_contains(&self, column: u16, row: u16) -> bool {
+        self.editor_area
+            .map(|rect| rect_contains(rect, column, row))
+            .unwrap_or(false)
+    }
+
+    fn logs_contains(&self, column: u16, row: u16) -> bool {
+        self.logs_area
+            .map(|rect| rect_contains(rect, column, row))
+            .unwrap_or(false)
+    }
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    let x = rect.x as u32;
+    let y = rect.y as u32;
+    let width = rect.width as u32;
+    let height = rect.height as u32;
+    let col = column as u32;
+    let line = row as u32;
+    col >= x && col < x + width && line >= y && line < y + height
+}
+
+struct LogScrollState {
+    offset: usize,
+    viewport: usize,
+    total_lines: usize,
+    follow_tail: bool,
+}
+
+impl Default for LogScrollState {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            viewport: 0,
+            total_lines: 0,
+            follow_tail: true,
+        }
+    }
+}
+
+impl LogScrollState {
+    fn offset(&self) -> usize {
+        self.offset
+    }
+
+    fn update_metrics(&mut self, total_lines: usize, viewport: usize) {
+        self.total_lines = total_lines;
+        self.viewport = viewport.max(1);
+        if self.follow_tail {
+            self.offset = self.max_offset();
+        } else {
+            self.clamp_to_bounds();
+        }
+    }
+
+    fn scroll(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        let max_offset = self.max_offset();
+        if delta > 0 {
+            let delta = delta as usize;
+            self.offset = (self.offset + delta).min(max_offset);
+            if self.offset == max_offset {
+                self.follow_tail = true;
+            }
+        } else {
+            let delta = (-delta) as usize;
+            self.offset = self.offset.saturating_sub(delta);
+            self.follow_tail = false;
+        }
+    }
+
+    fn clamp_to_bounds(&mut self) {
+        let max_offset = self.max_offset();
+        if self.offset > max_offset {
+            self.offset = max_offset;
+        }
+        if self.offset < max_offset {
+            self.follow_tail = false;
+        } else if self.total_lines <= self.viewport {
+            self.follow_tail = true;
+        }
+    }
+
+    fn max_offset(&self) -> usize {
+        self.total_lines.saturating_sub(self.viewport)
+    }
 }
 
 #[derive(Clone)]
@@ -546,6 +745,9 @@ impl EditorState {
             render_info: None,
             saved_block_hashes,
             recently_saved_blocks: Vec::new(),
+            selection_anchor: None,
+            selection_head: None,
+            mouse_selecting: false,
         })
     }
 
@@ -644,6 +846,10 @@ impl EditorState {
         self.cursor_row.saturating_sub(self.scroll_row)
     }
 
+    fn scroll_row(&self) -> usize {
+        self.scroll_row
+    }
+
     fn adjust_scroll(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
@@ -654,6 +860,23 @@ impl EditorState {
         let max_visible_row = self.scroll_row + viewport_height - 1;
         if self.cursor_row > max_visible_row {
             self.scroll_row = self.cursor_row + 1 - viewport_height;
+        }
+    }
+
+    fn scroll_by(&mut self, delta: isize, viewport_height: usize) {
+        if viewport_height == 0 || delta == 0 {
+            return;
+        }
+        let max_scroll = self
+            .lines
+            .len()
+            .saturating_sub(viewport_height.max(1));
+        if delta > 0 {
+            let delta = delta as usize;
+            self.scroll_row = (self.scroll_row + delta).min(max_scroll);
+        } else {
+            let delta = (-delta) as usize;
+            self.scroll_row = self.scroll_row.saturating_sub(delta);
         }
     }
 
@@ -709,9 +932,9 @@ impl EditorState {
                 number,
                 width = digits_width
             );
-            let display = format!("{prefix}{}", self.lines[idx]);
             rendered.push(LineRender {
-                display,
+                prefix: prefix.clone(),
+                content: self.lines[idx].clone(),
                 prefix_width: prefix.chars().count(),
             });
         }
@@ -1041,6 +1264,116 @@ impl EditorState {
         blocks.sort_by_key(|block| block.fence_line);
         blocks
     }
+
+    fn selection_columns_for_line(&self, row: usize) -> Option<(usize, usize)> {
+        let (start, end) = self.normalized_selection_range()?;
+        if row >= self.lines.len() {
+            return None;
+        }
+        if row < start.row || row > end.row {
+            return None;
+        }
+        let line_len = self.lines.get(row).map(|line| line.len()).unwrap_or(0);
+        let mut start_col = if row == start.row { start.col } else { 0 };
+        let mut end_col = if row == end.row { end.col } else { line_len };
+        start_col = start_col.min(line_len);
+        end_col = end_col.min(line_len);
+        if start_col == end_col {
+            return None;
+        }
+        if start_col > end_col {
+            std::mem::swap(&mut start_col, &mut end_col);
+        }
+        Some((start_col, end_col))
+    }
+
+    fn normalized_selection_range(&self) -> Option<(TextPosition, TextPosition)> {
+        let anchor = self.selection_anchor?;
+        let head = self.selection_head?;
+        if anchor == head {
+            return None;
+        }
+        if anchor <= head {
+            Some((anchor, head))
+        } else {
+            Some((head, anchor))
+        }
+    }
+
+    fn text_position_from_point(&self, column: u16, row: u16) -> Option<TextPosition> {
+        let info = self.render_info.as_ref()?;
+        if column < info.inner_x || row < info.inner_y {
+            return None;
+        }
+        let rel_x = (column - info.inner_x) as usize;
+        let rel_y = (row - info.inner_y) as usize;
+        if rel_x >= info.inner_width as usize || rel_y >= info.inner_height as usize {
+            return None;
+        }
+        if self.lines.is_empty() {
+            return None;
+        }
+        let absolute_row = self.scroll_row + rel_y;
+        let row_idx = absolute_row.min(self.lines.len().saturating_sub(1));
+        let prefix_width = info.prefix_width;
+        let col = if rel_x < prefix_width {
+            0
+        } else {
+            rel_x - prefix_width
+        };
+        let line_len = self.lines[row_idx].len();
+        let col_idx = col.min(line_len);
+        Some(TextPosition::new(row_idx, col_idx))
+    }
+
+    fn begin_mouse_selection(&mut self, position: TextPosition) {
+        let position = self.clamp_text_position(position);
+        self.selection_anchor = Some(position);
+        self.selection_head = Some(position);
+        self.mouse_selecting = true;
+        self.set_cursor_position(position);
+    }
+
+    fn update_mouse_selection(&mut self, position: TextPosition) {
+        if !self.mouse_selecting {
+            return;
+        }
+        let position = self.clamp_text_position(position);
+        self.selection_head = Some(position);
+        self.set_cursor_position(position);
+    }
+
+    fn end_mouse_selection(&mut self) {
+        self.mouse_selecting = false;
+        if let (Some(anchor), Some(head)) = (self.selection_anchor, self.selection_head) {
+            if anchor == head {
+                self.clear_selection();
+            }
+        } else {
+            self.clear_selection();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_head = None;
+    }
+
+    fn set_cursor_position(&mut self, position: TextPosition) {
+        let clamped = self.clamp_text_position(position);
+        self.cursor_row = clamped.row;
+        self.cursor_col = clamped.col;
+    }
+
+    fn clamp_text_position(&self, position: TextPosition) -> TextPosition {
+        if self.lines.is_empty() {
+            return TextPosition::new(0, 0);
+        }
+        let row = position.row.min(self.lines.len().saturating_sub(1));
+        let line_len = self.lines[row].len();
+        let col = position.col.min(line_len);
+        TextPosition::new(row, col)
+    }
 }
 
 struct HeaderView<'a> {
@@ -1122,13 +1455,34 @@ impl<'a> FramedView for EditorView<'a> {
         let visible =
             self.editor
                 .visible_lines_for_render(viewport, self.running_block, self.can_run_blocks);
-        let text = visible
-            .lines
-            .iter()
-            .map(|line| line.display.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        frame.render_widget(Paragraph::new(text), inner);
+        let selection_style = Style::default().fg(SELECTION_FG).bg(SELECTION_BG);
+        let mut lines = Vec::with_capacity(visible.lines.len());
+        let base_row = self.editor.scroll_row();
+        for (idx, line) in visible.lines.iter().enumerate() {
+            let mut spans = Vec::new();
+            spans.push(Span::styled(
+                line.prefix.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            let absolute_row = base_row + idx;
+            if let Some((start, end)) = self.editor.selection_columns_for_line(absolute_row) {
+                let (before, selected, after) =
+                    split_content_segments(&line.content, start, end);
+                if !before.is_empty() {
+                    spans.push(Span::raw(before));
+                }
+                if !selected.is_empty() {
+                    spans.push(Span::styled(selected, selection_style));
+                }
+                if !after.is_empty() {
+                    spans.push(Span::raw(after));
+                }
+            } else {
+                spans.push(Span::raw(line.content.clone()));
+            }
+            lines.push(Spans::from(spans));
+        }
+        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 
         self.editor.render_info = Some(EditorRenderInfo {
             inner_x: inner.x,
@@ -1169,11 +1523,15 @@ impl<'a> FramedView for EditorView<'a> {
 
 struct LogsView<'a> {
     logs: &'a Arc<Mutex<VecDeque<LogRecord>>>,
+    scroll: &'a mut LogScrollState,
 }
 
 impl<'a> LogsView<'a> {
-    fn new(logs: &'a Arc<Mutex<VecDeque<LogRecord>>>) -> Self {
-        Self { logs }
+    fn new(
+        logs: &'a Arc<Mutex<VecDeque<LogRecord>>>,
+        scroll: &'a mut LogScrollState,
+    ) -> Self {
+        Self { logs, scroll }
     }
 }
 
@@ -1185,11 +1543,14 @@ impl<'a> FramedView for LogsView<'a> {
     fn render_inner<B: Backend>(&mut self, frame: &mut Frame<'_, B>, inner: Rect) {
         let text = {
             let guard = self.logs.lock().unwrap();
+            let viewport = inner.height as usize;
+            self.scroll
+                .update_metrics(guard.len(), viewport.max(1));
             if guard.is_empty() {
                 Text::from("(no logs yet)")
             } else {
-                let height = inner.height as usize;
-                logs_to_text(&guard, height.max(1))
+                let start = self.scroll.offset();
+                logs_to_text_window(&guard, start, viewport.max(1))
             }
         };
         frame.render_widget(Paragraph::new(text), inner);
@@ -1222,6 +1583,24 @@ fn trim_logs(logs: &mut VecDeque<LogRecord>, max: usize) {
     while logs.len() > max {
         logs.pop_front();
     }
+}
+
+fn split_content_segments(content: &str, start: usize, end: usize) -> (String, String, String) {
+    if content.is_empty() {
+        return (String::new(), String::new(), String::new());
+    }
+    let len = content.len();
+    let start_idx = start.min(len);
+    let end_idx = end.min(len);
+    if start_idx >= end_idx {
+        let before = content[..start_idx].to_string();
+        let after = content[start_idx..].to_string();
+        return (before, String::new(), after);
+    }
+    let before = content[..start_idx].to_string();
+    let selected = content[start_idx..end_idx].to_string();
+    let after = content[end_idx..].to_string();
+    (before, selected, after)
 }
 
 fn run_block_via_session(
@@ -1331,13 +1710,18 @@ fn digits(mut value: usize) -> usize {
     width
 }
 
-fn logs_to_text(entries: &VecDeque<LogRecord>, max_lines: usize) -> Text<'static> {
+fn logs_to_text_window(
+    entries: &VecDeque<LogRecord>,
+    start: usize,
+    max_lines: usize,
+) -> Text<'static> {
     if max_lines == 0 {
         return Text::from("");
     }
-    let start = entries.len().saturating_sub(max_lines);
+    let clamped_start = start.min(entries.len());
+    let end = (clamped_start + max_lines).min(entries.len());
     let mut lines = Vec::new();
-    for record in entries.iter().skip(start) {
+    for record in entries.iter().skip(clamped_start).take(end.saturating_sub(clamped_start)) {
         let mut spans = Vec::new();
         spans.push(Span::styled(record.source.label(), record.source.style()));
         spans.push(Span::raw(" "));

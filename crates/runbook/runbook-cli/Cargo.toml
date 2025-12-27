@@ -26,6 +26,7 @@ sha2.workspace = true
 comrak.workspace = true
 crossterm = "0.27"
 ratatui = "0.20"
+arboard = "3"
 
 [lints]
 workspace = true
