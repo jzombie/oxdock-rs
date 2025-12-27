@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use arboard::Clipboard;
 use comrak::{Arena, Options, nodes::NodeValue, parse_document};
 use crossterm::{
@@ -39,9 +39,21 @@ const RUN_BUTTON_DISABLED: &str = "·";
 const RUN_BUTTON_BLANK: &str = " ";
 const RUN_BUTTON_WIDTH: usize = 1;
 const MAX_LOG_LINES: usize = 800;
-const SCROLL_LINES_PER_TICK: isize = 3;
+const DEFAULT_SCROLL_LINES_PER_TICK: isize = 6;
 const SELECTION_FG: Color = Color::Black;
 const SELECTION_BG: Color = Color::LightCyan;
+
+struct TuiConfig {
+    scroll_lines_per_tick: isize,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            scroll_lines_per_tick: DEFAULT_SCROLL_LINES_PER_TICK,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct KeyBinding {
@@ -116,6 +128,7 @@ fn main() -> Result<()> {
 }
 
 fn run_tui(cli_args: Vec<String>) -> Result<()> {
+    let config = TuiConfig::default();
     let target_path = resolve_target(&cli_args);
     let session_target = cli_args
         .first()
@@ -151,6 +164,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
         let keymap = KeyBindings::default();
         let mut ui_layout = UiLayout::default();
         let mut log_scroll_state = LogScrollState::default();
+        let mut clipboard: Option<Clipboard> = None;
 
         loop {
             while let Some(event) = session_events.try_recv() {
@@ -347,12 +361,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                         ) {
                             if ui_layout.logs_contains(mouse_event.column, mouse_event.row) {
-                                let delta = if matches!(mouse_event.kind, MouseEventKind::ScrollUp)
-                                {
-                                    -SCROLL_LINES_PER_TICK
-                                } else {
-                                    SCROLL_LINES_PER_TICK
-                                };
+                                let delta = scroll_delta_for(mouse_event.kind, &config);
                                 log_scroll_state.scroll(delta);
                                 handled = true;
                             }
@@ -369,12 +378,7 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                         if let Some(info) = editor.render_info.as_ref() {
                                             let viewport = info.inner_height as usize;
                                             let delta =
-                                                if matches!(mouse_event.kind, MouseEventKind::ScrollUp)
-                                                {
-                                                    -SCROLL_LINES_PER_TICK
-                                                } else {
-                                                    SCROLL_LINES_PER_TICK
-                                                };
+                                                scroll_delta_for(mouse_event.kind, &config);
                                             editor.scroll_by(delta, viewport);
                                         }
                                     }
@@ -461,6 +465,55 @@ fn run_tui(cli_args: Vec<String>) -> Result<()> {
                                 }
                             }
                             UiMode::Editor(editor) => {
+                                if is_copy_shortcut(&key_event) {
+                                    if clipboard.is_none() {
+                                        match Clipboard::new() {
+                                            Ok(new_clip) => clipboard = Some(new_clip),
+                                            Err(err) => {
+                                                push_log_line(
+                                                    &logs,
+                                                    LogSource::Stderr,
+                                                    &format!(
+                                                        "clipboard unavailable: {err}"
+                                                    ),
+                                                    MAX_LOG_LINES,
+                                                );
+                                                status = String::from(
+                                                    "Clipboard unavailable in this terminal",
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    if let Some(clip) = clipboard.as_mut() {
+                                        match editor.copy_selection_to_clipboard(clip) {
+                                            Ok(true) => {
+                                                status = String::from(
+                                                    "Selection copied to clipboard",
+                                                );
+                                            }
+                                            Ok(false) => {
+                                                status = String::from(
+                                                    "Select text to copy",
+                                                );
+                                            }
+                                            Err(err) => {
+                                                push_log_line(
+                                                    &logs,
+                                                    LogSource::Stderr,
+                                                    &format!(
+                                                        "clipboard copy failed: {err}"
+                                                    ),
+                                                    MAX_LOG_LINES,
+                                                );
+                                                status = String::from(
+                                                    "Clipboard copy failed; see logs",
+                                                );
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 if keymap.editor_run_block.matches(&key_event) {
                                     if let Some(line_number) = editor.block_start_for_cursor() {
                                         if run_block_via_session(
@@ -674,9 +727,7 @@ impl LogScrollState {
         if delta > 0 {
             let delta = delta as usize;
             self.offset = (self.offset + delta).min(max_offset);
-            if self.offset == max_offset {
-                self.follow_tail = true;
-            }
+            self.follow_tail = self.offset == max_offset;
         } else {
             let delta = (-delta) as usize;
             self.offset = self.offset.saturating_sub(delta);
@@ -698,6 +749,15 @@ impl LogScrollState {
 
     fn max_offset(&self) -> usize {
         self.total_lines.saturating_sub(self.viewport)
+    }
+
+    fn indicator_text(&self) -> Option<String> {
+        if self.total_lines == 0 || self.viewport == 0 {
+            return None;
+        }
+        let start = self.offset + 1;
+        let end = (self.offset + self.viewport).min(self.total_lines);
+        Some(format!("{start}-{end}/{total}", total = self.total_lines))
     }
 }
 
@@ -1357,6 +1417,7 @@ impl EditorState {
     fn clear_selection(&mut self) {
         self.selection_anchor = None;
         self.selection_head = None;
+        self.mouse_selecting = false;
     }
 
     fn set_cursor_position(&mut self, position: TextPosition) {
@@ -1373,6 +1434,53 @@ impl EditorState {
         let line_len = self.lines[row].len();
         let col = position.col.min(line_len);
         TextPosition::new(row, col)
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        let (start, end) = self.normalized_selection_range()?;
+        if start.row >= self.lines.len() {
+            return None;
+        }
+        let mut buffer = String::new();
+        let mut wrote_any = false;
+        for row in start.row..=end.row {
+            let line = self.lines.get(row)?;
+            let line_len = line.len();
+            let start_idx = if row == start.row {
+                start.col.min(line_len)
+            } else {
+                0
+            };
+            let end_idx = if row == end.row {
+                end.col.min(line_len)
+            } else {
+                line_len
+            };
+            if start_idx < end_idx {
+                buffer.push_str(&line[start_idx..end_idx]);
+                wrote_any = true;
+            }
+            if row != end.row {
+                wrote_any = true;
+                buffer.push('\n');
+            }
+        }
+        if wrote_any {
+            Some(buffer)
+        } else {
+            None
+        }
+    }
+
+    fn copy_selection_to_clipboard(&self, clipboard: &mut Clipboard) -> Result<bool> {
+        if let Some(text) = self.selection_text() {
+            clipboard
+                .set_text(text)
+                .map_err(|err| anyhow!("clipboard copy failed: {err}"))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -1554,6 +1662,23 @@ impl<'a> FramedView for LogsView<'a> {
             }
         };
         frame.render_widget(Paragraph::new(text), inner);
+
+        if let Some(label) = self.scroll.indicator_text() {
+            if inner.width > 0 {
+                let width = inner.width.min(16);
+                let x = inner.x + inner.width - width;
+                let rect = Rect {
+                    x,
+                    y: inner.y,
+                    width,
+                    height: 1,
+                };
+                let indicator = Paragraph::new(label)
+                    .alignment(Alignment::Right)
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(indicator, rect);
+            }
+        }
     }
 }
 
@@ -1601,6 +1726,26 @@ fn split_content_segments(content: &str, start: usize, end: usize) -> (String, S
     let selected = content[start_idx..end_idx].to_string();
     let after = content[end_idx..].to_string();
     (before, selected, after)
+}
+
+fn scroll_delta_for(kind: MouseEventKind, config: &TuiConfig) -> isize {
+    match kind {
+        MouseEventKind::ScrollUp => -config.scroll_lines_per_tick,
+        MouseEventKind::ScrollDown => config.scroll_lines_per_tick,
+        _ => 0,
+    }
+}
+
+fn is_copy_shortcut(event: &KeyEvent) -> bool {
+    match event.code {
+        KeyCode::Char('c') | KeyCode::Char('C') => event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER),
+        KeyCode::Insert => event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        _ => false,
+    }
 }
 
 fn run_block_via_session(
