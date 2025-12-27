@@ -2658,13 +2658,13 @@ mod tests {
             #[cfg(windows)]
             {
                 format!(
-                    "```bash runbook{}[Console]::Out.Write([Console]::In.ReadToEnd()){} ```",
-                    eol, eol
+                    "```bash runbook{}[Console]::Out.Write([Console]::In.ReadToEnd()){}{}```",
+                    eol, eol, ""
                 )
             }
             #[cfg(not(windows))]
             {
-                format!("```bash runbook{}cat{} ```", eol, eol)
+                format!("```bash runbook{}cat{}{}```", eol, eol, "")
             }
         };
         assert!(
