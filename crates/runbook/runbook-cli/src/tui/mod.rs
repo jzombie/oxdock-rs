@@ -5,6 +5,7 @@ pub(crate) mod editor;
 pub(crate) mod keymap;
 pub(crate) mod layout;
 pub(crate) mod logs;
+pub(crate) mod session_api;
 pub(crate) mod utils;
 pub(crate) mod views;
 

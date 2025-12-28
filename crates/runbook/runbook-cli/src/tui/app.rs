@@ -16,7 +16,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use crate::session::{SessionConfig, SessionEvent, SessionHandle, SessionLogSource, start_session};
+use crate::session::{SessionConfig, SessionEvent, SessionLogSource, start_session};
 
 use super::clipboard::{
     is_copy_shortcut, is_paste_shortcut, log_key_event, log_selection_state, run_copy_action,
@@ -26,34 +26,10 @@ use super::editor::{EditorAction, EditorState, EditorView};
 use super::keymap::KeyBindings;
 use super::layout::UiLayout;
 use super::logs::{LogRecord, LogScrollState, LogSource, LogsView, push_log_line, trim_logs};
+use super::session_api::SessionActions;
 use super::utils::scroll_delta_for;
 use super::views::{ControlsView, FramedView, HeaderView, StatusView};
 use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
-
-trait SessionActions {
-    fn run_block(&self, line: usize) -> Result<()>;
-    fn stop_active(&self, line: usize) -> Result<()>;
-    fn enqueue_blocks(&self, lines: Vec<usize>) -> Result<()>;
-    fn shutdown(&self) -> Result<()>;
-}
-
-impl SessionActions for SessionHandle {
-    fn run_block(&self, line: usize) -> Result<()> {
-        SessionHandle::run_block(self, line)
-    }
-
-    fn stop_active(&self, line: usize) -> Result<()> {
-        SessionHandle::stop_active(self, line)
-    }
-
-    fn enqueue_blocks(&self, lines: Vec<usize>) -> Result<()> {
-        SessionHandle::enqueue_blocks(self, lines)
-    }
-
-    fn shutdown(&self) -> Result<()> {
-        SessionHandle::shutdown(self)
-    }
-}
 
 pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
     let config = TuiConfig::default();
@@ -62,7 +38,8 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
         PathResolver::new_guarded(workspace_root.clone(), workspace_root.clone())
             .context("workspace resolver")?,
     );
-    let target_path = resolve_target(&cli_args, &resolver)?;
+    let target_base = crate::resolve_target_base(resolver.root());
+    let target_path = resolve_target(&cli_args, &resolver, &target_base)?;
     let session_target = cli_args
         .first()
         .cloned()
@@ -382,10 +359,14 @@ pub fn run_tui(cli_args: Vec<String>) -> Result<()> {
     result
 }
 
-fn resolve_target(cli_args: &[String], resolver: &PathResolver) -> Result<GuardedPath> {
+fn resolve_target(
+    cli_args: &[String],
+    resolver: &PathResolver,
+    base: &GuardedPath,
+) -> Result<GuardedPath> {
     let raw = cli_args.first().map(|s| s.as_str()).unwrap_or("README.md");
     resolver
-        .parse_env_path(resolver.root(), raw)
+        .parse_env_path(base, raw)
         .with_context(|| format!("resolve editor target {raw}"))
 }
 
@@ -740,13 +721,13 @@ impl UiMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionActions, UiMode, apply_session_event, handle_dashboard_keys, resolve_target,
-        run_block_via_session,
+        UiMode, apply_session_event, handle_dashboard_keys, resolve_target, run_block_via_session,
     };
     use crate::session::{SessionEvent, SessionLogSource};
     use crate::tui::editor::{EditorState, TextPosition};
     use crate::tui::keymap::KeyBindings;
     use crate::tui::logs::{LogRecord, LogSource};
+    use crate::tui::session_api::SessionActions;
     use anyhow::{Result, anyhow};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use oxdock_fs::{GuardedPath, PathResolver};
@@ -824,7 +805,8 @@ mod tests {
     #[test]
     fn resolve_target_defaults_to_readme() {
         let (root, resolver) = make_resolver();
-        let target = resolve_target(&[], &resolver).expect("resolve");
+        let base = crate::resolve_target_base(&root);
+        let target = resolve_target(&[], &resolver, &base).expect("resolve");
         let expected = root.join("README.md").expect("join");
         assert_eq!(target, expected);
     }

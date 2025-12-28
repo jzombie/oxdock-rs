@@ -4,8 +4,8 @@ use self::run_coordinator::{
     FinishDisposition, RunCoordinator, RunDecision, RunToken, StartDisposition, StopCommand,
 };
 use crate::{
-    ExecutionOutputObserver, RunControl, RunnerCache, read_stable_contents, run_block_in_place,
-    scan_and_register_runners,
+    ExecutionOutputObserver, RunControl, RunnerCache, read_stable_contents, resolve_target_base,
+    run_block_in_place, scan_and_register_runners,
 };
 use anyhow::{Context, Result};
 use oxdock_fs::{GuardedPath, PathResolver, discover_workspace_root};
@@ -86,11 +86,7 @@ pub fn start_session(config: SessionConfig) -> Result<(SessionHandle, SessionEve
 
     scan_and_register_runners(&workspace_root);
 
-    let process_cwd = std::env::current_dir().context("determine current directory")?;
-    let cwd_base = match GuardedPath::new(workspace_root.root(), &process_cwd) {
-        Ok(g) => g,
-        Err(_) => workspace_root.clone(),
-    };
+    let cwd_base = resolve_target_base(&workspace_root);
 
     let watched = resolver
         .resolve_read(&cwd_base, &config.target)
@@ -586,8 +582,8 @@ impl ExecutionOutputObserver for SessionOutputObserver {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionOutputObserver, RunControl, RunnerCache, SessionCommand, SessionEvent,
-        SessionLogSource, SessionOutputObserver, SessionState,
+        ExecutionOutputObserver, RunCompletion, RunControl, RunnerCache, SessionCommand,
+        SessionEvent, SessionLogSource, SessionOutputObserver, SessionState,
     };
     use crate::session::run_coordinator::RunCoordinator;
     use oxdock_fs::{GuardedPath, PathResolver};
@@ -748,5 +744,114 @@ mod tests {
             }
         }
         assert!(saw_busy);
+    }
+
+    #[test]
+    fn handle_command_run_block_reports_busy_when_active() {
+        let (mut state, event_rx) = make_state();
+        let decision = state.coordinator.request_run(7);
+        assert!(matches!(
+            decision,
+            super::run_coordinator::RunDecision::Dispatch { line: 7, .. }
+        ));
+        state.handle_command(SessionCommand::RunBlock { line: 9 });
+
+        let mut saw_busy = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::Busy { requested, active } = event {
+                assert_eq!(requested, 9);
+                assert_eq!(active, 7);
+                saw_busy = true;
+            }
+        }
+        assert!(saw_busy);
+    }
+
+    #[test]
+    fn handle_command_shutdown_returns_true_when_idle() {
+        let (mut state, event_rx) = make_state();
+        let should_stop = state.handle_command(SessionCommand::Shutdown);
+        assert!(should_stop);
+        assert!(matches!(
+            event_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn handle_completion_emits_completed_on_success() {
+        let (mut state, event_rx) = make_state();
+        let decision = state.coordinator.request_run(4);
+        let token = match decision {
+            super::run_coordinator::RunDecision::Dispatch { token, .. } => token,
+            _ => panic!("expected dispatch"),
+        };
+
+        state.handle_completion(RunCompletion::Success {
+            line: 4,
+            token,
+            success: true,
+        });
+
+        let mut saw_completed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::RunCompleted { line, success } = event {
+                assert_eq!(line, 4);
+                assert!(success);
+                saw_completed = true;
+            }
+        }
+        assert!(saw_completed);
+    }
+
+    #[test]
+    fn handle_completion_emits_failed_on_no_block() {
+        let (mut state, event_rx) = make_state();
+        let decision = state.coordinator.request_run(12);
+        let token = match decision {
+            super::run_coordinator::RunDecision::Dispatch { token, .. } => token,
+            _ => panic!("expected dispatch"),
+        };
+
+        state.handle_completion(RunCompletion::NoBlock { line: 12, token });
+
+        let mut saw_failed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::RunFailed { line, error } = event {
+                assert_eq!(line, 12);
+                assert!(
+                    error.contains("No code block covering line 12"),
+                    "unexpected error: {error}"
+                );
+                saw_failed = true;
+            }
+        }
+        assert!(saw_failed);
+    }
+
+    #[test]
+    fn handle_completion_emits_failed_when_unexpected() {
+        let (mut state, event_rx) = make_state();
+        let decision = state.coordinator.request_run(1);
+        let token = match decision {
+            super::run_coordinator::RunDecision::Dispatch { token, .. } => token,
+            _ => panic!("expected dispatch"),
+        };
+        state.coordinator.cancel_active(token);
+        state.handle_completion(RunCompletion::Error {
+            line: 99,
+            token,
+            error: "boom".to_string(),
+        });
+
+        let mut saw_failed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let SessionEvent::RunFailed { line, error } = event {
+                assert_eq!(line, 99);
+                assert!(error.contains("coordinator idle"));
+                saw_failed = true;
+            }
+        }
+        assert!(saw_failed);
     }
 }
