@@ -13,15 +13,26 @@ pub use shell::{ShellLauncher, shell_program};
 use std::collections::HashMap;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::fs::File;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as UnixCommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt as WindowsCommandExt;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::path::{Path, PathBuf};
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Output as StdOutput, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::{
     ffi::{OsStr, OsString},
     iter::IntoIterator,
     mem,
 };
+
+#[cfg(unix)]
+use libc::{self, pid_t};
 
 #[cfg(miri)]
 use oxdock_fs::PathResolver;
@@ -212,6 +223,29 @@ impl CommandOptions {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    flag: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn reset(&self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+}
+
 pub enum CommandResult<H> {
     Completed,
     Captured(Vec<u8>),
@@ -244,8 +278,8 @@ impl ProcessManager for ShellProcessManager {
         script: &str,
         options: CommandOptions,
     ) -> Result<CommandResult<Self::Handle>> {
-        if std::env::var_os("OXBOOK_DEBUG").is_some() {
-            eprintln!("oxbook run_command: {script}");
+        if std::env::var_os("RUNBOOK_DEBUG").is_some() {
+            eprintln!("runbook run_command: {script}");
         }
         let mut command = shell_cmd(script);
         apply_ctx(&mut command, ctx);
@@ -306,6 +340,145 @@ impl ProcessManager for ShellProcessManager {
     }
 }
 
+#[derive(Debug)]
+pub struct CommandCancelled;
+
+impl std::fmt::Display for CommandCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("command cancelled")
+    }
+}
+
+impl std::error::Error for CommandCancelled {}
+
+#[derive(Clone)]
+pub struct InterruptibleProcessManager {
+    cancel: CancellationToken,
+    poll_interval: Duration,
+}
+
+impl InterruptibleProcessManager {
+    pub fn new(cancel: CancellationToken) -> Self {
+        Self {
+            cancel,
+            poll_interval: Duration::from_millis(35),
+        }
+    }
+
+    pub fn cancellation(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+}
+
+impl ProcessManager for InterruptibleProcessManager {
+    type Handle = ChildHandle;
+
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    fn run_command(
+        &mut self,
+        ctx: &CommandContext,
+        script: &str,
+        options: CommandOptions,
+    ) -> Result<CommandResult<Self::Handle>> {
+        if std::env::var_os("RUNBOOK_DEBUG").is_some() {
+            eprintln!("runbook interruptible run_command: {script}");
+        }
+        let mut command = shell_cmd(script);
+        apply_ctx(&mut command, ctx);
+        let CommandOptions {
+            mode,
+            stdin,
+            stdout,
+            stderr,
+        } = options;
+
+        let (stdout_stream, capture_buf) = match stdout {
+            CommandStdout::Inherit => (None, None),
+            CommandStdout::Stream(stream) => (Some(stream), None),
+            CommandStdout::Capture => {
+                if matches!(mode, CommandMode::Background) {
+                    bail!("cannot capture stdout for background command");
+                }
+                let buf = Arc::new(Mutex::new(Vec::new()));
+                let writer: SharedOutput = buf.clone();
+                (Some(writer), Some(buf))
+            }
+        };
+
+        let stderr_stream = match stderr {
+            CommandStderr::Inherit => None,
+            CommandStderr::Stream(stream) => Some(stream),
+        };
+
+        let need_null_stdin = stdin.is_none();
+        if need_null_stdin {
+            command.stdin(Stdio::null());
+        }
+        let desc = format!("{:?}", command);
+
+        match mode {
+            CommandMode::Foreground => {
+                let mut handle =
+                    spawn_child_with_streams(&mut command, stdin, stdout_stream, stderr_stream)?;
+                let cancel = self.cancel.clone();
+                let poll = self.poll_interval;
+                let (tx, rx) = mpsc::channel();
+                thread::spawn(move || {
+                    let mut killed = false;
+                    loop {
+                        if cancel.is_cancelled() && !killed {
+                            if let Err(err) = handle.kill() {
+                                let _ = tx.send(Err(err));
+                                return;
+                            }
+                            killed = true;
+                        }
+                        match handle.try_wait() {
+                            Ok(Some(_)) => {
+                                let status = handle.wait();
+                                let outcome = status.map(|status| (status, killed));
+                                let _ = tx.send(outcome);
+                                return;
+                            }
+                            Ok(None) => {
+                                thread::sleep(poll);
+                            }
+                            Err(err) => {
+                                let _ = tx.send(Err(err));
+                                return;
+                            }
+                        }
+                    }
+                });
+
+                match rx.recv() {
+                    Ok(Ok((status, killed))) => {
+                        if killed {
+                            return Err(CommandCancelled.into());
+                        }
+                        if !status.success() {
+                            bail!("command {desc} failed with status {}", status);
+                        }
+                        if let Some(buf) = capture_buf {
+                            let mut guard =
+                                buf.lock().map_err(|_| anyhow!("capture stdout poisoned"))?;
+                            return Ok(CommandResult::Captured(mem::take(&mut *guard)));
+                        }
+                        Ok(CommandResult::Completed)
+                    }
+                    Ok(Err(err)) => Err(err).with_context(|| format!("failed to run {desc}")),
+                    Err(_) => bail!("failed to wait for {desc}"),
+                }
+            }
+            CommandMode::Background => {
+                let handle =
+                    spawn_child_with_streams(&mut command, stdin, stdout_stream, stderr_stream)?;
+                Ok(CommandResult::Background(handle))
+            }
+        }
+    }
+}
+
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
     // Use command_path to strip Windows verbatim prefixes (\\?\) before passing to Command.
@@ -344,6 +517,8 @@ fn apply_ctx(command: &mut ProcessCommand, ctx: &CommandContext) {
 pub struct ChildHandle {
     child: Child,
     io_threads: Vec<std::thread::JoinHandle<()>>,
+    #[cfg(unix)]
+    pgid: pid_t,
 }
 
 impl BackgroundHandle for ChildHandle {
@@ -362,6 +537,14 @@ impl BackgroundHandle for ChildHandle {
 
     fn kill(&mut self) -> Result<()> {
         if self.child.try_wait()?.is_none() {
+            #[cfg(unix)]
+            {
+                match kill_process_group(self.pgid) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(anyhow!(err)),
+                }
+            }
             let _ = self.child.kill();
         }
         Ok(())
@@ -852,12 +1035,45 @@ pub fn default_process_manager() -> DefaultProcessManager {
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+#[cfg(unix)]
+fn kill_process_group(pgid: pid_t) -> std::io::Result<()> {
+    if pgid <= 0 {
+        return Ok(());
+    }
+    let res = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+    if res == -1 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn spawn_child_with_streams(
     cmd: &mut ProcessCommand,
     stdin: Option<SharedInput>,
     stdout: Option<SharedOutput>,
     stderr: Option<SharedOutput>,
 ) -> Result<ChildHandle> {
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
+
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
     }
@@ -872,6 +1088,8 @@ fn spawn_child_with_streams(
         .spawn()
         .with_context(|| format!("failed to spawn {:?}", cmd))?;
     let mut io_threads = Vec::new();
+    #[cfg(unix)]
+    let pgid = child.id() as pid_t;
 
     if let Some(stdin_stream) = stdin
         && let Some(mut child_stdin) = child.stdin.take()
@@ -932,7 +1150,12 @@ fn spawn_child_with_streams(
         io_threads.push(thread);
     }
 
-    Ok(ChildHandle { child, io_threads })
+    Ok(ChildHandle {
+        child,
+        io_threads,
+        #[cfg(unix)]
+        pgid,
+    })
 }
 
 /// Builder wrapper that centralizes direct usages of `std::process::Command`.
@@ -1041,13 +1264,33 @@ impl CommandBuilder {
         #[cfg(not(miri))]
         {
             let desc = format!("{:?}", self.inner);
+            #[cfg(unix)]
+            unsafe {
+                self.inner.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+
+            #[cfg(windows)]
+            {
+                const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+                self.inner.creation_flags(CREATE_NEW_PROCESS_GROUP);
+            }
+
             let child = self
                 .inner
                 .spawn()
                 .with_context(|| format!("failed to spawn {desc}"))?;
+            #[cfg(unix)]
+            let pgid = child.id() as pid_t;
             Ok(ChildHandle {
                 child,
                 io_threads: Vec::new(),
+                #[cfg(unix)]
+                pgid,
             })
         }
     }

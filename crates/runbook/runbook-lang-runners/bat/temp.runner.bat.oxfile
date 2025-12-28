@@ -1,0 +1,12 @@
+INHERIT_ENV [
+    RUNBOOK_SNIPPET_PATH,
+    RUNBOOK_SNIPPET_DIR
+]
+
+[windows, env:RUNBOOK_SNIPPET_PATH]
+WITH_IO [stdin] RUN "{{ env:RUNBOOK_SNIPPET_PATH }}"
+
+[unix] {
+    ECHO Batch commands only available on Windows.
+    EXIT 1
+}

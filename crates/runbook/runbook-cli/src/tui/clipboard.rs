@@ -1,0 +1,227 @@
+use std::collections::VecDeque;
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
+use arboard::Clipboard;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use super::config::MAX_LOG_LINES;
+use super::editor::EditorState;
+use super::logs::{LogRecord, LogSource, push_log_line};
+
+pub(crate) fn run_copy_action(
+    editor: &mut EditorState,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    clipboard: &mut Option<Clipboard>,
+) -> String {
+    let mut tried_clip = false;
+    if clipboard.is_none() {
+        match Clipboard::new() {
+            Ok(new_clip) => *clipboard = Some(new_clip),
+            Err(err) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("clipboard unavailable: {err}"),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+    }
+    if let Some(clip) = clipboard.as_mut() {
+        tried_clip = true;
+        match editor.copy_selection_to_clipboard(clip) {
+            Ok(true) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stdout,
+                    &format!("copy: {}", editor.selection_debug_summary()),
+                    MAX_LOG_LINES,
+                );
+                editor.clear_selection();
+                return String::from("Selection copied to clipboard");
+            }
+            Ok(false) => {}
+            Err(err) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stderr,
+                    &format!("clipboard copy failed: {err}"),
+                    MAX_LOG_LINES,
+                );
+            }
+        }
+    }
+
+    match editor.selection_text() {
+        Some(text) => match osc52_copy(&text) {
+            Ok(()) => {
+                push_log_line(
+                    logs,
+                    LogSource::Stdout,
+                    &format!("osc52 copy: {}", editor.selection_debug_summary()),
+                    MAX_LOG_LINES,
+                );
+                editor.clear_selection();
+                String::from("Selection copied via OSC52")
+            }
+            Err(err) => {
+                if !tried_clip {
+                    push_log_line(
+                        logs,
+                        LogSource::Stderr,
+                        &format!("clipboard unavailable and osc52 failed: {err}"),
+                        MAX_LOG_LINES,
+                    );
+                    String::from("Clipboard and OSC52 copy failed; see logs")
+                } else {
+                    push_log_line(
+                        logs,
+                        LogSource::Stderr,
+                        &format!("OSC52 fallback failed after clipboard attempt: {err}"),
+                        MAX_LOG_LINES,
+                    );
+                    String::from("OSC52 copy failed; see logs")
+                }
+            }
+        },
+        None => String::from("Select text to copy"),
+    }
+}
+
+pub(crate) fn osc52_copy(text: &str) -> Result<()> {
+    const MAX_OSC52_BYTES: usize = 100 * 1024;
+    let mut payload = text.as_bytes();
+    let mut truncated = false;
+    if payload.len() > MAX_OSC52_BYTES {
+        payload = &payload[..MAX_OSC52_BYTES];
+        truncated = true;
+    }
+    let mut buf = Vec::with_capacity(payload.len() + 32);
+    buf.extend_from_slice(payload);
+    if truncated {
+        buf.extend_from_slice(b"...(truncated)");
+    }
+    let b64 = BASE64_STD.encode(&buf);
+    let seq = format!("\x1b]52;c;{b64}\x07");
+    let mut out = io::stdout();
+    out.write_all(seq.as_bytes())?;
+    out.flush()?;
+    Ok(())
+}
+
+pub(crate) fn is_copy_shortcut(event: &KeyEvent) -> bool {
+    match event.code {
+        KeyCode::Char('c') | KeyCode::Char('C') => event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER),
+        KeyCode::Insert => event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        _ => false,
+    }
+}
+
+pub(crate) fn is_paste_shortcut(event: &KeyEvent) -> bool {
+    match event.code {
+        KeyCode::Char('v') | KeyCode::Char('V') => event
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER),
+        KeyCode::Insert => event.modifiers == KeyModifiers::SHIFT,
+        _ => false,
+    }
+}
+
+pub(crate) fn log_selection_state(
+    editor: &EditorState,
+    logs: &Arc<Mutex<VecDeque<LogRecord>>>,
+    label: &str,
+) {
+    let summary = editor.selection_debug_summary();
+    push_log_line(
+        logs,
+        LogSource::Stdout,
+        &format!("[SEL] {label}: {summary}"),
+        MAX_LOG_LINES,
+    );
+}
+
+pub(crate) fn log_key_event(logs: &Arc<Mutex<VecDeque<LogRecord>>>, label: &str, event: &KeyEvent) {
+    push_log_line(
+        logs,
+        LogSource::Stdout,
+        &format!(
+            "[KEY] {label}: code={:?}, modifiers={:?}, kind={:?}",
+            event.code, event.modifiers, event.kind
+        ),
+        MAX_LOG_LINES,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_copy_shortcut, is_paste_shortcut, log_key_event, log_selection_state};
+    use crate::tui::editor::{EditorState, TextPosition};
+    use crate::tui::logs::LogRecord;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use oxdock_fs::{GuardedPath, PathResolver};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn copy_shortcuts_match() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let cmd_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SUPER);
+        let insert = KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL);
+        let other = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(is_copy_shortcut(&ctrl_c));
+        assert!(is_copy_shortcut(&cmd_c));
+        assert!(is_copy_shortcut(&insert));
+        assert!(!is_copy_shortcut(&other));
+    }
+
+    #[test]
+    fn paste_shortcuts_match() {
+        let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        let cmd_v = KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SUPER);
+        let shift_insert = KeyEvent::new(KeyCode::Insert, KeyModifiers::SHIFT);
+        let other = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(is_paste_shortcut(&ctrl_v));
+        assert!(is_paste_shortcut(&cmd_v));
+        assert!(is_paste_shortcut(&shift_insert));
+        assert!(!is_paste_shortcut(&other));
+    }
+
+    fn make_editor() -> EditorState {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            Arc::new(PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver"));
+        let path = root.join("doc.md").expect("path");
+        resolver.write_file(&path, b"line1\nline2").expect("write");
+        EditorState::load(path, resolver).expect("load")
+    }
+
+    #[test]
+    fn log_key_event_appends_log() {
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        log_key_event(&logs, "test", &event);
+        let guard = logs.lock().unwrap();
+        assert!(guard[0].content.contains("code=Char('a')"));
+    }
+
+    #[test]
+    fn log_selection_state_appends_log() {
+        let mut editor = make_editor();
+        editor.begin_mouse_selection(TextPosition::new(0, 0));
+        editor.update_mouse_selection(TextPosition::new(0, 2));
+        let logs: Arc<Mutex<VecDeque<LogRecord>>> = Arc::new(Mutex::new(VecDeque::new()));
+        log_selection_state(&editor, &logs, "sel");
+        let guard = logs.lock().unwrap();
+        assert!(guard[0].content.contains("[SEL] sel"));
+    }
+}

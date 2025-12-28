@@ -1,0 +1,13 @@
+[package]
+name = "runbook"
+description = "RunBook placeholder crate"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# TODO: Change to true once crate is finalized for publishing
+publish = false
+
+[dependencies]

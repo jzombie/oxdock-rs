@@ -1,0 +1,11 @@
+[package]
+name = "yaml-rust"
+version = "0.4.5"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Use the maintained fork as the implementation. If running offline or if
+# this repo uses a different branch name on the fork, update the git
+# reference below.
+yaml-rust2 = { git = "https://github.com/Ethiraric/yaml-rust2", branch = "master" }

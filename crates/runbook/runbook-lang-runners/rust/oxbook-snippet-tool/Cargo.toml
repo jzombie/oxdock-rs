@@ -1,0 +1,11 @@
+[package]
+name = "runbook-snippet-tool"
+version = "0.0.0-dev"
+edition = "2024"
+
+# This is not intended for direct publishing and is injected during runtime.
+publish = false
+
+[dependencies]
+anyhow = "1.0.100"
+cargo_metadata = "0.23.1"
