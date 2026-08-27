@@ -5,7 +5,9 @@ use std::{
 
 #[cfg(miri)]
 use anyhow::bail;
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(not(miri))]
+use anyhow::Context;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 use std::fs::File;
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]

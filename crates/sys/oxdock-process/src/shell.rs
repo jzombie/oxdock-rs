@@ -85,6 +85,7 @@ pub fn spawn_interactive_shell(
     workspace_root: &GuardedPath,
     banner: &str,
 ) -> Result<()> {
+    let _ = workspace_root;
     #[cfg(unix)]
     {
         let mut cmd = CommandBuilder::new(shell_program());
