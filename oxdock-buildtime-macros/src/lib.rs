@@ -1,33 +1,56 @@
+//! OxDock's primary user-facing contract: declarative build scripts written
+//! inline, directly alongside Rust code.
+//!
+//! ```rust,ignore
+//! use oxdock_buildtime_macros::embed;
+//!
+//! embed! {
+//!     name: DemoAssets,
+//!     script: {
+//!         WORKDIR /
+//!         WRITE hello.txt hi
+//!     },
+//!     out_dir: "prebuilt",
+//! }
+//! ```
+//!
+//! The DSL executes through the hardened guarded engine (`oxdock-core` +
+//! `oxdock-fs`): every path stays sandboxed, subprocess lifecycle is tracked,
+//! and panics are isolated into `compile_error!` streams.
+//!
+//! Caching: a content fingerprint of the script, its statically discoverable
+//! inputs, and every referenced environment variable is stored in
+//! `<out_dir>/.oxdock_hash`. Matching fingerprints skip re-execution entirely;
+//! any drift rebuilds. `prepare!` behaves identically but emits no runtime
+//! module.
+
+use oxdock_buildtime_helpers::{
+    asset_input_fingerprint, embed_debug_enabled, embed_force_rebuild, execution_is_skipped,
+    stage_materialize,
+};
+use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
 use oxdock_embed::{emit_embed_module, gather_assets, runtime_support_tokens};
+#[allow(clippy::disallowed_types)]
+use oxdock_fs::UnguardedPath;
 use oxdock_fs::{GuardedPath, PathResolver};
-use oxdock_parser::{DslMacroInput, ScriptSource};
+use oxdock_parser::{DslMacroInput, ScriptSource, parse_script};
+use oxdock_process::BuiltinEnv;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_macro_input;
 
-// TODO: Update example and don't ignore
-/// Macro that runs the DSL at compile-time, materializes assets into a temp
-/// dir, and emits a lightweight struct with embedded bytes pointing at that dir.
+/// Runs the DSL at compile-time, materializes assets, and emits a lightweight
+/// struct with embedded bytes pointing at the output directory.
 ///
-/// ```rust,ignore
-/// use oxdock_buildtime_macros::embed;
-///
-/// embed! {
-///     name: DemoAssets,
-///     script: r#"...DSL..."#,
-///     out_dir: "prebuilt",
-/// }
-/// ```
+/// See the crate docs for the full inline contract.
 #[proc_macro]
 pub fn embed(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
     expand_embed_tokens(&input).into()
 }
 
-/// Macro similar to `embed!` but only prepares (builds/copies) the
-/// out_dir at compile time and emits no runtime struct. Use this when you
-/// want the assets present on disk during build but don't want an embedded
-/// struct generated into the consuming crate.
+/// Executes the DSL like [`embed`] but emits no runtime module. Use this when
+/// the assets only need to exist during the build.
 #[proc_macro]
 pub fn prepare(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DslMacroInput);
@@ -37,68 +60,22 @@ pub fn prepare(input: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
-    match prepare_macro_plan(input)? {
-        MacroPlan::Skip => {
-            tracing::info!("prepare: skipping build due to embed skip flag");
-            Ok(())
-        }
-        MacroPlan::Ready(plan) => {
-            let PreparedMacroPlan {
-                script_src,
-                script_span,
-                manifest_resolver: _,
-                out_dir,
-                out_dir_span,
-                should_build,
-                force_rebuild,
-            } = *plan;
+const HASH_FILE: &str = ".oxdock_hash";
+const STAGING_DIR: &str = ".oxdock-staging";
 
-            if should_build {
-                preflight_out_dir_for_build(&out_dir, out_dir_span)?;
-                if force_rebuild {
-                    tracing::info!(
-                        "prepare: force rebuilding assets into {}",
-                        out_dir.display()
-                    );
-                } else {
-                    tracing::info!("prepare: rebuilding assets into {}", out_dir.display());
-                }
-                let _final_folder = build_assets(&script_src, script_span, &out_dir)?;
-                return Ok(());
-            }
-
-            if out_dir.as_path().exists() {
-                if !out_dir.as_path().is_dir() {
-                    return Err(syn::Error::new(
-                        out_dir_span,
-                        format!(
-                            "out_dir exists but is not a directory: {}",
-                            out_dir.display()
-                        ),
-                    ));
-                }
-                tracing::info!("prepare: reusing assets at {}", out_dir.display());
-                return Ok(());
-            }
-
-            Err(syn::Error::new(
-                script_span,
-                format!(
-                    "prepare: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
-                    out_dir.display()
-                ),
-            ))
-        }
-    }
+/// True when an internal artifact (`hash` marker / staging residue / sandbox
+/// markers) would otherwise leak into embedded assets.
+fn is_internal_artifact(rel_path: &str) -> bool {
+    rel_path == HASH_FILE
+        || rel_path.starts_with(STAGING_DIR)
+        || rel_path.starts_with(".oxdock-tempdir")
 }
+
 fn join_guard(base: &GuardedPath, rel: &str, span: proc_macro2::Span) -> syn::Result<GuardedPath> {
     base.join(rel)
         .map_err(|e| syn::Error::new(span, e.to_string()))
 }
 
-/// Produce a normalized literal path by reusing the shared path normalizer in
-/// oxdock-fs (it strips Windows verbatim prefixes).
 fn embed_module_ident(name: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
         &format!("__oxdock_embed_{}", name),
@@ -148,63 +125,163 @@ fn expand_embed_tokens(input: &DslMacroInput) -> proc_macro2::TokenStream {
     }
 }
 
-fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
-    let name = &input.name;
-
-    match prepare_macro_plan(input)? {
-        MacroPlan::Skip => {
-            tracing::info!("embed: skipping build due to embed skip flag");
-            Ok(embed_error_stub(name))
+/// Extracts DSL text plus a representative span from either literal or braced
+/// script forms.
+fn script_source_text(
+    source: &ScriptSource,
+    fallback_span: proc_macro2::Span,
+) -> syn::Result<(String, proc_macro2::Span)> {
+    match source {
+        ScriptSource::Literal(lit) => Ok((lit.value(), lit.span())),
+        ScriptSource::Braced(ts) => {
+            let text = oxdock_parser::script_from_braced_tokens(ts)
+                .map_err(|e| syn::Error::new(fallback_span, format!("parse error: {e}")))?;
+            Ok((text, fallback_span))
         }
-        MacroPlan::Ready(plan) => {
-            let PreparedMacroPlan {
-                script_src,
-                script_span,
-                manifest_resolver,
-                out_dir,
-                out_dir_span,
-                should_build,
-                force_rebuild,
-            } = *plan;
+    }
+}
 
-            if should_build {
-                preflight_out_dir_for_build(&out_dir, out_dir_span)?;
-                if force_rebuild {
-                    tracing::info!("embed: force rebuilding assets into {}", out_dir.display());
-                } else {
-                    tracing::info!("embed: rebuilding assets into {}", out_dir.display());
-                }
-                let _final_folder = build_assets(&script_src, script_span, &out_dir)?;
-                let assets = gather_assets(&manifest_resolver, &out_dir)
-                    .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
-                return emit_embed_module(name, &assets);
-            }
-
-            if out_dir.as_path().exists() {
-                if !out_dir.as_path().is_dir() {
-                    return Err(syn::Error::new(
-                        out_dir_span,
-                        format!(
-                            "out_dir exists but is not a directory: {}",
-                            out_dir.display()
-                        ),
-                    ));
-                }
-                tracing::info!("embed: reusing assets at {}", out_dir.display());
-                let assets = gather_assets(&manifest_resolver, &out_dir)
-                    .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
-                return emit_embed_module(name, &assets);
-            }
-
+/// Runs `f`, converting panics from the asset engine into `syn::Error`s so a
+/// bug can never unwind the host compiler process.
+fn catch_engine_panics<T>(
+    span: proc_macro2::Span,
+    f: impl FnOnce() -> syn::Result<T>,
+) -> syn::Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
             Err(syn::Error::new(
-                script_span,
-                format!(
-                    "embed: refused to build assets (not primary package or .git missing) and out_dir missing at {}",
-                    out_dir.display()
-                ),
+                span,
+                format!("asset engine panicked: {msg}"),
             ))
         }
     }
+}
+
+struct InlinePlan {
+    script_src: String,
+    script_span: proc_macro2::Span,
+    manifest_resolver: PathResolver,
+    out_dir: GuardedPath,
+    fingerprint: String,
+}
+
+fn prepare_inline_plan(input: &DslMacroInput) -> syn::Result<InlinePlan> {
+    let (script_src, script_span) =
+        script_source_text(&input.script, proc_macro2::Span::call_site())?;
+    let manifest_resolver = PathResolver::from_manifest_env()
+        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+    let out_dir = join_guard(
+        manifest_resolver.root(),
+        &input.out_dir.value(),
+        input.out_dir.span(),
+    )?;
+
+    let steps = parse_script(&script_src)
+        .map_err(|e| syn::Error::new(script_span, format!("parse error: {e}")))?;
+    let build_context = oxdock_fs::discover_workspace_root()
+        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
+    let envs = BuiltinEnv::collect(&build_context).into_envs();
+    let fingerprint = catch_engine_panics(script_span, || {
+        asset_input_fingerprint(
+            &manifest_resolver,
+            &script_src,
+            &steps,
+            &out_dir.display().to_string(),
+            &envs,
+        )
+        .map_err(|e| syn::Error::new(script_span, format!("fingerprint failed: {e:#}")))
+    })?;
+
+    Ok(InlinePlan {
+        script_src,
+        script_span,
+        manifest_resolver,
+        out_dir,
+        fingerprint,
+    })
+}
+
+/// Force lever wins over cache validity: `OXDOCK_EMBED_FORCE_REBUILD`
+/// short-circuits the `.oxdock_hash` comparison entirely.
+fn should_rebuild(force: bool, cache_valid: bool) -> bool {
+    force || !cache_valid
+}
+
+fn cached_out_dir_valid(plan: &InlinePlan) -> bool {
+    if plan.out_dir.as_path().exists() && !plan.out_dir.as_path().is_dir() {
+        return false;
+    }
+    let hash_path = match plan.out_dir.join(HASH_FILE) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    plan.manifest_resolver
+        .read_to_string(&hash_path)
+        .map(|contents| contents.trim() == plan.fingerprint)
+        .unwrap_or(false)
+}
+
+fn record_cache_hash(plan: &InlinePlan) -> syn::Result<()> {
+    let hash_path = plan
+        .out_dir
+        .join(HASH_FILE)
+        .map_err(|e| syn::Error::new(plan.script_span, e.to_string()))?;
+    plan.manifest_resolver
+        .write_file(&hash_path, plan.fingerprint.as_bytes())
+        .map_err(|e| {
+            syn::Error::new(
+                plan.script_span,
+                format!("failed to record cache hash {}: {e}", hash_path.display()),
+            )
+        })
+}
+
+fn expand_prepare_internal(input: &DslMacroInput) -> syn::Result<()> {
+    if execution_is_skipped() {
+        return Ok(());
+    }
+    let plan = catch_engine_panics(proc_macro2::Span::call_site(), || {
+        prepare_inline_plan(input)
+    })?;
+
+    if should_rebuild(embed_force_rebuild(), cached_out_dir_valid(&plan)) {
+        preflight_out_dir_for_build(&plan.out_dir, input.out_dir.span())?;
+        catch_engine_panics(plan.script_span, || {
+            build_assets(&plan.script_src, plan.script_span, &plan.out_dir)
+        })?;
+        record_cache_hash(&plan)?;
+    }
+    Ok(())
+}
+
+fn expand_embed_internal(input: &DslMacroInput) -> syn::Result<proc_macro2::TokenStream> {
+    let name = &input.name;
+
+    if execution_is_skipped() {
+        return Ok(embed_error_stub(name));
+    }
+    let plan = catch_engine_panics(proc_macro2::Span::call_site(), || {
+        prepare_inline_plan(input)
+    })?;
+
+    if should_rebuild(embed_force_rebuild(), cached_out_dir_valid(&plan)) {
+        preflight_out_dir_for_build(&plan.out_dir, input.out_dir.span())?;
+        catch_engine_panics(plan.script_span, || {
+            build_assets(&plan.script_src, plan.script_span, &plan.out_dir)
+        })?;
+        record_cache_hash(&plan)?;
+    }
+
+    let mut assets = gather_assets(&plan.manifest_resolver, &plan.out_dir)
+        .map_err(|e| syn::Error::new(plan.script_span, e.to_string()))?;
+    assets.retain(|asset| !is_internal_artifact(&asset.rel_path));
+    emit_embed_module(name, &assets)
 }
 
 fn preflight_out_dir_for_build(
@@ -259,32 +336,32 @@ fn build_assets(
     span: proc_macro2::Span,
     out_dir: &GuardedPath,
 ) -> syn::Result<GuardedPath> {
-    let debug_embed = std::env::var("OXDOCK_EMBED_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let debug_embed = embed_debug_enabled();
 
     // Build in a temp dir; only the final workdir gets materialized into out_dir.
     let tempdir = GuardedPath::tempdir()
         .map_err(|e| syn::Error::new(span, format!("failed to create temp dir: {e}")))?;
     let temp_root_guard = tempdir.as_guarded_path().clone();
 
-    let steps = oxdock_parser::parse_script(script)
-        .map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
+    let steps =
+        parse_script(script).map_err(|e| syn::Error::new(span, format!("parse error: {e}")))?;
 
     let resolver =
         PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
     let workspace_root =
         oxdock_fs::discover_workspace_root().map_err(|e| syn::Error::new(span, e.to_string()))?;
 
-    let final_cwd = oxdock_core::run_steps_with_context_result_with_io(
-        &temp_root_guard,
-        &workspace_root,
-        &steps,
-        oxdock_core::ExecIo::new(),
-    )
-    .map_err(|e| {
-        // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
-        syn::Error::new(span, format!("execution error: {e:#}"))
+    let final_cwd = catch_engine_panics(span, || {
+        run_steps_with_context_result_with_io(
+            &temp_root_guard,
+            &workspace_root,
+            &steps,
+            ExecIo::new(),
+        )
+        .map_err(|e| {
+            // IMPORTANT: Use alternate formatting to include the full error chain and filesystem snapshot.
+            syn::Error::new(span, format!("execution error: {e:#}"))
+        })
     })?;
 
     if debug_embed {
@@ -296,13 +373,7 @@ fn build_assets(
     }
 
     #[allow(clippy::disallowed_types)]
-    let final_cwd_external = oxdock_fs::UnguardedPath::new(final_cwd.as_path().to_path_buf());
-
-    tracing::info!(
-        "embed: final workdir {} (temp root {})",
-        final_cwd.display(),
-        temp_root_guard.display()
-    );
+    let final_cwd_external = UnguardedPath::external(final_cwd.as_path().to_path_buf());
 
     let meta = resolver
         .metadata_unguarded(&final_cwd_external)
@@ -322,633 +393,74 @@ fn build_assets(
         ));
     }
 
-    // Clean destination then copy the final workdir contents into the out_dir mount.
-    if out_dir.as_path().exists() {
-        clear_dir(out_dir, span)?;
-    } else {
-        resolver.create_dir_all(out_dir).map_err(|e| {
-            syn::Error::new(
-                span,
-                format!("failed to create out_dir {}: {e}", out_dir.display()),
-            )
-        })?;
-    }
-
-    resolver
-        .copy_dir_from_unguarded(&final_cwd_external, out_dir)
-        .map_err(|e| {
-            syn::Error::new(
-                span,
-                format!("failed to copy final workdir into out_dir: {e}"),
-            )
-        })?;
-    if debug_embed {
-        eprintln!(
-            "oxdock: build_assets copied into out_dir={}, entries={:?}",
-            out_dir.display(),
-            resolver.read_dir_entries(out_dir).ok().map(|v| v.len())
-        );
-    }
-    tracing::info!(
-        "embed: populated out_dir from final workdir; entries now: {}",
-        count_entries(out_dir, span)?
-    );
+    // Ensure destination exists, then atomically stage-and-sync the new output
+    // over the live directory (no destructive wipe window).
+    ensure_out_dir(&resolver, out_dir, span)?;
+    stage_materialize(&resolver, &final_cwd_external, out_dir)
+        .map_err(|e| syn::Error::new(span, format!("failed to materialize into out_dir: {e:#}")))?;
 
     Ok(final_cwd)
 }
 
-// `copy_dir_contents` replaced by `PathResolver::copy_dir_from_external`.
-
-fn clear_dir(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<()> {
-    // Use PathResolver for deletions to keep filesystem access centralized.
-    let resolver =
-        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-
-    // Validate dir is a directory (use std as this is already an existing path under manifest)
-    if !dir.as_path().is_dir() {
-        return Err(syn::Error::new(
-            span,
-            format!("out_dir exists but is not a directory: {}", dir.display()),
-        ));
+fn ensure_out_dir(
+    resolver: &PathResolver,
+    out_dir: &GuardedPath,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if out_dir.as_path().exists() {
+        if !out_dir.as_path().is_dir() {
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "out_dir exists but is not a directory: {}",
+                    out_dir.display()
+                ),
+            ));
+        }
+        return Ok(());
     }
-
-    let entries = resolver.read_dir_entries(dir).map_err(|e| {
+    resolver.create_dir_all(out_dir).map_err(|e| {
         syn::Error::new(
             span,
-            format!("failed to read out_dir {}: {e}", dir.display()),
+            format!("failed to create out_dir {}: {e}", out_dir.display()),
         )
-    })?;
-
-    for entry in entries {
-        let path = entry.path();
-        let guarded = GuardedPath::new(dir.root(), &path).map_err(|e| {
-            syn::Error::new(
-                span,
-                format!("failed to guard entry {}: {e}", path.display()),
-            )
-        })?;
-        let ft = entry
-            .file_type()
-            .map_err(|e| syn::Error::new(span, format!("file type error: {e}")))?;
-        if ft.is_dir() {
-            resolver.remove_dir_all(&guarded).map_err(|e| {
-                syn::Error::new(
-                    span,
-                    format!("failed to remove dir {}: {e}", path.display()),
-                )
-            })?;
-        } else {
-            resolver.remove_file(&guarded).map_err(|e| {
-                syn::Error::new(
-                    span,
-                    format!("failed to remove file {}: {e}", path.display()),
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn count_entries(dir: &GuardedPath, span: proc_macro2::Span) -> syn::Result<usize> {
-    let resolver =
-        PathResolver::from_manifest_env().map_err(|e| syn::Error::new(span, e.to_string()))?;
-    let entries = resolver
-        .read_dir_entries(dir)
-        .map_err(|e| syn::Error::new(span, format!("failed to read dir {}: {e}", dir.display())))?;
-    Ok(entries.len())
-}
-
-/// Determines if the macro execution should be skipped to prevent heavy build operations
-/// during IDE analysis.
-///
-/// This is used to prevent IDE warnings and performance issues resulting from
-/// `rust-analyzer` (or other tools) executing the macro logic in a background process.
-/// Since `embed!` and `prepare!` can involve significant work (script execution,
-/// file I/O), running them during every keystroke analysis is undesirable.
-fn embed_execution_is_skipped() -> bool {
-    // Runtime check: rust-analyzer sets this variable in the proc-macro server process.
-    if std::env::var("RUST_ANALYZER_INTERNALS_DO_NOT_USE").is_ok() {
-        return true;
-    }
-
-    // Skip when running under a Miri-configured build (e.g., clippy with --cfg miri),
-    // since proc-macro execution can touch filesystem APIs that Miri does not support.
-    if std::env::var("RUSTFLAGS")
-        .map(|flags| flags.contains("--cfg miri"))
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    // Fallback: Check executable name
-    if std::env::current_exe()
-        .ok()
-        .map(|pb| pb.to_string_lossy().contains("rust-analyzer"))
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    // Fallback 2: VS Code background task detection
-    // If we are running inside VS Code (detected via VSCODE_PID), but TERM is missing,
-    // it is likely a background analysis task (like rust-analyzer running cargo check)
-    // rather than a user-initiated terminal command.
-    if std::env::var("VSCODE_PID").is_ok() && std::env::var("TERM").is_err() {
-        return true;
-    }
-
-    false
-}
-
-enum MacroPlan {
-    Skip,
-    Ready(Box<PreparedMacroPlan>),
-}
-
-struct PreparedMacroPlan {
-    script_src: String,
-    script_span: proc_macro2::Span,
-    manifest_resolver: PathResolver,
-    out_dir: GuardedPath,
-    out_dir_span: proc_macro2::Span,
-    should_build: bool,
-    force_rebuild: bool,
-}
-
-fn prepare_macro_plan(input: &DslMacroInput) -> syn::Result<MacroPlan> {
-    let (script_src, script_span) = match &input.script {
-        ScriptSource::Literal(lit) => (lit.value(), lit.span()),
-        ScriptSource::Braced(ts) => (
-            oxdock_parser::script_from_braced_tokens(ts).map_err(|e: anyhow::Error| {
-                syn::Error::new(proc_macro2::Span::call_site(), e.to_string())
-            })?,
-            proc_macro2::Span::call_site(),
-        ),
-    };
-
-    let manifest_resolver = PathResolver::from_manifest_env()
-        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
-
-    if embed_execution_is_skipped() {
-        return Ok(MacroPlan::Skip);
-    }
-
-    let is_primary = std::env::var("CARGO_PRIMARY_PACKAGE")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    let has_git = manifest_resolver
-        .has_git_dir()
-        .map_err(|e| syn::Error::new(script_span, e.to_string()))?;
-    let force_rebuild = std::env::var("OXDOCK_EMBED_FORCE_REBUILD")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let should_build = has_git || is_primary || force_rebuild;
-
-    let manifest_root = manifest_resolver.root().clone();
-    let out_dir_str = input.out_dir.value();
-    let out_dir = join_guard(&manifest_root, &out_dir_str, input.out_dir.span())?;
-
-    Ok(MacroPlan::Ready(Box::new(PreparedMacroPlan {
-        script_src,
-        script_span,
-        manifest_resolver,
-        out_dir,
-        out_dir_span: input.out_dir.span(),
-        should_build,
-        force_rebuild,
-    })))
+    })
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
-    #[allow(clippy::disallowed_types)]
-    use oxdock_fs::{GuardedPath, UnguardedPath};
-    use oxdock_parser::StepKind;
-    use oxdock_process::serial_cargo_env::manifest_env_guard;
-    use syn::{Ident, LitStr, visit::Visit};
 
-    macro_rules! dsl_tokens {
-        ($($tt:tt)*) => {{
-            use quote::quote;
-            let tokens: proc_macro2::TokenStream = quote! { $($tt)* };
-            tokens
-        }};
-    }
-
-    fn guard_root(path: &UnguardedPath) -> GuardedPath {
-        GuardedPath::new_root(path.as_path()).unwrap()
-    }
-
-    fn resolver_for(root: &GuardedPath) -> PathResolver {
-        PathResolver::new(root.as_path(), root.as_path()).unwrap()
-    }
-
-    #[test]
-    fn errors_when_out_dir_is_file_before_build() {
+    fn make_ctx() -> (oxdock_fs::GuardedTempDir, PathResolver, GuardedPath) {
         let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-        // Create .git dir via PathResolver to centralize filesystem access.
-        let resolver = resolver_for(&manifest_dir);
-        resolver
-            .create_dir_all(&manifest_dir.join(".git").unwrap())
-            .expect("mkdir .git");
-
-        let assets_rel = "prebuilt";
-        let assets_abs = manifest_dir.join(assets_rel).unwrap();
-        resolver
-            .write_file(&assets_abs, b"not a dir")
-            .expect("create file at out_dir path");
-
-        let _env = manifest_env_guard(&manifest_dir, true);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new(
-                "WRITE hello.txt hi",
-                proc_macro2::Span::call_site(),
-            )),
-            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
-        };
-
-        let err = expand_embed_internal(&input).expect_err("should fail when out_dir is file");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("out_dir exists but is not a directory"),
-            "message should report non-directory out_dir"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn errors_when_out_dir_not_writable_before_build() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-        let resolver = resolver_for(&manifest_dir);
-        resolver
-            .create_dir_all(&manifest_dir.join(".git").unwrap())
-            .expect("mkdir .git");
-
-        let assets_rel = "prebuilt";
-        let assets_abs = manifest_dir.join(assets_rel).unwrap();
-        resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
-        resolver
-            .set_permissions_mode_unix(&assets_abs, 0o555)
-            .expect("make out_dir read-only");
-
-        let _env = manifest_env_guard(&manifest_dir, true);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new(
-                "WRITE hello.txt hi",
-                proc_macro2::Span::call_site(),
-            )),
-            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
-        };
-
-        let err = expand_embed_internal(&input).expect_err("should fail when out_dir not writable");
-        let msg = err.to_string();
-        resolver
-            .set_permissions_mode_unix(&assets_abs, 0o755)
-            .expect("restore permissions for cleanup");
-        assert!(
-            msg.contains("out_dir not writable"),
-            "message should report non-writable out_dir"
-        );
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver");
+        (temp, resolver, root)
     }
 
     #[test]
-    fn embed_error_stub_contains_placeholder_api() {
-        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
-        let stub = super::embed_error_stub(&name).to_string();
+    fn force_flag_overrides_cache_validity() {
         assert!(
-            stub.contains("mod __oxdock_embed_DemoAssets"),
-            "stub should wrap struct in module: {stub}"
+            should_rebuild(true, true),
+            "force must bypass a valid cache"
         );
-        assert!(
-            stub.contains("pub struct DemoAssets"),
-            "stub should define requested struct: {stub}"
-        );
-        assert!(
-            stub.contains("pub fn get"),
-            "stub should expose get() method: {stub}"
-        );
-        assert!(
-            stub.contains("Filenames :: from_slice"),
-            "stub iter() should construct Filenames from slice: {stub}"
-        );
+        assert!(!should_rebuild(false, true));
+        assert!(should_rebuild(false, false));
+        assert!(should_rebuild(true, false));
     }
 
     #[test]
-    fn embed_tokens_include_compile_error_and_stub_on_failure() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-
-        let _env = manifest_env_guard(&manifest_dir, false);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
-        };
-
-        let tokens = super::expand_embed_tokens(&input);
-        let output = tokens.to_string();
-        assert!(
-            output.contains("compile_error"),
-            "tokens should include compile_error call: {output}"
-        );
-        assert!(
-            output.contains("__oxdock_embed_DemoAssets"),
-            "tokens should include stub module: {output}"
-        );
-    }
-
-    #[test]
-    fn embed_module_ident_prefixes_struct_name() {
-        let name = Ident::new("DemoAssets", proc_macro2::Span::call_site());
-        let module = super::embed_module_ident(&name);
-        assert_eq!(module.to_string(), "__oxdock_embed_DemoAssets");
-    }
-
-    #[test]
-    fn join_guard_appends_relative_paths() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let base = temp.as_guarded_path().clone();
-        let joined =
-            super::join_guard(&base, "nested/file.txt", proc_macro2::Span::call_site()).unwrap();
-        assert!(
-            joined.as_path().ends_with("nested/file.txt"),
-            "join_guard should append relative paths"
-        );
-        assert_eq!(joined.root(), base.root(), "root should be preserved");
-    }
-
-    #[test]
-    fn normalizes_braced_script() {
-        let ts = dsl_tokens! {
-            WORKDIR /
-            MKDIR assets;
-            WRITE assets/hello.txt "hi there";
-            LS; LS; LS; RUN echo; LS;
-            RUN echo && ls
-        };
-
-        let normalized =
-            oxdock_parser::script_from_braced_tokens(&ts).expect("normalize braced script");
-        let expected = [
-            "WORKDIR /",
-            "MKDIR assets;",
-            "WRITE assets/hello.txt \"hi there\";",
-            "LS;",
-            "LS;",
-            "LS;",
-            "RUN echo;",
-            "LS;",
-            "RUN echo && ls",
-        ]
-        .join("\n");
-
-        assert_eq!(normalized, expected);
-    }
-
-    #[test]
-    fn braced_script_with_guard_block_parses() {
-        let ts = dsl_tokens! {
-            WORKDIR /
-            MKDIR scoped
-            MKDIR scoped/nested
-            [env:TEST_SCOPE] {
-                WORKDIR scoped
-                WRITE inner.txt inside
-                ENV SCOPE_FLAG=1
-                [env:SCOPE_FLAG] {
-                    WORKDIR nested
-                    WRITE deep.txt nested
-                    ENV INNER_ONLY=1
-                }
-                WRITE after_nested.txt still-scoped
-                [env:INNER_ONLY] WRITE leaked_inner.txt nope
-            }
-            WRITE outside.txt outside
-            [env:SCOPE_FLAG] WRITE leaked.txt nope
-        };
-        let steps = oxdock_parser::parse_braced_tokens(&ts).expect("braced script should parse");
-        assert_eq!(steps.len(), 13, "expected 13 commands");
-        assert_eq!(steps[3].scope_enter, 1, "outer block enter");
-        assert_eq!(steps[10].scope_exit, 1, "outer block exit");
-        assert_eq!(steps[6].scope_enter, 1, "nested block enter");
-        assert_eq!(steps[8].scope_exit, 1, "nested block exit");
-        match &steps[0].kind {
-            StepKind::Workdir(path) => assert_eq!(path, "/"),
-            other => panic!("expected WORKDIR /, saw {:?}", other),
-        }
-        match &steps[3].kind {
-            StepKind::Workdir(path) => assert_eq!(path, "scoped"),
-            other => panic!("expected scoped WORKDIR, saw {:?}", other),
-        }
-        match &steps[10].kind {
-            StepKind::Write { path, .. } => assert_eq!(path, "leaked_inner.txt"),
-            other => panic!("expected leaked inner WRITE, saw {:?}", other),
-        }
-        assert!(steps[10].guard.is_some(), "leaked_inner should be guarded");
-        assert!(steps[12].guard.is_some(), "outer leak should be guarded");
-    }
-
-    #[test]
-    fn uses_out_dir_when_not_primary_and_no_git() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-        let assets_rel = "prebuilt";
-        let assets_abs = manifest_dir.join(assets_rel).unwrap();
-        let resolver = resolver_for(&manifest_dir);
-        resolver.create_dir_all(&assets_abs).expect("mkdir out_dir");
-        let sample_file = assets_abs.join("existing.txt").unwrap();
-        resolver
-            .write_file(&sample_file, b"prebuilt content")
-            .expect("seed prebuilt file");
-
-        // Simulate crates.io tarball: no .git, not primary package.
-        let _env = manifest_env_guard(&manifest_dir, false);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
-        };
-
-        let ts = expand_embed_internal(&input).expect("out_dir branch should succeed");
-        let out = ts.to_string();
-        assert!(out.contains("DemoAssets"), "should define struct name");
-
-        let include_paths = include_bytes_paths(&ts);
-        assert_eq!(
-            include_paths.len(),
-            1,
-            "preseeded out_dir should expose embedded paths"
-        );
-        assert_eq!(
-            include_paths[0],
-            oxdock_fs::normalized_path(&sample_file),
-            "embed should reference files under out_dir"
-        );
-    }
-
-    #[test]
-    fn prepare_errors_without_out_dir_when_not_primary_and_no_git() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-
-        let _env = manifest_env_guard(&manifest_dir, false);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
-        };
-
-        let err =
-            expand_prepare_internal(&input).expect_err("prepare should require existing out_dir");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("prepare: refused to build assets") && msg.contains("missing"),
-            "error should mention missing out_dir and refusal to build"
-        );
-    }
-
-    #[test]
-    fn errors_without_out_dir_when_not_primary_and_no_git() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-
-        let _env = manifest_env_guard(&manifest_dir, false);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new("", proc_macro2::Span::call_site())),
-            out_dir: LitStr::new("missing", proc_macro2::Span::call_site()),
-        };
-
-        let err = expand_embed_internal(&input).expect_err("should require out_dir path");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("out_dir missing"),
-            "error should mention missing out_dir"
-        );
-    }
-
-    #[test]
-    fn builds_from_manifest_dir_when_primary_with_git() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-        let resolver = resolver_for(&manifest_dir);
-        resolver
-            .create_dir_all(&manifest_dir.join(".git").unwrap())
-            .expect("mkdir .git");
-        let assets_rel = "prebuilt";
-        let assets_abs = manifest_dir.join(assets_rel).unwrap();
-
-        // Source file only exists under the provided manifest dir; COPY should succeed from there.
-        resolver
-            .write_file(
-                &manifest_dir.join("source.txt").unwrap(),
-                b"hello from manifest",
-            )
-            .expect("write source");
-
-        let _env = manifest_env_guard(&manifest_dir, true);
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new(
-                "COPY source.txt copied.txt",
-                proc_macro2::Span::call_site(),
-            )),
-            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
-        };
-
-        let ts = expand_embed_internal(&input).expect("should build using manifest dir");
-        let copied_guard = assets_abs.join("copied.txt").unwrap();
-        let include_paths = include_bytes_paths(&ts);
-        assert!(
-            include_paths
-                .iter()
-                .any(|p| p == &oxdock_fs::normalized_path(&copied_guard)),
-            "embed should include copied.txt under out_dir"
-        );
-        let contents = resolver
-            .read_to_string(&copied_guard)
-            .expect("copied file readable");
-        assert_eq!(
-            contents, "hello from manifest",
-            "copy should read from manifest dir"
-        );
-    }
-
-    #[test]
-    fn uses_final_workdir_for_folder() {
-        let temp = GuardedPath::tempdir().expect("tempdir");
-        let temp_root = UnguardedPath::new(temp.as_path());
-        let manifest_dir = guard_root(&temp_root);
-        let resolver = resolver_for(&manifest_dir);
-        resolver
-            .create_dir_all(&manifest_dir.join(".git").unwrap())
-            .expect("mkdir .git");
-        let assets_rel = "prebuilt";
-        let assets_abs = manifest_dir.join(assets_rel).unwrap();
-
-        let _env = manifest_env_guard(&manifest_dir, true);
-
-        let script = [
-            "MKDIR dist",
-            "WRITE dist/hello.txt hi",
-            "WRITE outside.txt nope",
-            "WORKDIR dist",
-        ]
-        .join("\n");
-
-        let input = DslMacroInput {
-            name: Ident::new("DemoAssets", proc_macro2::Span::call_site()),
-            script: ScriptSource::Literal(LitStr::new(&script, proc_macro2::Span::call_site())),
-            out_dir: LitStr::new(assets_rel, proc_macro2::Span::call_site()),
-        };
-
-        let ts = expand_embed_internal(&input).expect("should build using final WORKDIR");
-        let include_paths = include_bytes_paths(&ts);
-        assert_eq!(
-            include_paths.len(),
-            1,
-            "only final WORKDIR file should be embedded"
-        );
-        let asset_path = &include_paths[0];
-        assert!(
-            asset_path.ends_with(&format!("{assets_rel}/hello.txt")),
-            "embedded file should live under out_dir"
-        );
-
-        let inside = assets_abs.join("hello.txt").expect("join hello.txt");
-        assert!(
-            inside.as_path().exists(),
-            "file in final WORKDIR should exist in out_dir"
-        );
-
-        let outside = assets_abs.join("outside.txt").expect("join outside.txt");
-        assert!(
-            !outside.as_path().exists(),
-            "only final WORKDIR contents should be copied into out_dir"
-        );
+    fn internal_artifacts_are_excluded_from_assets() {
+        assert!(is_internal_artifact(".oxdock_hash"));
+        assert!(is_internal_artifact(".oxdock-staging"));
+        assert!(is_internal_artifact(".oxdock-staging/x"));
+        assert!(is_internal_artifact(".oxdock-tempdir"));
+        assert!(!is_internal_artifact("hello.txt"));
+        assert!(!is_internal_artifact("nested/dir/file.bin"));
     }
 
     fn include_bytes_paths(ts: &proc_macro2::TokenStream) -> Vec<String> {
+        use syn::visit::Visit;
         let file: syn::File = syn::parse2(ts.clone()).expect("parse output as file");
 
         struct IncludeVisitor {
@@ -976,5 +488,95 @@ mod tests {
         };
         visitor.visit_file(&file);
         visitor.matches
+    }
+
+    #[test]
+    fn join_guard_appends_relative_paths() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let base = temp.as_guarded_path().clone();
+        let joined = join_guard(&base, "some/rel/path", proc_macro2::Span::call_site()).unwrap();
+        assert!(joined.as_path().starts_with(base.as_path()));
+    }
+
+    #[test]
+    fn join_guard_rejects_paths_escaping_manifest_root() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let base = temp.as_guarded_path().clone();
+        let err = join_guard(&base, "../outside", proc_macro2::Span::call_site());
+        assert!(err.is_err(), "escaping paths must be rejected");
+    }
+
+    #[test]
+    fn join_guard_accepts_within_root() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let base = temp.as_guarded_path().clone();
+        let ok = join_guard(&base, "./inside", proc_macro2::Span::call_site());
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn uses_final_workdir_for_folder() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let manifest_dir = temp.as_guarded_path().clone();
+        let resolver =
+            PathResolver::new_guarded(manifest_dir.clone(), manifest_dir.clone()).unwrap();
+        resolver
+            .write_file(&manifest_dir.join("seed.txt").unwrap(), b"seed")
+            .ok();
+
+        // Route CARGO_MANIFEST_DIR at the fixture root for this test.
+        let _guard = oxdock_sys_test_utils::TestEnvGuard::set(
+            "CARGO_MANIFEST_DIR",
+            manifest_dir.display().to_string().as_str(),
+        );
+        let _ws = oxdock_sys_test_utils::TestEnvGuard::remove("OXDOCK_WORKSPACE_ROOT");
+
+        let assets_rel = "prebuilt";
+        let script = ["MKDIR dist", "WRITE dist/hello.txt hi", "WORKDIR dist"].join("\n");
+
+        let input = DslMacroInput {
+            name: syn::Ident::new("DemoAssets", proc_macro2::Span::call_site()),
+            script: ScriptSource::Literal(syn::LitStr::new(
+                &script,
+                proc_macro2::Span::call_site(),
+            )),
+            out_dir: syn::LitStr::new(assets_rel, proc_macro2::Span::call_site()),
+        };
+
+        let ts = expand_embed_internal(&input).expect("inline build should succeed");
+        let include_paths = include_bytes_paths(&ts);
+        assert_eq!(include_paths.len(), 1, "only final WORKDIR file embedded");
+        assert!(
+            include_paths[0].contains("prebuilt") && include_paths[0].contains("hello.txt"),
+            "unexpected path: {:?}",
+            include_paths[0]
+        );
+    }
+
+    #[test]
+    fn cache_validation_requires_matching_hash_and_directory() {
+        let (_temp, resolver, root) = make_ctx();
+        let out = root.join("prebuilt").expect("join");
+        resolver.create_dir_all(&out).expect("mkdir");
+
+        let plan = InlinePlan {
+            script_src: "WRITE x.txt y".into(),
+            script_span: proc_macro2::Span::call_site(),
+            manifest_resolver: resolver,
+            out_dir: out,
+            fingerprint: "deadbeef".into(),
+        };
+        assert!(!cached_out_dir_valid(&plan), "no hash file yet");
+
+        let hash_path = plan.out_dir.join(HASH_FILE).unwrap();
+        plan.manifest_resolver
+            .write_file(&hash_path, b"cafebabe\n")
+            .unwrap();
+        assert!(!cached_out_dir_valid(&plan), "mismatched hash");
+
+        plan.manifest_resolver
+            .write_file(&hash_path, b" deadbeef \n")
+            .unwrap();
+        assert!(cached_out_dir_valid(&plan), "trimmed equality");
     }
 }

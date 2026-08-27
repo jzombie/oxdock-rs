@@ -1,5 +1,5 @@
 [package]
-name = "fixture-build-from-manifest"
+name = "fixture-assert-verification"
 version = "0.0.0-dev"
 edition = "2024"
 publish = false
