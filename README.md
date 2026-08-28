@@ -881,7 +881,4 @@ cargo +nightly miri test --workspace --all-features --lib --tests
 
 `OxDock` is primarily distributed under the terms of the Apache License (Version 2.0).
 
-See [LICENSE-APACHE](./LICENSE-APACHE) for details.
-
-[apache-2.0-license-page]: ./LICENSE-APACHE
-[apache-2.0-license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square
+See [LICENSE](./LICENSE) for details.
