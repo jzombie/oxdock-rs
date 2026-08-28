@@ -806,9 +806,9 @@ but are skipped during local `docs_conformance` tests.
 `ECHO` writes to stdout, which GitHub Actions intercepts for annotations:
 
 ```oxdock
-ECHO "::notice::build started"
-ECHO "::warning::something looks off"
-ECHO "::error::tests failed"
+ECHO "::notice::test notice message"
+ECHO "::warning::test warning message"
+ECHO "::error::test error message"
 ```
 
 ### Collapsible log groups
