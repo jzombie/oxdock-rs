@@ -70,6 +70,8 @@ ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
 
 // LS prints "<dir>:" then the entry names, sorted.
 LS dist
+
+// Assert stdout buffer of previous LS command is "hello.txt"
 ASSERT_STDOUT hello.txt
 ```
 
