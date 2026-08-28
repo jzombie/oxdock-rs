@@ -6,6 +6,9 @@
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/Made%20with-Rust-black?&logo=Rust" alt="Made with Rust" />
   </a>
+  <a href="https://github.com/jzombie/rust-oxdock/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" />
+  </a>
   <!-- <a href="https://docs.rs/oxdock">
     <img src="https://img.shields.io/docsrs/oxdock" alt="docs.rs" />
   </a> -->
@@ -875,3 +878,10 @@ cargo +nightly miri test --workspace --all-features --lib --tests
 ```
 
 ## License
+
+`OxDock` is primarily distributed under the terms of the Apache License (Version 2.0).
+
+See [LICENSE-APACHE](./LICENSE-APACHE) for details.
+
+[apache-2.0-license-page]: ./LICENSE-APACHE
+[apache-2.0-license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square
