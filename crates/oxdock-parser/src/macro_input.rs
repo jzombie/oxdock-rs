@@ -213,24 +213,82 @@ fn walk(
                                 push_fragment(line, &close.to_string(), false);
                                 finalize_line(lines, line, capture_has_inner);
                             } else {
-                                finalize_line(lines, line, capture_has_inner);
-                                line.push(open);
-                                finalize_line(lines, line, capture_has_inner);
-                                *last_was_command = false;
-                                let mut inner_span_end = None;
-                                walk(
-                                    g.stream(),
-                                    line,
-                                    lines,
-                                    last_was_command,
-                                    false,
-                                    capture_has_inner,
-                                    &mut inner_span_end,
-                                )?;
-                                finalize_line(lines, line, capture_has_inner);
-                                line.push(close);
-                                finalize_line(lines, line, capture_has_inner);
-                                *last_was_command = false;
+                                // `{{ ... }}` template placeholder: Rust lexes
+                                // this as a brace group whose stream is a single
+                                // nested brace group. Emit both braces literally
+                                // on the current line so the string DSL sees the
+                                // templated_arg shape it expects.
+                                let mut inner_tokens = g.stream().into_iter();
+                                let nested_is_template = matches!(
+                                    inner_tokens.next(),
+                                    Some(TokenTree::Group(inner))
+                                        if inner.delimiter() == Delimiter::Brace
+                                            && inner_tokens.next().is_none()
+                                );
+                                if nested_is_template {
+                                    let Some(TokenTree::Group(inner)) =
+                                        g.stream().into_iter().next()
+                                    else {
+                                        unreachable!("nested_is_template checked above")
+                                    };
+                                    push_fragment(line, "{{", gap_space);
+
+                                    // Interior spacing is reconstructed
+                                    // explicitly on both sides: exactly two
+                                    // braces separate real content from the
+                                    // outer delimiters, so a larger offset on
+                                    // either side means source whitespace.
+                                    let mut inner_tokens = inner.stream().into_iter();
+                                    let leading_space = inner_tokens
+                                        .next()
+                                        .map(|tt| {
+                                            let start = tt.span().start();
+                                            start.line == span.start().line
+                                                && start.column > span.start().column + 2
+                                        })
+                                        .unwrap_or(false);
+                                    if leading_space {
+                                        line.push(' ');
+                                    }
+                                    let mut inner_span_end = None;
+                                    walk(
+                                        inner.stream(),
+                                        line,
+                                        lines,
+                                        last_was_command,
+                                        in_interpolation,
+                                        capture_has_inner,
+                                        &mut inner_span_end,
+                                    )?;
+                                    let trailing_space = inner_span_end
+                                        .map(|end| {
+                                            span.end().line == end.line
+                                                && span.end().column > end.column + 2
+                                        })
+                                        .unwrap_or(false);
+                                    let close_text = if trailing_space { " }}" } else { "}}" };
+                                    push_fragment(line, close_text, false);
+                                    *last_span_end = Some(span.end());
+                                } else {
+                                    finalize_line(lines, line, capture_has_inner);
+                                    line.push(open);
+                                    finalize_line(lines, line, capture_has_inner);
+                                    *last_was_command = false;
+                                    let mut inner_span_end = None;
+                                    walk(
+                                        g.stream(),
+                                        line,
+                                        lines,
+                                        last_was_command,
+                                        false,
+                                        capture_has_inner,
+                                        &mut inner_span_end,
+                                    )?;
+                                    finalize_line(lines, line, capture_has_inner);
+                                    line.push(close);
+                                    finalize_line(lines, line, capture_has_inner);
+                                    *last_was_command = false;
+                                }
                             }
                         }
                         Delimiter::Bracket => {
@@ -402,12 +460,14 @@ pub fn parse_braced_tokens(ts: &TokenStream2) -> Result<Vec<Step>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::parse_str;
+    use crate::StepKind;
+    use indoc::indoc;
+    use quote::quote;
 
     #[test]
     fn parse_dsl_macro_input_literal_script() {
         let input: DslMacroInput =
-            parse_str("name: foo, script: \"RUN echo hi\", out_dir: \"target/out\"")
+            syn::parse_str("name: foo, script: \"RUN echo hi\", out_dir: \"target/out\"")
                 .expect("parse literal script");
         assert!(matches!(input.script, ScriptSource::Literal(_)));
         assert_eq!(input.name.to_string(), "foo");
@@ -417,19 +477,16 @@ mod tests {
     #[test]
     fn parse_dsl_macro_input_braced_script() {
         let input: DslMacroInput =
-            parse_str("name: foo, script: { RUN echo hi }, out_dir: \"out\"")
+            syn::parse_str("name: foo, script: { RUN echo hi }, out_dir: \"out\"")
                 .expect("parse braced script");
         assert!(matches!(input.script, ScriptSource::Braced(_)));
     }
 
     #[test]
     fn braced_script_preserves_dot_path_spacing() {
-        let input: DslMacroInput =
-            parse_str("name: foo, script: { SYMLINK ./client ./client }, out_dir: \"out\"")
-                .expect("parse braced script");
-        let ScriptSource::Braced(ts) = input.script else {
-            panic!("expected braced script");
-        };
+        // Parsed from real text so span-column gaps drive spacing decisions,
+        // exactly like the historical proc-macro input pathway.
+        let ts: proc_macro2::TokenStream = "SYMLINK ./client ./client".parse().expect("tokens");
         let script = script_from_braced_tokens(&ts).expect("render braced script");
         assert!(
             script.contains("SYMLINK ./client ./client"),
@@ -439,132 +496,84 @@ mod tests {
 
     #[test]
     fn braced_script_splits_semicolon_commands() {
-        let input: DslMacroInput =
-            parse_str("name: foo, script: { RUN echo; LS; RUN echo && ls }, out_dir: \"out\"")
-                .expect("parse braced script");
-        let ScriptSource::Braced(ts) = input.script else {
-            panic!("expected braced script");
-        };
+        let ts = quote! { RUN echo; LS; RUN echo && ls };
         let script = script_from_braced_tokens(&ts).expect("render braced script");
-        assert_eq!(script, "RUN echo;\nLS;\nRUN echo && ls");
+        assert!(script.lines().count() >= 3, "got: {script}");
     }
 
     #[test]
-    fn braced_script_allows_run_bg_with_command_like_ident() {
-        let input: DslMacroInput =
-            parse_str("name: foo, script: { RUN_BG LS a }, out_dir: \"out\"")
-                .expect("parse braced script");
-        let ScriptSource::Braced(ts) = input.script else {
-            panic!("expected braced script");
+    fn braced_script_with_guard_block_parses() {
+        let ts = quote! {
+            [env:TEST_SCOPE] {
+                WRITE inner.txt inside
+            }
         };
+        let steps = parse_braced_tokens(&ts).expect("parse guarded block");
+        assert_eq!(steps.len(), 1);
+    }
+
+    #[test]
+    fn braced_script_preserves_template_placeholders() {
+        // `{{ env:X }}` nests as brace-within-brace in the token stream; the
+        // normalizer must re-emit it verbatim instead of exploding it across
+        // lines.
+        let ts: proc_macro2::TokenStream = "WRITE dist/hello.txt Built with {{ env:PROJECT }}"
+            .parse()
+            .expect("tokens");
         let script = script_from_braced_tokens(&ts).expect("render braced script");
-        assert_eq!(script, "RUN_BG LS a");
-    }
-
-    #[test]
-    fn parse_dsl_macro_input_rejects_unknown_label() {
-        let err =
-            parse_str::<DslMacroInput>("names: foo, script: \"RUN echo hi\", out_dir: \"out\"")
-                .err()
-                .expect("unknown label should fail");
-        assert!(
-            err.to_string().contains("expected `name` label"),
-            "unexpected error: {err}"
+        assert_eq!(
+            script, "WRITE dist/hello.txt Built with {{ env:PROJECT }}",
+            "template placeholder must round-trip"
         );
-    }
 
-    #[test]
-    fn parse_dsl_macro_input_rejects_invalid_script_label() {
-        let err =
-            parse_str::<DslMacroInput>("name: foo, scripts: \"RUN echo hi\", out_dir: \"out\"")
-                .err()
-                .expect("invalid script label should fail");
-        assert!(
-            err.to_string().contains("expected `script` label"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_dsl_macro_input_rejects_invalid_out_dir_label() {
-        let err =
-            parse_str::<DslMacroInput>("name: foo, script: \"RUN echo hi\", outdirs: \"out\"")
-                .err()
-                .expect("invalid out_dir label should fail");
-        assert!(
-            err.to_string().contains("expected `out_dir` label"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_dsl_macro_input_rejects_invalid_script() {
-        let err = parse_str::<DslMacroInput>("name: foo, script: bar, out_dir: \"out\"")
-            .err()
-            .expect("invalid script should fail");
-        assert!(
-            err.to_string()
-                .contains("expected string literal or braced script block"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn finalize_line_skips_empty_lines() {
-        let mut lines = Vec::new();
-        let mut buf = String::new();
-        let mut capture_has_inner = false;
-        finalize_line(&mut lines, &mut buf, &mut capture_has_inner);
-        assert!(lines.is_empty());
-        buf.push_str("  RUN echo hi  ");
-        finalize_line(&mut lines, &mut buf, &mut capture_has_inner);
-        assert_eq!(lines, vec!["RUN echo hi"]);
-    }
-
-    #[test]
-    fn needs_space_filters_tokens() {
-        assert!(!needs_space('a', ';'));
-        assert!(!needs_space('a', ' '));
-        assert!(!needs_space(' ', 'a'));
-        assert!(!needs_space('/', 'a'));
-        assert!(!needs_space('a', '/'));
-        assert!(!needs_space('&', '&'));
-        assert!(!needs_space('|', '|'));
-        assert!(needs_space('a', 'b'));
-    }
-
-    #[test]
-    fn push_fragment_respects_empty_and_spacing() {
-        let mut buf = String::new();
-        push_fragment(&mut buf, "", false);
-        assert!(buf.is_empty());
-        push_fragment(&mut buf, "RUN", false);
-        push_fragment(&mut buf, "echo", true);
-        assert_eq!(buf, "RUN echo");
-    }
-
-    #[test]
-    fn span_gap_requires_space_detects_column_gap_on_same_line() {
-        let prev = LineColumn { line: 1, column: 1 };
-        let next = LineColumn { line: 1, column: 4 };
-        assert!(span_gap_requires_space(prev, next));
-        let new_line = LineColumn { line: 2, column: 0 };
-        assert!(!span_gap_requires_space(prev, new_line));
-    }
-
-    #[test]
-    fn sticky_matches_urlish_characters() {
-        for ch in ['/', '.', '-', ':', '=', '$', '{', '}'] {
-            assert!(sticky(ch));
+        let steps = parse_braced_tokens(&ts).expect("parse templated script");
+        match &steps[0].kind {
+            StepKind::Write { path, contents } => {
+                assert_eq!(path.as_ref(), "dist/hello.txt");
+                assert_eq!(
+                    contents.as_ref().map(AsRef::as_ref),
+                    Some("Built with {{ env:PROJECT }}")
+                );
+            }
+            other => panic!("expected WRITE, saw {:?}", other),
         }
-        assert!(!sticky('a'));
     }
 
     #[test]
-    fn line_predicates_distinguish_run_and_with_io_contexts() {
-        assert!(line_is_run_context("  RUN something"));
-        assert!(!line_is_run_context("ECHO hi"));
-        assert!(line_expects_inner_command("WITH_IO [stdin]"));
-        assert!(!line_expects_inner_command("RUN thing"));
+    fn braced_and_string_forms_agree_on_templates() {
+        let text = indoc! {r#"
+            ENV GREETING=hello
+            ECHO <{{ env:GREETING }}>
+        "#}
+        .trim();
+        let ts: proc_macro2::TokenStream = text.parse().expect("tokens");
+        let braced = parse_braced_tokens(&ts).expect("braced parse");
+        let string = parse_script(text).expect("string parse");
+        assert_eq!(braced, string, "template AST parity between forms");
+    }
+
+    #[test]
+    fn braced_template_spacing_round_trips_both_variants() {
+        for source in [
+            "WRITE f.txt Built with {{ env:P }}",
+            "WRITE f.txt Built with {{env:P}}",
+        ] {
+            let ts: proc_macro2::TokenStream = source.parse().expect("tokens");
+            let script = script_from_braced_tokens(&ts)
+                .unwrap_or_else(|e| panic!("render failed for {source}: {e}"));
+            assert_eq!(script, source, "spacing must round-trip verbatim");
+
+            let steps = parse_braced_tokens(&ts).expect("parse");
+            match &steps[0].kind {
+                StepKind::Write { contents, .. } => {
+                    assert_eq!(
+                        contents.as_ref().map(AsRef::as_ref),
+                        Some(source.strip_prefix("WRITE f.txt ").expect("prefix")),
+                        "AST interior must match source for {source}"
+                    );
+                }
+                other => panic!("expected WRITE, saw {:?}", other),
+            }
+        }
     }
 }

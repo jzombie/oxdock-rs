@@ -2,6 +2,7 @@ use oxdock_parser::ast::*;
 use oxdock_parser::{parse_braced_tokens, parse_script};
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
+use std::str::FromStr;
 
 // Strategies
 
@@ -204,6 +205,24 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
             }
         }),
         safe_string().prop_map(|path| StepKind::HashSha256 { path: path.into() }),
+        // The grammar defines ASSERT_FILE's hash form without trailing
+        // contents, so generators must preserve that invariant for
+        // Display round-trips.
+        ("[0-9a-f]{64}", safe_string()).prop_map(|(digest, path)| StepKind::AssertFile {
+            hash: Some(digest),
+            path: path.into(),
+            contents: None,
+        }),
+        (safe_string(), prop::option::of(safe_msg())).prop_map(|(path, contents)| {
+            StepKind::AssertFile {
+                hash: None,
+                path: path.into(),
+                contents: contents.map(Into::into),
+            }
+        }),
+        safe_string().prop_map(|s| StepKind::AssertDir(s.into())),
+        safe_string().prop_map(|s| StepKind::AssertAbsent(s.into())),
+        safe_msg().prop_map(|s| StepKind::AssertStdout(s.into())),
         (0i32..255).prop_map(StepKind::Exit),
     ]
 }
@@ -219,6 +238,10 @@ fn arb_step() -> impl Strategy<Value = Step> {
         .prop_filter("Reject guarded INHERIT_ENV", |step| match &step.kind {
             StepKind::InheritEnv { .. } => step.guard.is_none(),
             _ => true,
+        })
+        .prop_filter("Reject strings that fail proc_macro2 lexing", |step| {
+            let s = step.to_string();
+            proc_macro2::TokenStream::from_str(&s).is_ok()
         })
 }
 

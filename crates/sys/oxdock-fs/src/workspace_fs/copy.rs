@@ -189,7 +189,7 @@ impl PathResolver {
                     fs::create_dir_all(&dst_path)
                         .with_context(|| format!("creating dir {}", dst_path.display()))?;
                     self.copy_dir_from_unguarded(
-                        &UnguardedPath::new(src_path),
+                        &UnguardedPath::external(src_path),
                         &GuardedPath::new(guarded_dst_root.root(), &dst_path)?,
                     )?;
                 }
@@ -320,10 +320,37 @@ mod extra_tests {
         std::fs::write(&src, b"payload")?;
 
         let dst = root.join("out.txt")?;
-        resolver.copy_file_from_unguarded(&UnguardedPath::new(src), &dst)?;
+        resolver.copy_file_from_unguarded(&UnguardedPath::external(src), &dst)?;
 
         let got = resolver.read_file(&dst)?;
         assert_eq!(got, b"payload");
+        Ok(())
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "uses tempfile::tempdir which touches the host filesystem; blocked under Miri isolation"
+    )]
+    #[test]
+    fn copy_dir_from_unguarded_round_trips_nested_tree() -> anyhow::Result<()> {
+        let temp = GuardedPath::tempdir()?;
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone())?;
+
+        // Build an unguarded source tree: file at top level + nested subdir.
+        let other = tempfile::tempdir()?;
+        let src_root = other.path();
+        std::fs::write(src_root.join("top.txt"), b"top")?;
+        std::fs::create_dir_all(src_root.join("nested"))?;
+        std::fs::write(src_root.join("nested/deep.txt"), b"deep")?;
+
+        let dst = root.join("copied")?;
+        resolver.copy_dir_from_unguarded(&UnguardedPath::external(src_root.to_path_buf()), &dst)?;
+
+        let top = dst.join("top.txt")?;
+        assert_eq!(resolver.read_file(&top)?, b"top");
+        let deep = dst.join("nested/deep.txt")?;
+        assert_eq!(resolver.read_file(&deep)?, b"deep");
         Ok(())
     }
 }

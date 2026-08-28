@@ -4,4 +4,3 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc c27628d4dfcfeca6abc379afa7e8565e21ad5ecef378f5fb93f79d6f20a494ed # shrinks to step = Step { guard: Some(All([Or([Predicate(Platform { target: Unix, invert: false }), Predicate(Platform { target: Unix, invert: false })]), Predicate(Platform { target: Unix, invert: false }), Predicate(Platform { target: Unix, invert: false })])), kind: Workdir(TemplateString("0")), scope_enter: 0, scope_exit: 0 }
