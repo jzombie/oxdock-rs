@@ -15,9 +15,9 @@
   <a href="https://github.com/jzombie/rust-oxdock/actions/workflows/rust-tests.yml?query=branch%3Amain+event%3Apush">
     <img src="https://img.shields.io/github/actions/workflow/status/jzombie/rust-oxdock/rust-tests.yml?branch=main&label=Miri&logo=github" alt="Miri status" />
   </a>
-  <a href="https://deepwiki.com/jzombie/rust-oxdock">
+  <!-- <a href="https://deepwiki.com/jzombie/rust-oxdock">
     <img src="https://deepwiki.com/badge.svg" alt="DeepWiki" />
-  </a>
+    </a> -->
   <a href="https://coveralls.io/github/jzombie/rust-oxdock?branch=main">
     <img src="https://coveralls.io/repos/github/jzombie/rust-oxdock/badge.svg?branch=main" alt="Coverage Status" />
   </a>
