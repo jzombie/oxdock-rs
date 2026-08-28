@@ -53,7 +53,7 @@ The following script is a complete OxDock program — it builds artifacts **and 
 
 ```oxdock
 // Script-local variable: usable by templates and guards below.
-ENV PROJECT=oxdock
+ENV PROJECT=OxDock
 
 // Creates the directory and any missing parents.
 MKDIR dist
@@ -85,7 +85,7 @@ embed! {
     // Embedded resources are mapped to `HelloAssets::get(resource)`
     name: HelloAssets,
     script: {
-        ENV PROJECT=oxdock
+        ENV PROJECT=OxDock
         MKDIR dist
         WRITE dist/hello.txt Built with {{ env:PROJECT }}
         ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
@@ -97,7 +97,7 @@ embed! {
 fn main() {
     // Verify we can read the resource we just created
     let file = HelloAssets::get("dist/hello.txt").expect("dist/hello.txt must be embedded");
-    assert_eq!(file.data.as_ref(), b"Built with oxdock");
+    assert_eq!(file.data.as_ref(), b"Built with OxDock");
 }
 ```
 
