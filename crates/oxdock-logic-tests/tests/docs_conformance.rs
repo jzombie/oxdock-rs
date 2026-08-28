@@ -49,6 +49,7 @@ fn contains_keyword(haystack: &str, keyword: &str) -> bool {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "requires CARGO_MANIFEST_DIR and host filesystem for README resolution")]
 fn readme_snippets_parse_and_cover_every_command() -> Result<()> {
     let blocks = load_readme_blocks()?;
     assert!(
