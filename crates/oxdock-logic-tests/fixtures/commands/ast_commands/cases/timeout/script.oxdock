@@ -1,0 +1,13 @@
+# Inline form bounds a single command.
+TIMEOUT 30s WRITE done.txt "finished"
+
+# Block form bounds multiple steps.
+TIMEOUT 30s {
+    WRITE more.txt "more"
+}
+
+# AWAIT form bounds a task join.
+LET $quick = ASYNC {
+    ECHO hi
+}
+TIMEOUT 30s AWAIT $quick

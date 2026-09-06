@@ -1,8 +1,7 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 #[allow(clippy::disallowed_types)]
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow, bail};
 use oxdock_sys_test_utils::exit_status_from_code;
@@ -56,30 +55,33 @@ pub struct MockSpawnCall {
 
 #[derive(Clone, Default)]
 pub struct MockProcessManager {
-    runs: Rc<RefCell<Vec<MockRunCall>>>,
-    spawns: Rc<RefCell<Vec<MockSpawnCall>>>,
-    killed: Rc<RefCell<Vec<String>>>,
-    plans: Rc<RefCell<VecDeque<BgPlan>>>,
+    runs: Arc<Mutex<Vec<MockRunCall>>>,
+    spawns: Arc<Mutex<Vec<MockSpawnCall>>>,
+    killed: Arc<Mutex<Vec<String>>>,
+    plans: Arc<Mutex<VecDeque<BgPlan>>>,
 }
 
 impl MockProcessManager {
     pub fn recorded_runs(&self) -> Vec<MockRunCall> {
-        self.runs.borrow().clone()
+        self.runs.lock().expect("mock state poisoned").clone()
     }
 
     pub fn spawn_log(&self) -> Vec<MockSpawnCall> {
-        self.spawns.borrow().clone()
+        self.spawns.lock().expect("mock state poisoned").clone()
     }
 
     pub fn killed(&self) -> Vec<String> {
-        self.killed.borrow().clone()
+        self.killed.lock().expect("mock state poisoned").clone()
     }
 
     pub fn push_bg_plan(&self, ready_after: usize, status: std::process::ExitStatus) {
-        self.plans.borrow_mut().push_back(BgPlan {
-            ready_after,
-            status,
-        });
+        self.plans
+            .lock()
+            .expect("mock state poisoned")
+            .push_back(BgPlan {
+                ready_after,
+                status,
+            });
     }
 }
 
@@ -104,15 +106,18 @@ impl ProcessManager for MockProcessManager {
 
         match mode {
             CommandMode::Foreground => {
-                self.runs.borrow_mut().push(MockRunCall {
-                    script: script.to_string(),
-                    cwd: ctx.cwd().to_path_buf(),
-                    envs: (**ctx.envs()).clone(),
-                    cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
-                    stdin_provided,
-                    stdin: captured_stdin.clone(),
-                    stderr_mode: recorded_stderr,
-                });
+                self.runs
+                    .lock()
+                    .expect("mock state poisoned")
+                    .push(MockRunCall {
+                        script: script.to_string(),
+                        cwd: ctx.cwd().to_path_buf(),
+                        envs: (**ctx.envs()).clone(),
+                        cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+                        stdin_provided,
+                        stdin: captured_stdin.clone(),
+                        stderr_mode: recorded_stderr,
+                    });
                 match stdout {
                     CommandStdout::Capture => Ok(CommandResult::Captured(Vec::new())),
                     CommandStdout::Stream(_) | CommandStdout::Inherit => {
@@ -124,25 +129,29 @@ impl ProcessManager for MockProcessManager {
                 if matches!(stdout, CommandStdout::Capture) {
                     bail!("cannot capture stdout for background command");
                 }
-                self.spawns.borrow_mut().push(MockSpawnCall {
-                    script: script.to_string(),
-                    cwd: ctx.cwd().to_path_buf(),
-                    envs: (**ctx.envs()).clone(),
-                    cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
-                    stdin_provided,
-                    stdin: captured_stdin.clone(),
-                    stderr_mode: recorded_stderr,
-                });
+                self.spawns
+                    .lock()
+                    .expect("mock state poisoned")
+                    .push(MockSpawnCall {
+                        script: script.to_string(),
+                        cwd: ctx.cwd().to_path_buf(),
+                        envs: (**ctx.envs()).clone(),
+                        cargo_target_dir: ctx.cargo_target_dir().to_path_buf(),
+                        stdin_provided,
+                        stdin: captured_stdin.clone(),
+                        stderr_mode: recorded_stderr,
+                    });
                 let plan = self
                     .plans
-                    .borrow_mut()
+                    .lock()
+                    .expect("mock state poisoned")
                     .pop_front()
                     .unwrap_or_else(BgPlan::success);
                 Ok(CommandResult::Background(MockHandle {
                     script: script.to_string(),
                     remaining: plan.ready_after,
                     status: plan.status,
-                    killed: self.killed.clone(),
+                    killed: Arc::clone(&self.killed),
                     reaped: false,
                 }))
             }
@@ -169,7 +178,7 @@ pub struct MockHandle {
     script: String,
     remaining: usize,
     status: std::process::ExitStatus,
-    killed: Rc<RefCell<Vec<String>>>,
+    killed: Arc<Mutex<Vec<String>>>,
     reaped: bool,
 }
 
@@ -186,7 +195,10 @@ impl BackgroundHandle for MockHandle {
 
     fn kill(&mut self) -> Result<()> {
         self.reaped = true;
-        self.killed.borrow_mut().push(self.script.clone());
+        self.killed
+            .lock()
+            .expect("mock state poisoned")
+            .push(self.script.clone());
         Ok(())
     }
 
@@ -202,7 +214,10 @@ impl Drop for MockHandle {
         // un-reaped; log them as killed so `pm.killed()` assertions observe
         // Drop-driven teardown exactly like explicit kills.
         if !self.reaped {
-            self.killed.borrow_mut().push(self.script.clone());
+            self.killed
+                .lock()
+                .expect("mock state poisoned")
+                .push(self.script.clone());
         }
     }
 }

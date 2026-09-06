@@ -1,18 +1,24 @@
 [workspace]
 members = [
+    "crates/docs-gen",
     "crates/oxdock-core",
     "crates/oxdock-doc-tests",
     "crates/oxdock-embed",
     "crates/oxdock-fixture",
     "crates/oxdock-logic-tests",
+    "crates/oxdock-logic-tests/fixtures/commands/ast_commands",
     "crates/oxdock-parser",
     "crates/sys/oxdock-fs",
     "crates/sys/oxdock-process",
     "crates/sys/oxdock-sys-test-utils",
-    "oxdock-buildtime-helpers",
-    "oxdock-buildtime-macros",
+    "oxdock",
+    "oxdock-build",
     "oxdock-cli",
+    "oxdock-macros",
 ]
+# Bare `cargo run` at the workspace root defaults to the `oxdock` binary.
+# `cargo build/test/...` with explicit `--workspace`/`-p` flags are unaffected.
+default-members = ["oxdock"]
 resolver = "2"
 
 [workspace.package]
@@ -25,16 +31,20 @@ publish = true
 
 [workspace.dependencies]
 anyhow = "1.0.104"
+glob = "0.3"
 indoc = "2.0.7"
 libc = "0.2.189"
 libtest-mimic = "0.8.2"
 line-ending = "1.5.1"
-oxdock-buildtime-helpers = { path = "oxdock-buildtime-helpers", version = "0.7.0-alpha" }
-oxdock-buildtime-macros = { path = "oxdock-buildtime-macros", version = "0.7.0-alpha" }
+oxdock = { path = "oxdock", version = "0.7.0-alpha" }
+oxdock-build = { path = "oxdock-build", version = "0.7.0-alpha" }
+oxdock-cli = { path = "oxdock-cli", version = "0.7.0-alpha" }
 oxdock-core = { path = "crates/oxdock-core", version = "0.7.0-alpha" }
 oxdock-embed = { path = "crates/oxdock-embed", version = "0.7.0-alpha" }
 oxdock-fixture = { path = "crates/oxdock-fixture", version = "0.7.0-alpha" }
 oxdock-fs = { path = "crates/sys/oxdock-fs", version = "0.7.0-alpha" }
+oxdock-logic-tests = { path = "crates/oxdock-logic-tests", version = "0.7.0-alpha" }
+oxdock-macros = { path = "oxdock-macros", version = "0.7.0-alpha" }
 oxdock-parser = { path = "crates/oxdock-parser", version = "0.7.0-alpha" }
 oxdock-process = { path = "crates/sys/oxdock-process", version = "0.7.0-alpha" }
 oxdock-sys-test-utils = { path = "crates/sys/oxdock-sys-test-utils", version = "0.7.0-alpha" }
@@ -43,9 +53,11 @@ pest_derive = "2.9.0"
 proc-macro2 = "1.0.107"
 proptest = "1.11.0"
 quote = "1.0.47"
+serde_json = "1.0.151"
 sha2 = "0.11.0"
 syn = { version = "2.0.119", features = ["full", "visit"] }
 tempfile = "3.27.0"
+toml = "1.1.4"
 toml_edit = "0.25.13"
 tracing = "0.1.44"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }

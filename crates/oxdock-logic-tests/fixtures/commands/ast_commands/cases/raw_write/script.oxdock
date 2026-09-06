@@ -1,0 +1,2 @@
+WRITE template.md "Hello, \{{ env:NAME }}!"
+READ template.md

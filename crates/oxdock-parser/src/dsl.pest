@@ -1,171 +1,205 @@
 WHITESPACE = _{ " " | "\t" }
-linebreak = _{ "\r\n" | "\n" }
-COMMENT = _{ line_comment | block_comment }
+linebreak  = _{ "\r\n" | "\n" }
+COMMENT    = _{ line_comment | block_comment }
 line_comment = _{ "//" ~ (!linebreak ~ ANY)* }
 block_comment = _{ "/*" ~ (block_comment | !"*/" ~ ANY)* ~ "*/" }
 
 // Hash comments are only valid at the start of a line (possibly indented)
-hash_comment = _{ WHITESPACE* ~ "#" ~ (!linebreak ~ ANY)* }
+hash_comment = _{ "#" ~ (!linebreak ~ ANY)* }
+
+blank = _{ (WHITESPACE | linebreak)+ }
 
 script = { SOI ~ element* ~ EOI }
 
-element = _{ blank | hash_comment | semicolon | guard_line | block_start | block_end | command }
+// Structural statements MUST precede generic commands
+element = _{ blank | hash_comment | COMMENT | semicolon | guard_line | block_start | block_end | if_statement | for_statement | let_async_statement | await_statement | cancel_statement | let_statement | timeout_statement | async_statement_block | async_statement | command }
 
-blank = _{ linebreak+ }
-
-semicolon = _{ ";" }
+// Inside for/let blocks, block_start/block_end must NOT appear as elements
+// (the block's own braces handle them).  Nested guard blocks use guard_block.
+block_element = _{ blank | hash_comment | COMMENT | semicolon | guard_block | guard_line | if_statement | for_statement | let_async_statement | await_statement | cancel_statement | let_statement | timeout_statement | async_statement_block | async_statement | command }
+guard_block = { guard_line ~ block }
 
 block_start = { "{" }
 
 block_end = { "}" }
 
+semicolon = _{ ";" }
+
 guard_line = { "[" ~ ws? ~ guard_expr ~ ws? ~ "]" }
 
 guard_expr = { guard_seq }
-
-guard_seq = { guard_factor ~ ( ws? ~ "," ~ ws? ~ guard_factor )* }
-
+guard_seq = { guard_factor ~ ( ws? ~ "," ~ ws? ~ guard_factor ~ ws? )* }
 guard_factor = { guard_not }
-
-guard_not = { (invert ~ ws?)* ~ guard_primary }
-
-guard_primary = _{ guard_group | guard_or_call | guard_term }
-
+guard_not = _{ guard_primary }
+guard_primary = _{ guard_group | guard_any_call | guard_all_call | not_call | guard_term }
 guard_group = { "(" ~ ws? ~ guard_expr ~ ws? ~ ")" }
-
-guard_or_call = { or_kw ~ "(" ~ ws? ~ guard_expr_list ~ ws? ~ ")" }
-
-or_kw = _{ "or" }
-
+not_call = { "not" ~ "(" ~ ws? ~ guard_expr ~ ws? ~ ")" }
+guard_any_call = { any_kw ~ "(" ~ ws? ~ guard_expr_list ~ ws? ~ ")" }
+guard_all_call = { all_kw ~ "(" ~ ws? ~ guard_expr_list ~ ws? ~ ")" }
+any_kw = _{ "any" }
+all_kw = _{ "all" }
 guard_expr_list = { guard_expr ~ ( ws? ~ "," ~ ws? ~ guard_expr )* }
-
-guard_term = { ws? ~ guard_predicate ~ ws? }
-
-invert = { "!" }
-
-guard_predicate = _{ env_guard | bare_platform }
-
-env_guard = { env_prefix ~ ws? ~ env_key ~ env_comparison? }
-
+guard_term = { ws? ~ guard_predicate ~ !( "(" | ":" | "=" | "!") ~ ws? }
+guard_predicate = _{ eq_guard | neq_guard | bool_guard | env_guard | bare_guard_ident }
+bool_guard = { "bool" ~ ":" ~ ws? ~ bool_value }
+bool_value = @{ guard_key_char+ }
+eq_guard = { "eq" ~ "(" ~ env_prefix ~ env_key ~ "," ~ ws? ~ guard_value ~ ws? ~ ")" }
+neq_guard = { "neq" ~ "(" ~ env_prefix ~ env_key ~ "," ~ ws? ~ guard_value ~ ws? ~ ")" }
+env_guard = { env_prefix ~ ws? ~ env_key }
 env_prefix = { "env" ~ ":" }
-
 env_key = @{ guard_key_char+ }
+guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | "(" | ")" | "]" | "$" | " " | "\t" | linebreak | "//" | "/*" ) ~ ANY }
+guard_value = _{ quoted_string | bare_guard_value }
+bare_guard_value = @{ (!( "," | "|" | ")" | "]" | "$" | linebreak | "//" | "/*" ) ~ ANY)+ }
+bare_guard_ident = @{ guard_key_char+ }
 
-guard_key_char = _{ !( ":" | "=" | "!" | "," | "|" | ")" | "]" | linebreak | "//" | "/*" ) ~ ANY }
+// Comparison operators (used by expr_comparison in LET/IF expressions)
+eq_op = @{ "==" }
+neq_op = @{ "!=" }
 
-env_comparison = { not_equals_env | equals_env }
+// Identifiers
+ident_char = _{ ASCII_ALPHANUMERIC | "_" }
+ident = @{ ident_char+ }
+dollar_ident = @{ "$" ~ ident_char+ }
 
-equals_env = { eq_op ~ env_value }
+// Expressions — 4-tier precedence climbing (highest to lowest: atom > comparison > logical_and > logical_or)
+or_op = @{ "||" }
+and_op = @{ "&&" }
+// eq_op and neq_op already defined above in guard section
 
-not_equals_env = { neq_op ~ env_value }
+parenthesized_expr = { "(" ~ expr ~ ")" }
 
-env_value = @{ guard_value_char+ }
-
-guard_value_char = _{ !( "," | "|" | ")" | "]" | linebreak | "//" | "/*" ) ~ ANY }
-
-
-eq_op = { "==" }
-
-neq_op = { "!=" }
-
-bare_platform = { platform_tag }
-
-platform_tag = @{ ASCII_ALPHANUMERIC+ }
-
-command = _{
-    inherit_env_command |
-    workdir_command |
-    workspace_command |
-    env_command |
-    echo_command |
-    run_bg_command | // Must come before run_command to avoid prefix match
-    run_command |
-    copy_git_command | // Must come before copy_command
-    copy_command |
-    with_io_command |
-    hash_sha256_command |
-    symlink_command |
-    mkdir_command |
-    ls_command |
-    cwd_command |
-    read_command |
-    write_command |
-    append_command |
-    assert_file_command |
-    assert_dir_command |
-    assert_absent_command |
-    assert_stdout_command |
-    exit_command
+quoted_string = @{
+    "\"" ~ ( "\\\"" | (!"\"" ~ ANY) )* ~ "\"" |
+    "'" ~ ( "\\'" | (!"'" ~ ANY) )* ~ "'"
 }
+bare_word = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
+func_call = { ident ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+variable = { "$" ~ ident }
+key_path_segment = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* | ASCII_DIGIT+ }
+key_path = { "$" ~ ident ~ ("." ~ key_path_segment)+ }
+list_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
+map_entry = { (quoted_string | bare_word) ~ ":" ~ ws? ~ expr }
+map_literal = { "{" ~ ws? ~ (map_entry ~ (ws? ~ "," ~ ws? ~ map_entry)*)? ~ ws? ~ "}" }
+string_literal = { quoted_string }
+expr_atom = { parenthesized_expr | func_call | key_path | variable | list_literal | map_literal | string_literal | bare_word }
+
+// Comparison level (==, !=) — operands are unary so `!` binds tighter
+// than equality (C-like): `!a == b` parses as `(!a) == b`.
+expr_comparison = { expr_unary ~ ((eq_op | neq_op) ~ expr_unary)? }
+
+// Unary NOT — one or more `!` prefixes over an atom (`!true`, `!!$flag`).
+not_op = { "!" }
+expr_unary = { not_op* ~ expr_atom }
+
+// Logical AND (&&) — binds tighter than ||
+expr_logical_and = { expr_comparison ~ (and_op ~ expr_comparison)* }
+
+// Logical OR (||) — binds loosest
+expr_logical_or = { expr_logical_and ~ (or_op ~ expr_logical_and)* }
+
+// Entry point for all expressions
+expr = { expr_logical_or }
+
+// Block
+block = { "{" ~ block_element* ~ "}" }
+
+// Control flow & Assignment
+let_keyword = @{ "LET" ~ !(ASCII_ALPHANUMERIC | "_") }
+for_keyword = @{ "FOR" ~ !(ASCII_ALPHANUMERIC | "_") }
+in_keyword = @{ "IN" ~ !(ASCII_ALPHANUMERIC | "_") }
+if_keyword = @{ "IF" ~ !(ASCII_ALPHANUMERIC | "_") }
+else_keyword = @{ "ELSE" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+for_statement = { for_keyword ~ dollar_ident ~ ("," ~ dollar_ident)? ~ in_keyword ~ expr ~ block }
+let_statement = { let_keyword ~ dollar_ident ~ "=" ~ expr }
+
+else_if_clause = { else_keyword ~ if_keyword ~ expr ~ block }
+else_clause = { else_keyword ~ block }
+if_statement = { if_keyword ~ expr ~ block ~ (blank* ~ else_if_clause)* ~ blank* ~ else_clause? }
+
 // Commands
-workdir_command = ${ "WORKDIR" ~ sep ~ argument }
-workspace_command = ${ "WORKSPACE" ~ sep ~ workspace_target }
-env_command = ${ "ENV" ~ sep ~ env_pair }
-echo_command = ${ "ECHO" ~ sep ~ message }
-run_command = ${ "RUN" ~ sep ~ run_args }
-run_bg_command = ${ "RUN_BG" ~ sep ~ run_args }
-from_current_workspace_flag = { "--from-current-workspace" }
-copy_command = ${ "COPY" ~ sep ~ (from_current_workspace_flag ~ sep)? ~ argument ~ sep ~ argument }
+// Structural rules with special syntax stay as PEG rules.
+// All other commands use the generic `instruction` rule — lowering happens in Rust.
+async_keyword = _{ "ASYNC" ~ !(ASCII_ALPHANUMERIC | "_") }
+async_statement = ${ async_keyword ~ sep ~ command_inner }
+async_statement_block = { async_keyword ~ sep? ~ block }
+
+// LET $var = ASYNC { ... } — spawn background task, store handle in $var
+// NOTE: "ASYNC" is consumed here, so we inline the block/inline forms
+// instead of reusing async_statement_block/async_statement (which expect
+// their own async_keyword).
+// LET $var = ASYNC { ... } — spawn background task, store handle in $var
+// Uses let_keyword to ensure "LET" is not followed by alphanumeric/underscore.
+// LET $var = ASYNC { ... } — spawn background task, store handle in $var
+// Uses let_keyword and dollar_ident to match exactly like let_statement,
+// then requires ASYNC keyword followed by block or inline command.
+// LET $var = ASYNC { ... } — spawn background task, store handle in $var
+// Uses let_keyword and dollar_ident to match exactly like let_statement,
+// then requires ASYNC keyword followed by block or inline command.
+// LET $var = ASYNC { ... } — spawn background task, store handle in $var
+// Implicit whitespace handles spacing between tokens in non-atomic rules.
+// LET $var = WITH_IO [flags] ASYNC <single command> binds a pipe-wired
+// background task. The bindings apply inside the task thread. Block form is
+// rejected during lowering: use LET $var = ASYNC { ... } instead.
+let_async_statement = { let_keyword ~ dollar_ident ~ "=" ~ ("ASYNC" ~ (block | command_inner) | with_io_command) }
+
+// AWAIT $var — block until task $var completes, propagate error if failed.
+// NOTE: explicit `sep?` (not implicit whitespace) so this rule also matches
+// inside compound-atomic parents such as timeout_statement, where implicit
+// whitespace is suppressed.
+await_keyword = _{ "AWAIT" ~ !(ASCII_ALPHANUMERIC | "_") }
+await_statement = { await_keyword ~ sep? ~ "$" ~ ident }
+
+// CANCEL $var — synchronously kill a named background task spawned via
+// LET $var = ASYNC .... Blocking: returns only after the task thread is
+// joined. A later AWAIT $var reports cancellation.
+// NOTE: explicit `sep?` like await_statement so this rule also matches
+// inside compound-atomic parents (async_statement, timeout_statement).
+cancel_keyword = _{ "CANCEL" ~ !(ASCII_ALPHANUMERIC | "_") }
+cancel_statement = { cancel_keyword ~ sep? ~ "$" ~ ident }
+
+// TIMEOUT <duration> <command> | TIMEOUT <duration> { <commands> } —
+// abort the wrapped steps with a deadline error if they overrun.
+// Duration units: ms, s, m, h (bare number means seconds).
+// NOTE: compound-atomic like its siblings (async_statement,
+// with_io_command): explicit `sep` separators starve when implicit
+// whitespace is active, so atomicity is required here, not optional.
+timeout_keyword = _{ "TIMEOUT" ~ !(ASCII_ALPHANUMERIC | "_") }
+timeout_duration = @{ ASCII_DIGIT+ ~ ("ms" | "s" | "m" | "h")? }
+timeout_statement = ${ timeout_keyword ~ sep ~ timeout_duration ~ sep ~ (block | await_statement | cancel_statement | command) }
+
+command = _{ with_io_command | inherit_env_command | timeout_statement | async_statement_block | async_statement | cancel_statement | instruction_inner }
+command_inner = { inherit_env_command | timeout_statement | async_statement | async_statement_block | cancel_statement | instruction }
+
 with_io_command = ${ "WITH_IO" ~ sep ~ io_flags ~ (sep ~ command)? }
-copy_git_command = ${ "COPY_GIT" ~ sep ~ (include_dirty_flag ~ sep)? ~ argument ~ sep ~ argument ~ sep ~ argument }
-hash_sha256_command = ${ "HASH_SHA256" ~ sep ~ argument }
-symlink_command = ${ "SYMLINK" ~ sep ~ argument ~ sep ~ argument }
-mkdir_command = ${ "MKDIR" ~ sep ~ argument }
-ls_command = ${ "LS" ~ (sep ~ argument)? }
-cwd_command = ${ "CWD" }
-read_command = ${ "READ" ~ (sep ~ argument)? }
-write_command = ${ "WRITE" ~ sep ~ argument ~ (sep ~ message)? }
-append_command = ${ "APPEND" ~ sep ~ argument ~ (sep ~ message)? }
-
-// Verification commands. ASSERT_FILE alternates on explicit forms so the
-// --hash digest can never be captured into the path slot, and a missing or
-// malformed digest after --hash is a loud parse error rather than a silent skip.
-assert_file_command = _{ assert_file_hash_command | assert_file_content_command }
-assert_file_hash_command = ${ "ASSERT_FILE" ~ sep ~ "--hash" ~ sep ~ hash_digest ~ sep ~ argument }
-assert_file_content_command = ${ "ASSERT_FILE" ~ sep ~ !hash_flag ~ argument ~ (sep ~ message)? }
-assert_dir_command = ${ "ASSERT_DIR" ~ sep ~ argument }
-assert_absent_command = ${ "ASSERT_ABSENT" ~ sep ~ argument }
-assert_stdout_command = ${ "ASSERT_STDOUT" ~ sep ~ message }
-hash_flag = { "--hash" }
-hash_digest = @{ ASCII_HEX_DIGIT{64} }
-
-exit_command = ${ "EXIT" ~ sep ~ exit_code }
-
-// Inherit environment variables (selective list only). Placed here so it's available
-// as a top-level command in the prelude. NOTE: `ALL` form is intentionally omitted.
-inherit_env_command = ${ "INHERIT_ENV" ~ sep ~ inherit_list }
-
-inherit_list = { "[" ~ ws? ~ env_key ~ (ws? ~ "," ~ ws? ~ env_key)* ~ ws? ~ "]" }
-
-// Arguments
-sep = _{ WHITESPACE+ }
-argument = { quoted_string | templated_arg | unquoted_arg }
-templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
-unquoted_arg = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
-include_dirty_flag = { "--include-dirty" }
 io_flags = { "[" ~ ws? ~ io_binding ~ (ws? ~ "," ~ ws? ~ io_binding)* ~ ws? ~ "]" }
 io_binding = { io_stream ~ (ws? ~ "=" ~ ws? ~ pipe_binding)? }
 io_stream = { "stdin" | "stdout" | "stderr" }
 pipe_binding = { "pipe" ~ ":" ~ pipe_name }
 pipe_name = @{ (ASCII_ALPHANUMERIC | "_" | "-")+ }
 
-workspace_target = { "SNAPSHOT" | "LOCAL" | "snapshot" | "local" }
-env_pair = { env_key_part ~ ws? ~ "=" ~ ws? ~ env_value_part }
-env_key_part = @{ (!"=" ~ !WHITESPACE ~ !linebreak ~ ANY)+ }
-env_value_part = { quoted_string | unquoted_env_value }
-unquoted_env_value = @{ (!WHITESPACE ~ !linebreak ~ !";" ~ ANY)+ }
+inherit_env_command = ${ "INHERIT_ENV" ~ sep ~ inherit_list }
+inherit_list = { "[" ~ ws? ~ env_key ~ (ws? ~ "," ~ ws? ~ env_key)* ~ ws? ~ "]" }
 
-message = { (quoted_string | unquoted_msg_content)+ }
-unquoted_msg_content = { !(linebreak | ";") ~ ANY }
+// Generic instruction: uppercase command name followed by arguments.
+// instruction_inner (non-atomic) — used inside with_io_command's command rule.
+// instruction (atomic) — used at top-level in element.
+instruction_inner = ${ command_name ~ (sep ~ argument)* }
+instruction = ${ command_name ~ (sep ~ argument)* }
+command_name = @{ ASCII_ALPHA_UPPER ~ (ASCII_ALPHA_UPPER | ASCII_DIGIT | "_")* }
 
-run_args = { (quoted_string | unquoted_run_content)+ }
-unquoted_run_content = { !(linebreak | "//" | "/*" | ";") ~ ANY }
+sep = _{ WHITESPACE+ }
 
-exit_code = @{ ASCII_DIGIT+ }
+// Unquoted arguments — Docker-style bare words.
+// Leading !$ rejects tokens starting with $ (forces $var to expr).
+// Inner loop excludes { to prevent consuming {{ }} as a single token.
+unquoted_arg = @{ !"$" ~ !("{{") ~ (!WHITESPACE ~ !linebreak ~ !";" ~ !"}" ~ !"{" ~ !"//" ~ !"/*" ~ ANY)+ }
 
-quoted_string = @{
-    "\"" ~ ( "\\\"" | (!"\"" ~ ANY) )* ~ "\"" |
-    "'" ~ ( "\\'" | (!"'" ~ ANY) )* ~ "'"
-}
+// argument repeats to support contiguous fragments: dist/{{ $file }}.txt
+// Single expr fragment -> Arg::Expr; mixed/string fragments -> Arg::String.
+argument = { (string_literal | templated_arg | unquoted_arg | expr)+ }
+
+templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
 
 ws = _{ (WHITESPACE | linebreak)* }

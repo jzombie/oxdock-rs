@@ -1,0 +1,4 @@
+name = "async_run"
+
+[expect]
+files = { "bg.txt" = "bar" }

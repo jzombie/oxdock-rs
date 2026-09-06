@@ -1,12 +1,53 @@
 pub mod exec;
+pub mod pipeline;
 pub use exec::*;
+pub use oxdock_parser::{
+    Arg, CommandMeta, CommandSpec, StepKind, all_metadata, all_structural_metadata, lower_command,
+};
+pub use oxdock_process::ProcessManager;
+
+define_pipeline! {
+    StepKind::Run(..) => exec::dispatch_run,
+    StepKind::AsyncBlock { .. } => exec::dispatch_async_block,
+    StepKind::Echo(..) => exec::dispatch_echo,
+    StepKind::Workdir(..) => exec::dispatch_workdir,
+    StepKind::Workspace(..) => exec::dispatch_workspace,
+    StepKind::Env { .. } => exec::dispatch_env,
+    StepKind::Copy { .. } => exec::dispatch_copy,
+    StepKind::CopyGit { .. } => exec::dispatch_copy_git,
+    StepKind::Symlink { .. } => exec::dispatch_symlink,
+    StepKind::Mkdir(..) => exec::dispatch_mkdir,
+    StepKind::Ls(..) => exec::dispatch_ls,
+    StepKind::Cwd => exec::dispatch_cwd,
+    StepKind::Read(..) => exec::dispatch_read,
+    StepKind::ReadLine { .. } => exec::dispatch_read_line,
+    StepKind::Write { .. } => exec::dispatch_write,
+    StepKind::Append { .. } => exec::dispatch_append,
+    StepKind::Expand { .. } => exec::dispatch_expand,
+    StepKind::AssertFile { .. } => exec::dispatch_assert_file,
+    StepKind::AssertDir(..) => exec::dispatch_assert_dir,
+    StepKind::AssertAbsent(..) => exec::dispatch_assert_absent,
+    StepKind::AssertStdout(..) => exec::dispatch_assert_stdout,
+    StepKind::HashSha256 { .. } => exec::dispatch_hash_sha256,
+    StepKind::Exit(..) => exec::dispatch_exit,
+    StepKind::AssignAsync { .. } => exec::dispatch_assign_async_step,
+    StepKind::Await { .. } => exec::dispatch_await_step,
+    StepKind::Cancel { .. } => exec::dispatch_cancel_step,
+    StepKind::Timeout { .. } => exec::dispatch_timeout_step,
+    StepKind::Sleep { .. } => exec::dispatch_sleep_step,
+}
+
+/// Parse a script using the production `lower_command` dispatcher.
+pub fn parse_script(input: &str) -> anyhow::Result<Vec<oxdock_parser::Step>> {
+    oxdock_parser::parse_script(input, lower_command)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
     use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver};
-    use oxdock_parser::{Step, StepKind, parse_script};
+    use oxdock_parser::{Step, StepKind};
     #[cfg(unix)]
     use std::time::Instant;
 
@@ -72,13 +113,13 @@ mod tests {
         let script = format!(
             indoc!(
                 r#"
-                [env:{guard}] WRITE skipped.txt hi
-                WRITE kept.txt ok
+                [env:{guard}] WRITE "skipped.txt" "hi"
+                WRITE "kept.txt" "ok"
                 "#
             ),
             guard = guard_var
         );
-        let steps = parse_script(&script).unwrap();
+        let steps = crate::parse_script(&script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -96,12 +137,12 @@ mod tests {
 
         let script = indoc!(
             r#"
-            ENV FOO=1
-            [env:FOO] WRITE hit.txt yes
-            WRITE always.txt ok
+            ENV FOO="1"
+            [env:FOO] WRITE "hit.txt" "yes"
+            WRITE "always.txt" "ok"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -119,11 +160,11 @@ mod tests {
 
         let script = indoc!(
             r#"
-            ECHO Hello, world
-            WRITE always.txt ok
+            ECHO "Hello, world"
+            WRITE "always.txt" "ok"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -137,13 +178,13 @@ mod tests {
 
         let script = indoc!(
             r#"
-            ENV FOO=1
+            ENV FOO="1"
             [env:FOO]
-            WRITE hit.txt yes
-            WRITE always.txt ok
+            WRITE "hit.txt" "yes"
+            WRITE "always.txt" "ok"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -161,11 +202,11 @@ mod tests {
 
         let script = indoc!(
             r#"
-            [!unix] WRITE platform.txt hi
-            WRITE always.txt ok
+            [not(unix)] WRITE "platform.txt" "hi"
+            WRITE "always.txt" "ok"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -186,15 +227,15 @@ mod tests {
 
         let script = indoc!(
             r#"
-            ENV RUN=1
+            ENV RUN="1"
             [env:RUN] {
-                ENV INNER=1
-                WRITE scoped.txt hit
+                ENV INNER="1"
+                WRITE "scoped.txt" "hit"
             }
-            [env:INNER] WRITE leak.txt nope
+            [env:INNER] WRITE "leak.txt" "nope"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -212,16 +253,16 @@ mod tests {
 
         let script = indoc!(
             r#"
-            MKDIR nested
-            ENV RUN=1
+            MKDIR "nested"
+            ENV RUN="1"
             [env:RUN] {
-                WORKDIR nested
-                WRITE inside.txt ok
+                WORKDIR "nested"
+                WRITE "inside.txt" "ok"
             }
-            WRITE outside.txt root
+            WRITE "outside.txt" "root"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps(&root, &steps).unwrap();
 
@@ -248,15 +289,15 @@ mod tests {
 
         let script = indoc!(
             r#"
-            ENV RUN=1
+            ENV RUN="1"
             [env:RUN] {
                 WORKSPACE LOCAL
-                WRITE local_only.txt inside
+                WRITE "local_only.txt" "inside"
             }
-            WRITE snapshot_only.txt outside
+            WRITE "snapshot_only.txt" "outside"
             "#
         );
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
 
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
@@ -276,23 +317,23 @@ mod tests {
 
     #[test]
     fn guard_matches_profile_env() {
-        // Cargo sets PROFILE during builds/tests; verify guards see it.
+        // Set PROFILE via script ENV; guards now only see script-level env.
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set("PROFILE", &profile);
         let script = format!(
             indoc!(
                 r#"
-                [env:PROFILE=={0}] WRITE hit.txt yes
-                [env:PROFILE!={0}] WRITE miss.txt no
+                ENV PROFILE={0}
+                [eq(env:PROFILE, {0})] WRITE "hit.txt" "yes"
+                [neq(env:PROFILE, {0})] WRITE "miss.txt" "no"
                 "#
             ),
             profile
         );
 
-        let steps = parse_script(&script).unwrap();
+        let steps = crate::parse_script(&script).unwrap();
         run_steps(&root, &steps).unwrap();
 
         assert!(
@@ -311,18 +352,18 @@ mod tests {
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_PASS";
-        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set(key, "ok");
 
         let script = format!(
             indoc!(
                 r#"
-                [env:{k},env:{k}==ok] WRITE hit.txt yes
-                WRITE always.txt ok
+                ENV {k}=ok
+                [env:{k},eq(env:{k}, ok)] WRITE "hit.txt" "yes"
+                WRITE "always.txt" "ok"
                 "#
             ),
             k = key
         );
-        let steps = parse_script(&script).unwrap();
+        let steps = crate::parse_script(&script).unwrap();
         run_steps(&root, &steps).unwrap();
 
         assert!(
@@ -338,18 +379,18 @@ mod tests {
         let root = guard_root(&temp);
 
         let key = "OXDOCK_MULTI_GUARD_TEST_FAIL";
-        let _env_guard = oxdock_sys_test_utils::TestEnvGuard::set(key, "ok");
 
         let script = format!(
             indoc!(
                 r#"
-                [env:{k},env:{k}!=ok] WRITE miss.txt yes
-                WRITE always.txt ok
+                ENV {k}=ok
+                [env:{k},neq(env:{k}, ok)] WRITE "miss.txt" "yes"
+                WRITE "always.txt" "ok"
                 "#
             ),
             k = key
         );
-        let steps = parse_script(&script).unwrap();
+        let steps = crate::parse_script(&script).unwrap();
         run_steps(&root, &steps).unwrap();
 
         assert!(
@@ -365,15 +406,15 @@ mod tests {
         ignore = "stdout streaming not supported for background command under miri"
     )]
     #[test]
-    fn run_bg_exits_success_and_stops_pipeline() {
+    fn async_exits_success_and_stops_pipeline() {
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         // Background succeeds quickly; pipeline should complete without error.
-        let script = "RUN_BG sh -c 'sleep 0.05'";
-        let steps = parse_script(script).unwrap();
+        let script = "ASYNC RUN \"sh -c 'sleep 0.05'\"";
+        let steps = crate::parse_script(script).unwrap();
         let res = run_steps(&root, &steps);
-        assert!(res.is_ok(), "RUN_BG success should allow clean exit");
+        assert!(res.is_ok(), "ASYNC success should allow clean exit");
     }
 
     #[cfg(unix)]
@@ -382,17 +423,17 @@ mod tests {
         ignore = "stdout streaming not supported for background command under miri"
     )]
     #[test]
-    fn run_bg_failure_bubbles_status() {
+    fn async_failure_bubbles_status() {
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
-        let script = "RUN_BG sh -c 'sleep 0.05; exit 7'";
-        let steps = parse_script(script).unwrap();
+        let script = "ASYNC RUN \"sh -c 'sleep 0.05; exit 7'\"";
+        let steps = crate::parse_script(script).unwrap();
         let err = run_steps(&root, &steps).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("RUN_BG exited with status") || msg.contains("exit status: 7"),
-            "should surface failing RUN_BG exit code"
+            msg.contains("ASYNC process exited with status") || msg.contains("exit status: 7"),
+            "should surface failing ASYNC exit code"
         );
     }
 
@@ -402,24 +443,24 @@ mod tests {
         ignore = "timing-sensitive background process test is unreliable under Miri"
     )]
     #[test]
-    fn run_bg_multiple_stops_on_first_exit_and_does_not_block_steps() {
+    fn async_multiple_stops_on_first_exit_and_does_not_block_steps() {
         let temp = GuardedPath::tempdir().unwrap();
         let root = guard_root(&temp);
 
         let script = indoc! {
             r#"
-            RUN_BG sh -c 'sleep 0.2; echo one > one.txt'
-            RUN_BG sh -c 'sleep 0.5; echo two > two.txt'
-            WRITE done.txt ok
+            ASYNC RUN "sh -c 'sleep 0.2; echo one > one.txt'"
+            ASYNC RUN "sh -c 'sleep 0.5; echo two > two.txt'"
+            WRITE "done.txt" "ok"
             "#
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         let start = Instant::now();
         let res = run_steps(&root, &steps);
         let elapsed = start.elapsed();
 
-        assert!(res.is_ok(), "RUN_BG success should allow clean exit");
+        assert!(res.is_ok(), "ASYNC success should allow clean exit");
         assert!(
             exists(&root, "done.txt"),
             "foreground step should run after spawning backgrounds"
@@ -428,15 +469,17 @@ mod tests {
             exists(&root, "one.txt"),
             "first background should finish and emit output"
         );
+        // With the new poll-all model, both children run to completion.
+        // The second background (~0.5s) should also finish.
         assert!(
-            !exists(&root, "two.txt"),
-            "second background should be terminated once the first exits"
+            exists(&root, "two.txt"),
+            "second background should finish (poll-all waits for all)"
         );
 
-        let upper = 0.45;
+        let upper = 0.8;
         assert!(
             elapsed.as_secs_f32() < upper && elapsed.as_secs_f32() > 0.15,
-            "should wait roughly for first background (~0.2s) but not the second (~0.5s); got {elapsed:?}"
+            "should wait for both backgrounds (~0.5s); got {elapsed:?}"
         );
     }
 
@@ -452,17 +495,17 @@ mod tests {
 
         let script = indoc! {
             r#"
-            RUN_BG sh -c 'sleep 1; echo late > late.txt'
-            RUN __oxdock_missing_command_xyz__
+            ASYNC RUN "sh -c 'sleep 1; echo late > late.txt'"
+            RUN "__oxdock_missing_command_xyz__"
             "#
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         assert!(
             run_steps(&root, &steps).is_err(),
             "pipeline should fail on the missing command"
         );
-        // The RUN_BG handle is dropped mid-pipeline when the error propagates;
+        // The ASYNC handle is dropped mid-pipeline when the error propagates;
         // its Drop safety net must kill the writer before it can emit the
         // late artifact.
         assert!(
@@ -483,18 +526,51 @@ mod tests {
 
         let script = indoc! {
             r#"
-            RUN_BG sh -c 'sleep 1; echo late > late.txt'
+            ASYNC RUN "sh -c 'sleep 1; echo late > late.txt'"
             EXIT 5
             "#
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         let err = run_steps(&root, &steps).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("EXIT requested with code 5"));
         assert!(
             !exists(&root, "late.txt"),
             "background process should be killed when EXIT is hit"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "EXIT joins real background threads; timing-sensitive under Miri"
+    )]
+    fn exit_inside_nested_block_reports_code_and_kills_backgrounds() {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+
+        let script = indoc! {
+            r#"
+            ASYNC {
+                SLEEP 30s
+            }
+            [bool:true] {
+                EXIT 5
+            }
+            "#
+        };
+
+        let steps = crate::parse_script(script).unwrap();
+        let start = std::time::Instant::now();
+        let err = run_steps(&root, &steps).unwrap_err();
+        assert!(
+            err.to_string().contains("EXIT requested with code 5"),
+            "nested EXIT must report its code: {err}"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "nested EXIT must kill the background SLEEP promptly"
         );
     }
 
@@ -511,22 +587,22 @@ mod tests {
         let script = if cfg!(windows) {
             indoc! {
                 r#"
-                ENV FOO=bar
-                RUN echo %FOO% > run.txt
-                RUN_BG echo %FOO% > bg.txt
+                ENV FOO="bar"
+                RUN "echo %FOO% > run.txt"
+                ASYNC RUN "echo %FOO% > bg.txt"
                 "#
             }
         } else {
             indoc! {
                 r#"
-                ENV FOO=bar
-                RUN sh -c 'printf %s "$FOO" > run.txt'
-                RUN_BG sh -c 'printf %s "$FOO" > bg.txt'
+                ENV FOO="bar"
+                RUN "sh -c 'printf %s \"$FOO\" > run.txt'"
+                ASYNC RUN "sh -c 'printf %s \"$FOO\" > bg.txt'"
                 "#
             }
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         run_steps(&root, &steps).unwrap();
 
         assert_eq!(read_trimmed(&root.join("run.txt").unwrap()), "bar");
@@ -542,15 +618,15 @@ mod tests {
 
         let script = indoc! {
             r#"
-            WRITE snap.txt snap
+            WRITE "snap.txt" "snap"
             WORKSPACE LOCAL
-            WRITE local.txt local
+            WRITE "local.txt" "local"
             WORKSPACE SNAPSHOT
-            WRITE snap2.txt again
+            WRITE "snap2.txt" "again"
             "#
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
         assert!(snapshot_root.join("snap.txt").unwrap().exists());
@@ -570,17 +646,17 @@ mod tests {
         let script = indoc! {
             r#"
             WORKSPACE LOCAL
-            WORKDIR /
-            WRITE localroot.txt one
-            WORKDIR client
-            WRITE client.txt two
+            WORKDIR "/"
+            WRITE "localroot.txt" "one"
+            WORKDIR "client"
+            WRITE "client.txt" "two"
             WORKSPACE SNAPSHOT
-            WORKDIR /
-            WRITE snaproot.txt three
+            WORKDIR "/"
+            WRITE "snaproot.txt" "three"
             "#
         };
 
-        let steps = parse_script(script).unwrap();
+        let steps = crate::parse_script(script).unwrap();
         run_steps_with_context(&snapshot_root, &local_root, &steps).unwrap();
 
         assert!(local_root.join("localroot.txt").unwrap().exists());

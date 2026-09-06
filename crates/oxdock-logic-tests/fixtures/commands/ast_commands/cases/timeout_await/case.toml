@@ -1,0 +1,7 @@
+name = "timeout_await"
+
+[expect]
+status = "failure"
+
+[expect.error]
+contains = "TIMEOUT"

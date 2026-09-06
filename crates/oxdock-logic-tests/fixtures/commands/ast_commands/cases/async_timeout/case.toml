@@ -1,0 +1,7 @@
+name = "async_timeout"
+
+[expect]
+status = "failure"
+
+[expect.error]
+contains = "TIMEOUT"

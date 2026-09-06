@@ -1,4 +1,4 @@
 name = "scopes"
 
 [expect]
-files = { "scoped/inner.txt" = "inner", "outer.txt" = "outer", "env.txt" = "scope=" }
+files = { "scoped/inner.txt" = "inner", "outer.txt" = "outer", "env.txt" = "scope=\n" }

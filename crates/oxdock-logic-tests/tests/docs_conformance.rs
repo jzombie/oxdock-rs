@@ -1,10 +1,8 @@
-use std::io::Cursor;
-
 use anyhow::{Context, Result, bail};
 use line_ending::LineEnding;
 use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
 use oxdock_fs::{GuardedPath, PathResolver};
-use oxdock_parser::{COMMANDS, FencedBlock, extract_fenced_blocks, parse_script};
+use oxdock_parser::{COMMANDS, FencedBlock, extract_fenced_blocks};
 
 const README_NAME: &str = "README.md";
 
@@ -62,7 +60,7 @@ fn readme_snippets_parse_and_cover_every_command() -> Result<()> {
     );
 
     for block in &blocks {
-        parse_script(&block.body).map_err(|e| {
+        oxdock_core::parse_script(&block.body).map_err(|e| {
             anyhow::anyhow!(
                 "{README_NAME}:{0}: snippet failed to parse: {e}",
                 block.line_no
@@ -83,7 +81,7 @@ fn readme_snippets_parse_and_cover_every_command() -> Result<()> {
         );
     }
 
-    for marker in ["or(", "{{ env:", "[env:"] {
+    for marker in ["any(", "{{ env:", "[env:"] {
         assert!(
             bodies.contains(marker),
             "{README_NAME}: DSL reference must document structural feature '{marker}'"
@@ -175,7 +173,7 @@ fn readme_references_resolve() -> Result<()> {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "examples execute real processes (RUN/RUN_BG/git) against host tempdirs"
+    ignore = "examples execute real processes (RUN/ASYNC RUN/git) against host tempdirs"
 )]
 fn readme_snippets_execute_as_documented() -> Result<()> {
     for block in load_readme_blocks()? {
@@ -190,8 +188,8 @@ fn readme_snippets_execute_as_documented() -> Result<()> {
 }
 
 fn execute_block(block: &FencedBlock) -> Result<()> {
-    let steps =
-        parse_script(&block.body).map_err(|e| anyhow::anyhow!("snippet failed to parse: {e}"))?;
+    let steps = oxdock_core::parse_script(&block.body)
+        .map_err(|e| anyhow::anyhow!("snippet failed to parse: {e}"))?;
 
     // Tempdirs must outlive execution; dropping a GuardedTempDir removes it.
     let workspace_temp = GuardedPath::tempdir().context("failed to create workspace tempdir")?;
@@ -209,11 +207,6 @@ fn execute_block(block: &FencedBlock) -> Result<()> {
     let mut io = ExecIo::new();
     for (key, value) in &block.metadata.env {
         io.insert_inherit_env(key.clone(), value.clone());
-    }
-    if let Some(stdin_payload) = &block.metadata.stdin {
-        io.set_stdin(Some(std::sync::Arc::new(std::sync::Mutex::new(
-            Cursor::new(LineEnding::normalize(stdin_payload).as_bytes().to_vec()),
-        ))));
     }
 
     let execution = run_steps_with_context_result_with_io(&fs_root, &context_root, &steps, io);

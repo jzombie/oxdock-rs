@@ -95,6 +95,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "camino"
+version = "1.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb1307f12aa967b5a58416e87b3653360e0fd614a016b6e970db08fecbb1b80d"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "cargo-platform"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "cargo_metadata"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd5eb614ed4c27c5d706420e4320fbe3216ab31fa1c33cd8246ac36dae4479ba"
+dependencies = [
+ "camino",
+ "cargo-platform",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -182,6 +214,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "docs-gen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "line-ending",
+ "oxdock-core",
+ "oxdock-fs",
+ "oxdock-macros",
+ "oxdock-parser",
+ "serde_json",
+ "toml_edit",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -208,6 +255,15 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fixture-ast-commands"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "oxdock-fs",
+ "oxdock-logic-tests",
+]
 
 [[package]]
 name = "fnv"
@@ -237,6 +293,12 @@ dependencies = [
  "libc",
  "r-efi 6.0.0",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "hashbrown"
@@ -283,6 +345,12 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "libc"
@@ -342,7 +410,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "oxdock-buildtime-helpers"
+name = "oxdock"
+version = "0.7.0-alpha"
+dependencies = [
+ "oxdock-build",
+ "oxdock-cli",
+ "oxdock-core",
+ "oxdock-fs",
+ "oxdock-macros",
+ "oxdock-parser",
+ "oxdock-process",
+]
+
+[[package]]
+name = "oxdock-build"
 version = "0.7.0-alpha"
 dependencies = [
  "anyhow",
@@ -354,23 +435,6 @@ dependencies = [
  "oxdock-sys-test-utils",
  "proc-macro2",
  "sha2",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "oxdock-buildtime-macros"
-version = "0.7.0-alpha"
-dependencies = [
- "anyhow",
- "oxdock-buildtime-helpers",
- "oxdock-core",
- "oxdock-embed",
- "oxdock-fs",
- "oxdock-parser",
- "oxdock-process",
- "oxdock-sys-test-utils",
- "proc-macro2",
- "quote",
  "syn 2.0.119",
 ]
 
@@ -398,14 +462,16 @@ dependencies = [
  "oxdock-parser",
  "oxdock-process",
  "oxdock-sys-test-utils",
+ "serde_json",
  "sha2",
+ "toml",
 ]
 
 [[package]]
 name = "oxdock-doc-tests"
 version = "0.7.0-alpha"
 dependencies = [
- "oxdock-buildtime-macros",
+ "oxdock-macros",
 ]
 
 [[package]]
@@ -436,6 +502,7 @@ name = "oxdock-fs"
 version = "0.7.0-alpha"
 dependencies = [
  "anyhow",
+ "glob",
  "libc",
  "oxdock-sys-test-utils",
  "tempfile",
@@ -448,17 +515,39 @@ name = "oxdock-logic-tests"
 version = "0.7.0-alpha"
 dependencies = [
  "anyhow",
+ "cargo_metadata",
  "indoc",
  "libtest-mimic",
  "line-ending",
  "oxdock-core",
  "oxdock-fixture",
  "oxdock-fs",
+ "oxdock-macros",
  "oxdock-parser",
+ "oxdock-process",
  "oxdock-sys-test-utils",
  "proc-macro2",
  "proptest",
+ "serde_json",
+ "sha2",
  "toml_edit",
+]
+
+[[package]]
+name = "oxdock-macros"
+version = "0.7.0-alpha"
+dependencies = [
+ "anyhow",
+ "oxdock-build",
+ "oxdock-core",
+ "oxdock-embed",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "oxdock-sys-test-utils",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -471,6 +560,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "proc-macro2",
+ "pulldown-cmark",
  "quote",
  "syn 2.0.119",
 ]
@@ -480,8 +570,11 @@ name = "oxdock-process"
 version = "0.7.0-alpha"
 dependencies = [
  "anyhow",
+ "libc",
  "oxdock-fs",
+ "oxdock-parser",
  "oxdock-sys-test-utils",
+ "windows-sys",
 ]
 
 [[package]]
@@ -571,6 +664,17 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]
@@ -676,6 +780,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "semver"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+dependencies = [
+ "serde_core",
+ "serde_derive",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -693,6 +817,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -745,6 +891,41 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.4+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
 ]
 
 [[package]]
@@ -834,6 +1015,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -912,3 +1099,9 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

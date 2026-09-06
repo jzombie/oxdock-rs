@@ -1,0 +1,4 @@
+name = "timeout"
+
+[expect]
+files = { "done.txt" = "finished", "more.txt" = "more" }
