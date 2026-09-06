@@ -1,4 +1,11 @@
 name = "async_run"
 
-[expect]
+# Script runs `ASYNC RUN @ASYNC_RUN_CMD@`: Unix expands to
+# `printf %s "$FOO"` (no trailing newline) while Windows expands to
+# `echo %FOO%` via `cmd /C`, which always appends CRLF. RUN is the one
+# DSL command allowed to differ per-OS, so expectations are split here.
+[expect.platform.unix]
 files = { "bg.txt" = "bar" }
+
+[expect.platform.windows]
+files = { "bg.txt" = "bar\r\n" }
