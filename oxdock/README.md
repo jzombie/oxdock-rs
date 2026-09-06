@@ -40,7 +40,7 @@ Or pin the version in `Cargo.toml`:
 
 ```toml
 [dependencies]
-oxdock = { version = "0.7.0-alpha", default-features = false }
+oxdock = { version = "0.8.0-alpha", default-features = false }
 ```
 
 ```rust
