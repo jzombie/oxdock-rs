@@ -17,6 +17,7 @@ fn exit_status_from_code(code: i32) -> ExitStatus {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::ExitStatusExt;
         ExitStatus::from_raw(code as u32)
     }
 }

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::contract::BackgroundHandle;
 
 /// Shared inner state for `ChildHandle`, enabling safe cloning.
-/// The OS PID and raw handle are stored separately so `kill()` can signal
+/// The OS PID is stored separately so `kill()` can signal
 /// the process without needing `&mut Child`, avoiding undefined behavior.
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 struct ChildInner {
@@ -22,12 +22,9 @@ struct ChildInner {
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub struct ChildHandle {
     inner: Arc<Mutex<ChildInner>>,
-    /// OS process ID for signal-based kill on Unix.
+    /// OS process ID for signal-based kill on Unix and `OpenProcess`-based
+    /// terminate on Windows.
     pid: Arc<AtomicU32>,
-    /// Raw OS process handle for TerminateProcess on Windows.
-    /// Stored as raw pointer to avoid Send/Sync issues.
-    #[cfg(windows)]
-    raw_handle: Arc<Mutex<Option<std::os::windows::io::RawHandle>>>,
 }
 
 impl ChildHandle {
@@ -37,11 +34,6 @@ impl ChildHandle {
         let pid = child.id();
         #[cfg(windows)]
         let pid = child.id();
-        #[cfg(windows)]
-        let raw_handle = {
-            use std::os::windows::io::AsRawHandle;
-            Some(child.as_raw_handle())
-        };
         Self {
             inner: Arc::new(Mutex::new(ChildInner {
                 child: Some(child),
@@ -51,8 +43,6 @@ impl ChildHandle {
                 killed: AtomicBool::new(false),
             })),
             pid: Arc::new(AtomicU32::new(pid)),
-            #[cfg(windows)]
-            raw_handle: Arc::new(Mutex::new(raw_handle)),
         }
     }
 }
@@ -67,10 +57,6 @@ impl BackgroundHandle for ChildHandle {
                     guard.exit_status = Some(status);
                     // Zero PID to prevent killing recycled PIDs
                     self.pid.store(0, Ordering::SeqCst);
-                    #[cfg(windows)]
-                    {
-                        *self.raw_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                    }
                     for thread in guard.io_threads.drain(..) {
                         let _ = thread.join();
                     }
@@ -104,10 +90,6 @@ impl BackgroundHandle for ChildHandle {
             let status = child.wait()?;
             // Zero PID to prevent killing recycled PIDs
             self.pid.store(0, Ordering::SeqCst);
-            #[cfg(windows)]
-            {
-                *self.raw_handle.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            }
             // Re-acquire lock to store result and join IO threads
             let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             for thread in guard.io_threads.drain(..) {
@@ -130,7 +112,7 @@ impl BackgroundHandle for ChildHandle {
         if pid == 0 {
             return Ok(());
         }
-        // Signal the process directly via OS PID/handle. This does NOT need
+        // Signal the process directly via OS PID. This does NOT need
         // &mut Child — no aliasing, no UB.
         #[cfg(unix)]
         {
@@ -140,14 +122,21 @@ impl BackgroundHandle for ChildHandle {
         }
         #[cfg(windows)]
         {
-            // Use the stored raw HANDLE to terminate the process.
-            // This works even when wait() has taken child out of ChildInner.
-            let mut handle_guard = self.raw_handle.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(handle) = *handle_guard {
-                unsafe {
-                    windows_sys::Win32::System::Threading::TerminateProcess(handle as *mut _, 1);
+            // Open the process by PID and terminate it. This works even when
+            // wait() has taken the `Child` out of `ChildInner`, and avoids
+            // storing a raw HANDLE (which is neither Send nor Sync and would
+            // break the `BackgroundHandle: Send` bound).
+            // `pid` is zeroed after successful wait, so recycled PIDs are safe.
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+            };
+            unsafe {
+                let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                if !handle.is_null() {
+                    TerminateProcess(handle, 1);
+                    CloseHandle(handle);
                 }
-                *handle_guard = None;
             }
         }
         self.inner
@@ -191,6 +180,7 @@ fn exit_status_from_code(code: i32) -> ExitStatus {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::ExitStatusExt;
         ExitStatus::from_raw(code as u32)
     }
 }
