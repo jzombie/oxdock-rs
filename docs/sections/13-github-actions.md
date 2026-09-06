@@ -12,6 +12,7 @@ skips and `docs_conformance` still passes; on a hosted runner it executes.
 
 ```oxdock
 INHERIT_ENV [GITHUB_ACTIONS]
+
 [env:GITHUB_ACTIONS] {
     ECHO "::notice::test notice message"
     ECHO "::warning::test warning message"
@@ -25,6 +26,7 @@ Group markers go through `ECHO` — no shell required:
 
 ```oxdock
 INHERIT_ENV [GITHUB_ACTIONS]
+
 [env:GITHUB_ACTIONS] {
     ECHO "::group::unit tests"
     ECHO "running tests"
@@ -38,6 +40,7 @@ INHERIT_ENV [GITHUB_ACTIONS]
 
 ```oxdock
 INHERIT_ENV [GITHUB_ACTIONS]
+
 [env:GITHUB_ACTIONS] {
     APPEND dist/summary.md "### Build Report\n- Passed: 123\n- Failed: 0\n"
     APPEND dist/outputs.txt "artifact_path=dist/app.tar\n"
