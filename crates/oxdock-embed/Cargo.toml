@@ -15,3 +15,6 @@ proc-macro2.workspace = true
 quote.workspace = true
 sha2.workspace = true
 syn.workspace = true
+
+[lints]
+workspace = true

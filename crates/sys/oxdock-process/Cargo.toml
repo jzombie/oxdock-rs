@@ -22,3 +22,6 @@ anyhow.workspace = true
 oxdock-fs.workspace = true
 oxdock-parser.workspace = true
 oxdock-sys-test-utils.workspace = true
+
+[lints]
+workspace = true

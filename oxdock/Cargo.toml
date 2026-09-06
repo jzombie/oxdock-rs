@@ -28,3 +28,6 @@ oxdock-parser.workspace = true
 [dev-dependencies]
 oxdock-fs.workspace = true
 oxdock-process.workspace = true
+
+[lints]
+workspace = true

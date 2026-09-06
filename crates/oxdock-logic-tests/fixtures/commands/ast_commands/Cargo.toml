@@ -8,10 +8,13 @@ license = "Apache-2.0"
 publish = false
 
 [[bin]]
-name = "ast_commands"
+name = "ast-commands"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 oxdock-fs.workspace = true
 oxdock-logic-tests.workspace = true
+
+[lints]
+workspace = true

@@ -31,3 +31,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 oxdock-sys-test-utils.workspace = true
+
+[lints]
+workspace = true
