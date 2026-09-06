@@ -1,0 +1,11 @@
+IF true {
+    WRITE result.txt "yes"
+}
+IF !false {
+    WRITE inverted.txt "inverted"
+}
+IF !true {
+    WRITE skipped.txt "nope"
+} ELSE {
+    WRITE else.txt "fallback"
+}

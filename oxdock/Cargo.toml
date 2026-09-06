@@ -1,0 +1,33 @@
+[package]
+name = "oxdock"
+description = "Facade crate for OxDock: CLI runner and build macros."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Binary moved here from oxdock-cli; only built with the `cli` feature.
+[[bin]]
+name = "oxdock"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:oxdock-cli"]
+
+[dependencies]
+oxdock-build.workspace = true
+oxdock-cli = { workspace = true, optional = true }
+oxdock-core.workspace = true
+oxdock-macros.workspace = true
+oxdock-parser.workspace = true
+
+[dev-dependencies]
+oxdock-fs.workspace = true
+oxdock-process.workspace = true
+
+[lints]
+workspace = true

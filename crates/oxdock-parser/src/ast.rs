@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+
+pub use crate::commands::StepKind;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Command {
@@ -8,7 +11,6 @@ pub enum Command {
     Env,
     Echo,
     Run,
-    RunBg,
     Copy,
     WithIo,
     CopyGit,
@@ -18,13 +20,18 @@ pub enum Command {
     Ls,
     Cwd,
     Read,
+    ReadLine,
     Write,
     Append,
+    Expand,
     AssertFile,
     AssertDir,
     AssertAbsent,
     AssertStdout,
     Exit,
+    Async,
+    Timeout,
+    Sleep,
 }
 
 pub const COMMANDS: &[Command] = &[
@@ -34,7 +41,6 @@ pub const COMMANDS: &[Command] = &[
     Command::Env,
     Command::Echo,
     Command::Run,
-    Command::RunBg,
     Command::Copy,
     Command::WithIo,
     Command::CopyGit,
@@ -44,13 +50,17 @@ pub const COMMANDS: &[Command] = &[
     Command::Ls,
     Command::Cwd,
     Command::Read,
+    Command::ReadLine,
     Command::Write,
     Command::Append,
+    Command::Expand,
     Command::AssertFile,
     Command::AssertDir,
     Command::AssertAbsent,
     Command::AssertStdout,
     Command::Exit,
+    Command::Timeout,
+    Command::Sleep,
 ];
 
 impl Command {
@@ -62,7 +72,6 @@ impl Command {
             Command::Env => "ENV",
             Command::Echo => "ECHO",
             Command::Run => "RUN",
-            Command::RunBg => "RUN_BG",
             Command::Copy => "COPY",
             Command::WithIo => "WITH_IO",
             Command::CopyGit => "COPY_GIT",
@@ -72,18 +81,57 @@ impl Command {
             Command::Ls => "LS",
             Command::Cwd => "CWD",
             Command::Read => "READ",
+            Command::ReadLine => "READ_LINE",
             Command::Write => "WRITE",
             Command::Append => "APPEND",
+            Command::Expand => "EXPAND",
             Command::AssertFile => "ASSERT_FILE",
             Command::AssertDir => "ASSERT_DIR",
             Command::AssertAbsent => "ASSERT_ABSENT",
             Command::AssertStdout => "ASSERT_STDOUT",
             Command::Exit => "EXIT",
+            Command::Async => "ASYNC",
+            Command::Timeout => "TIMEOUT",
+            Command::Sleep => "SLEEP",
+        }
+    }
+
+    pub const fn syntax(self) -> &'static str {
+        match self {
+            Command::InheritEnv => "INHERIT_ENV [KEY1, KEY2, ...]",
+            Command::Workdir => "WORKDIR <path>",
+            Command::Workspace => "WORKSPACE SNAPSHOT|LOCAL",
+            Command::Env => "ENV KEY=value",
+            Command::Echo => "ECHO <message>",
+            Command::Run => "RUN <command...>",
+            Command::Copy => "COPY [--from-current-workspace] <from> <to>",
+            Command::CopyGit => "COPY_GIT [--include-dirty] <rev> <src> <dst>",
+            Command::WithIo => "WITH_IO [bindings] [command | { block }]",
+            Command::HashSha256 => "HASH_SHA256 <path>",
+            Command::Symlink => "SYMLINK <from> <to>",
+            Command::Mkdir => "MKDIR <path>",
+            Command::Ls => "LS [<path>]",
+            Command::Cwd => "CWD",
+            Command::Read => "READ [<path>]",
+            Command::ReadLine => "READ_LINE $var",
+            Command::Write => "WRITE <path> [<contents>]",
+            Command::Append => "APPEND <path> [<contents>]",
+            Command::Expand => "EXPAND [<path>] [<KEY=val> ...]",
+            Command::AssertFile => "ASSERT_FILE [--hash <sha256>] <path> [<expected>]",
+            Command::AssertDir => "ASSERT_DIR <path>",
+            Command::AssertAbsent => "ASSERT_ABSENT <path>",
+            Command::AssertStdout => "ASSERT_STDOUT <substring>",
+            Command::Exit => "EXIT <code>",
+            Command::Async => "ASYNC <command...> | ASYNC { <commands> }",
+            Command::Timeout => {
+                "TIMEOUT <duration> <command...> | TIMEOUT <duration> { <commands> }"
+            }
+            Command::Sleep => "SLEEP <duration>",
         }
     }
 
     pub const fn expects_inner_command(self) -> bool {
-        matches!(self, Command::WithIo)
+        matches!(self, Command::WithIo | Command::Async | Command::Timeout)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -94,7 +142,6 @@ impl Command {
             "ENV" => Some(Command::Env),
             "ECHO" => Some(Command::Echo),
             "RUN" => Some(Command::Run),
-            "RUN_BG" => Some(Command::RunBg),
             "COPY" => Some(Command::Copy),
             "WITH_IO" => Some(Command::WithIo),
             "COPY_GIT" => Some(Command::CopyGit),
@@ -104,13 +151,18 @@ impl Command {
             "LS" => Some(Command::Ls),
             "CWD" => Some(Command::Cwd),
             "READ" => Some(Command::Read),
+            "READ_LINE" => Some(Command::ReadLine),
             "WRITE" => Some(Command::Write),
             "APPEND" => Some(Command::Append),
+            "EXPAND" => Some(Command::Expand),
             "ASSERT_FILE" => Some(Command::AssertFile),
             "ASSERT_DIR" => Some(Command::AssertDir),
             "ASSERT_ABSENT" => Some(Command::AssertAbsent),
             "ASSERT_STDOUT" => Some(Command::AssertStdout),
             "EXIT" => Some(Command::Exit),
+            "ASYNC" => Some(Command::Async),
+            "TIMEOUT" => Some(Command::Timeout),
+            "SLEEP" => Some(Command::Sleep),
             _ => None,
         }
     }
@@ -126,19 +178,10 @@ pub enum PlatformGuard {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Guard {
-    Platform {
-        target: PlatformGuard,
-        invert: bool,
-    },
-    EnvExists {
-        key: String,
-        invert: bool,
-    },
-    EnvEquals {
-        key: String,
-        value: String,
-        invert: bool,
-    },
+    Platform { target: PlatformGuard },
+    EnvExists { key: String },
+    EnvEquals { key: String, value: String },
+    StaticBool { value: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -205,50 +248,66 @@ impl From<Guard> for GuardExpr {
     }
 }
 
+/// A command argument — either an expandable string or an expression.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct TemplateString(pub String);
+pub enum Arg {
+    /// Expandable string. The `bool` indicates whether the argument was
+    /// quoted in the source (`true`) or unquoted (`false`). Quoted arguments
+    /// that start with `--` are positional, not flags.
+    String(String, bool),
+    /// Expression — resolved at runtime via evaluate_expr.
+    Expr(Expr),
+}
 
-impl From<String> for TemplateString {
+impl Arg {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Arg::String(s, _) => s,
+            Arg::Expr(_) => "",
+        }
+    }
+
+    pub fn is_quoted(&self) -> bool {
+        matches!(self, Arg::String(_, true))
+    }
+}
+
+impl From<String> for Arg {
     fn from(s: String) -> Self {
-        TemplateString(s)
+        Arg::String(s, false)
     }
 }
 
-impl From<&str> for TemplateString {
+impl From<&str> for Arg {
     fn from(s: &str) -> Self {
-        TemplateString(s.to_string())
+        Arg::String(s.to_string(), false)
     }
 }
 
-impl std::fmt::Display for TemplateString {
+impl std::fmt::Display for Arg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Arg::String(s, _) => write!(f, "{}", s),
+            Arg::Expr(e) => write!(f, "{}", e),
+        }
     }
 }
 
-impl AsRef<str> for TemplateString {
+impl AsRef<str> for Arg {
     fn as_ref(&self) -> &str {
-        &self.0
+        self.as_str()
     }
 }
 
-impl PartialEq<str> for TemplateString {
+impl PartialEq<str> for Arg {
     fn eq(&self, other: &str) -> bool {
-        self.0 == other
+        self.as_str() == other
     }
 }
 
-impl PartialEq<&str> for TemplateString {
+impl PartialEq<&str> for Arg {
     fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
-impl std::ops::Deref for TemplateString {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+        self.as_str() == *other
     }
 }
 
@@ -266,70 +325,54 @@ pub struct IoBinding {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum StepKind {
-    Workdir(TemplateString),
-    Workspace(WorkspaceTarget),
-    Env {
-        key: String,
-        value: TemplateString,
-    },
-    /// Directive to inherit a selective list of environment variables from the host.
-    /// This is intended to be declared in the prelude/top-level only.
-    InheritEnv {
+pub enum Value {
+    String(String),
+    Int(i64),
+    List(Vec<Value>),
+    Map(std::collections::BTreeMap<String, Value>),
+    Bool(bool),
+    /// Handle to a background ASYNC task. The `u64` is the task ID
+    /// used to look up the handle in `ExecState.named_tasks`.
+    TaskHandle(u64),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LogicalOp {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Expr {
+    Literal(Value),
+    Var(String),
+    KeyPath {
+        base: String,
         keys: Vec<String>,
     },
-    Run(TemplateString),
-    Echo(TemplateString),
-    RunBg(TemplateString),
-    Copy {
-        from_current_workspace: bool,
-        from: TemplateString,
-        to: TemplateString,
+    List(Vec<Expr>),
+    Map(Vec<(String, Expr)>),
+    Call {
+        name: String,
+        args: Vec<Expr>,
     },
-    Symlink {
-        from: TemplateString,
-        to: TemplateString,
+    Compare {
+        op: CompareOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
     },
-    Mkdir(TemplateString),
-    Ls(Option<TemplateString>),
-    Cwd,
-    Read(Option<TemplateString>),
-    Write {
-        path: TemplateString,
-        contents: Option<TemplateString>,
+    Not(Box<Expr>),
+    Logical {
+        op: LogicalOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
     },
-    Append {
-        path: TemplateString,
-        contents: Option<TemplateString>,
-    },
-    /// Verify a workspace file exists and, when `hash` or `contents` is
-    /// present, matches it. The grammar guarantees the invariant: `hash` set
-    /// implies a 64-hex digest and no `contents`.
-    AssertFile {
-        hash: Option<String>,
-        path: TemplateString,
-        contents: Option<TemplateString>,
-    },
-    AssertDir(TemplateString),
-    AssertAbsent(TemplateString),
-    AssertStdout(TemplateString),
-    WithIo {
-        bindings: Vec<IoBinding>,
-        cmd: Box<StepKind>,
-    },
-    WithIoBlock {
-        bindings: Vec<IoBinding>,
-    },
-    CopyGit {
-        rev: TemplateString,
-        from: TemplateString,
-        to: TemplateString,
-        include_dirty: bool,
-    },
-    HashSha256 {
-        path: TemplateString,
-    },
-    Exit(i32),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -356,48 +399,46 @@ fn platform_matches(target: PlatformGuard) -> bool {
     }
 }
 
-pub fn guard_allows(guard: &Guard, script_envs: &HashMap<String, String>) -> bool {
+pub trait EnvLookup {
+    fn get_env(&self, key: &str) -> Option<&str>;
+}
+
+impl EnvLookup for HashMap<String, String> {
+    fn get_env(&self, key: &str) -> Option<&str> {
+        self.get(key).map(|s| s.as_str())
+    }
+}
+
+impl EnvLookup for Arc<HashMap<String, String>> {
+    fn get_env(&self, key: &str) -> Option<&str> {
+        (**self).get_env(key)
+    }
+}
+
+pub fn guard_allows(guard: &Guard, env: &impl EnvLookup) -> bool {
     match guard {
-        Guard::Platform { target, invert } => {
-            let res = platform_matches(*target);
-            if *invert { !res } else { res }
-        }
-        Guard::EnvExists { key, invert } => {
-            let res = script_envs
-                .get(key)
-                .cloned()
-                .or_else(|| std::env::var(key).ok())
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
-            if *invert { !res } else { res }
-        }
-        Guard::EnvEquals { key, value, invert } => {
-            let res = script_envs
-                .get(key)
-                .cloned()
-                .or_else(|| std::env::var(key).ok())
-                .map(|v| v == *value)
-                .unwrap_or(false);
-            if *invert { !res } else { res }
-        }
+        Guard::Platform { target } => platform_matches(*target),
+        Guard::EnvExists { key } => env.get_env(key).map(|v| !v.is_empty()).unwrap_or(false),
+        Guard::EnvEquals { key, value } => env
+            .get_env(key)
+            .map(|v| v == value.as_str())
+            .unwrap_or(false),
+        Guard::StaticBool { value } => value.parse::<bool>().unwrap_or(false),
     }
 }
 
-pub fn guard_expr_allows(expr: &GuardExpr, script_envs: &HashMap<String, String>) -> bool {
+pub fn guard_expr_allows(expr: &GuardExpr, env: &impl EnvLookup) -> bool {
     match expr {
-        GuardExpr::Predicate(guard) => guard_allows(guard, script_envs),
-        GuardExpr::All(children) => children.iter().all(|g| guard_expr_allows(g, script_envs)),
-        GuardExpr::Or(children) => children.iter().any(|g| guard_expr_allows(g, script_envs)),
-        GuardExpr::Not(child) => !guard_expr_allows(child, script_envs),
+        GuardExpr::Predicate(guard) => guard_allows(guard, env),
+        GuardExpr::All(children) => children.iter().all(|g| guard_expr_allows(g, env)),
+        GuardExpr::Or(children) => children.iter().any(|g| guard_expr_allows(g, env)),
+        GuardExpr::Not(child) => !guard_expr_allows(child, env),
     }
 }
 
-pub fn guard_option_allows(
-    expr: Option<&GuardExpr>,
-    script_envs: &HashMap<String, String>,
-) -> bool {
+pub fn guard_option_allows(expr: Option<&GuardExpr>, env: &impl EnvLookup) -> bool {
     match expr {
-        Some(e) => guard_expr_allows(e, script_envs),
+        Some(e) => guard_expr_allows(e, env),
         None => true,
     }
 }
@@ -418,26 +459,10 @@ impl fmt::Display for PlatformGuard {
 impl fmt::Display for Guard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Guard::Platform { target, invert } => {
-                if *invert {
-                    write!(f, "!{}", target)
-                } else {
-                    write!(f, "{}", target)
-                }
-            }
-            Guard::EnvExists { key, invert } => {
-                if *invert {
-                    write!(f, "!")?
-                }
-                write!(f, "env:{}", key)
-            }
-            Guard::EnvEquals { key, value, invert } => {
-                if *invert {
-                    write!(f, "env:{}!={}", key, value)
-                } else {
-                    write!(f, "env:{}=={}", key, value)
-                }
-            }
+            Guard::Platform { target } => write!(f, "{}", target),
+            Guard::EnvExists { key } => write!(f, "env:{}", key),
+            Guard::EnvEquals { key, value } => write!(f, "eq(env:{}, {})", key, value),
+            Guard::StaticBool { value } => write!(f, "bool:{}", value),
         }
     }
 }
@@ -451,204 +476,118 @@ impl fmt::Display for WorkspaceTarget {
     }
 }
 
-fn quote_arg(s: &str) -> String {
-    // Strict quoting avoids parser ambiguity when commands accept additional payloads
-    // (e.g. WRITE path <payload>) so arguments are never mistaken for subsequent tokens.
-    // Also quote if it starts with a digit to avoid invalid Rust tokens (e.g. 0o8) in macros.
-    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit())
-        // Avoid unquoted args that equal command keywords (they would be parsed as commands
-        // when reconstructed from TokenStream). Quote them to preserve intent.
-        && super::Command::parse(s).is_none();
-    if is_safe && !s.is_empty() {
-        s.to_string()
-    } else {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    }
-}
-
-fn quote_msg(s: &str) -> String {
-    // Strict quoting to ensure round-trip stability through TokenStream (macro input).
-    // The macro input reconstructor removes spaces around "sticky" characters (/-.:=)
-    // and collapses multiple spaces, so we must quote strings containing them.
-    // We also quote strings with spaces to be safe, as TokenStream does not preserve whitespace.
-    // Also quote if it starts with a digit to avoid invalid Rust tokens.
-    let is_safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !s.starts_with(|c: char| c.is_ascii_digit())
-        // As with args, avoid leaving bare tokens that match command names.
-        && super::Command::parse(s).is_none();
-
-    if is_safe && !s.is_empty() {
-        s.to_string()
-    } else {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    }
-}
-
-fn quote_run(s: &str) -> String {
-    // For RUN commands, we want to preserve the raw string as much as possible.
-    // However, to ensure round-trip stability through TokenStream (macro input),
-    // we must ensure that the generated string is a valid sequence of Rust tokens.
-    // Invalid tokens (like 0o8) must be quoted.
-    // Also, sticky characters (like -) can merge with previous tokens in macro input,
-    // so we quote words starting with them to ensure separation.
-
-    let force_full_quote = s.is_empty()
-        || s.chars().any(|c| c == ';' || c == '\n' || c == '\r')
-        || s.contains("//")
-        || s.contains("/*");
-
-    if force_full_quote {
-        return format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
-    }
-
-    s.split(' ')
-        .map(|word| {
-            let needs_quote = word.starts_with(|c: char| c.is_ascii_digit())
-                || word.starts_with(['/', '.', '-', ':', '=']);
-            if needs_quote {
-                format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\""))
-            } else {
-                word.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn format_io_binding(binding: &IoBinding) -> String {
-    let stream = match binding.stream {
-        IoStream::Stdin => "stdin",
-        IoStream::Stdout => "stdout",
-        IoStream::Stderr => "stderr",
-    };
-    if let Some(pipe) = &binding.pipe {
-        format!("{}=pipe:{}", stream, pipe)
-    } else {
-        stream.to_string()
-    }
-}
-
-impl fmt::Display for StepKind {
+impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StepKind::InheritEnv { keys } => {
-                write!(f, "INHERIT_ENV [{}]", keys.join(", "))
-            }
-            StepKind::Workdir(arg) => write!(f, "WORKDIR {}", quote_arg(arg)),
-            StepKind::Workspace(target) => write!(f, "WORKSPACE {}", target),
-            StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value)),
-            StepKind::Run(cmd) => write!(f, "RUN {}", quote_run(cmd)),
-            StepKind::Echo(msg) => write!(f, "ECHO {}", quote_msg(msg)),
-            StepKind::RunBg(cmd) => write!(f, "RUN_BG {}", quote_run(cmd)),
-            StepKind::Copy {
-                from_current_workspace,
-                from,
-                to,
-            } => {
-                if *from_current_workspace {
-                    write!(
-                        f,
-                        "COPY --from-current-workspace {} {}",
-                        quote_arg(from),
-                        quote_arg(to)
-                    )
-                } else {
-                    write!(f, "COPY {} {}", quote_arg(from), quote_arg(to))
-                }
-            }
-            StepKind::Symlink { from, to } => {
-                write!(f, "SYMLINK {} {}", quote_arg(from), quote_arg(to))
-            }
-            StepKind::Mkdir(arg) => write!(f, "MKDIR {}", quote_arg(arg)),
-            StepKind::Ls(arg) => {
-                write!(f, "LS")?;
-                if let Some(a) = arg {
-                    write!(f, " {}", quote_arg(a))?;
-                }
-                Ok(())
-            }
-            StepKind::Cwd => write!(f, "CWD"),
-            StepKind::Read(arg) => {
-                write!(f, "READ")?;
-                if let Some(a) = arg {
-                    write!(f, " {}", quote_arg(a))?;
-                }
-                Ok(())
-            }
-            StepKind::Write { path, contents } => {
-                write!(f, "WRITE {}", quote_arg(path))?;
-                if let Some(body) = contents {
-                    write!(f, " {}", quote_msg(body))?;
-                }
-                Ok(())
-            }
-            StepKind::Append { path, contents } => {
-                write!(f, "APPEND {}", quote_arg(path))?;
-                if let Some(body) = contents {
-                    write!(f, " {}", quote_msg(body))?;
-                }
-                Ok(())
-            }
-            StepKind::AssertFile {
-                hash,
-                path,
-                contents,
-            } => {
-                if let Some(digest) = hash {
-                    write!(f, "ASSERT_FILE --hash {} {}", digest, quote_arg(path))
-                } else {
-                    write!(f, "ASSERT_FILE {}", quote_arg(path))?;
-                    if let Some(body) = contents {
-                        write!(f, " {}", quote_msg(body))?;
+            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::Int(i) => write!(f, "{}", i),
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
                     }
-                    Ok(())
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "]")
+            }
+            Value::Map(map) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", k, v)?;
+                }
+                write!(f, "}}")
+            }
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::TaskHandle(id) => write!(f, "task#{}", id),
+        }
+    }
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Literal(v) => write!(f, "{}", v),
+            Expr::Var(name) => write!(f, "${}", name),
+            Expr::KeyPath { base, keys } => {
+                write!(f, "${}", base)?;
+                for key in keys {
+                    write!(f, ".{}", key)?;
+                }
+                Ok(())
+            }
+            Expr::Call { name, args } => {
+                write!(f, "{}(", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ")")
+            }
+            Expr::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "]")
+            }
+            Expr::Map(entries) => {
+                write!(f, "{{")?;
+                for (i, (key, val)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "\"{}\": {}", key, val)?;
+                }
+                write!(f, "}}")
+            }
+            Expr::Compare { op, left, right } => {
+                write!(f, "{} {} {}", left, op, right)
+            }
+            Expr::Not(inner) => {
+                // Parenthesize compound operands so Display round-trips:
+                // `!(a == b)` must not render as `!a == b` (= `(!a) == b`).
+                match inner.as_ref() {
+                    Expr::Compare { .. } => write!(f, "!({})", inner),
+                    _ => write!(f, "!{}", inner),
                 }
             }
-            StepKind::AssertDir(arg) => write!(f, "ASSERT_DIR {}", quote_arg(arg)),
-            StepKind::AssertAbsent(arg) => write!(f, "ASSERT_ABSENT {}", quote_arg(arg)),
-            StepKind::AssertStdout(msg) => write!(f, "ASSERT_STDOUT {}", quote_msg(msg)),
-            StepKind::WithIo { bindings, cmd } => {
-                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
-                write!(f, "WITH_IO [{}] {}", parts.join(", "), cmd)
+            Expr::Logical { op, left, right } => {
+                write!(f, "({} {} {})", left, op, right)
             }
-            StepKind::WithIoBlock { bindings } => {
-                let parts: Vec<String> = bindings.iter().map(format_io_binding).collect();
-                write!(f, "WITH_IO [{}] {{...}}", parts.join(", "))
-            }
-            StepKind::CopyGit {
-                rev,
-                from,
-                to,
-                include_dirty,
-            } => {
-                if *include_dirty {
-                    write!(
-                        f,
-                        "COPY_GIT --include-dirty {} {} {}",
-                        quote_arg(rev),
-                        quote_arg(from),
-                        quote_arg(to)
-                    )
-                } else {
-                    write!(
-                        f,
-                        "COPY_GIT {} {} {}",
-                        quote_arg(rev),
-                        quote_arg(from),
-                        quote_arg(to)
-                    )
-                }
-            }
-            StepKind::HashSha256 { path } => write!(f, "HASH_SHA256 {}", quote_arg(path)),
-            StepKind::Exit(code) => write!(f, "EXIT {}", code),
+        }
+    }
+}
+
+impl fmt::Display for CompareOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompareOp::Eq => write!(f, "=="),
+            CompareOp::Ne => write!(f, "!="),
+        }
+    }
+}
+
+impl fmt::Display for LogicalOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogicalOp::And => write!(f, "&&"),
+            LogicalOp::Or => write!(f, "||"),
         }
     }
 }
 
 enum GuardDisplayContext {
     Root,
-    InOrArg,
+    InAnyArg,
     InNot,
     InAll,
 }
@@ -660,7 +599,7 @@ impl GuardExpr {
             GuardExpr::All(children) => {
                 let wrap = matches!(
                     ctx,
-                    GuardDisplayContext::InOrArg | GuardDisplayContext::InNot
+                    GuardDisplayContext::InAnyArg | GuardDisplayContext::InNot
                 ) && children.len() > 1;
                 if wrap {
                     write!(f, "(")?;
@@ -677,27 +616,19 @@ impl GuardExpr {
                 Ok(())
             }
             GuardExpr::Or(children) => {
-                write!(f, "or(")?;
+                write!(f, "any(")?;
                 for (i, child) in children.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    child.fmt_with_ctx(f, GuardDisplayContext::InOrArg)?;
+                    child.fmt_with_ctx(f, GuardDisplayContext::InAnyArg)?;
                 }
                 write!(f, ")")
             }
             GuardExpr::Not(child) => {
-                write!(f, "!")?;
-                let needs_paren =
-                    !matches!(child.as_ref(), GuardExpr::Predicate(_) | GuardExpr::Not(_));
-                if needs_paren {
-                    write!(f, "(")?;
-                }
+                write!(f, "not(")?;
                 child.fmt_with_ctx(f, GuardDisplayContext::InNot)?;
-                if needs_paren {
-                    write!(f, ")")?;
-                }
-                Ok(())
+                write!(f, ")")
             }
         }
     }

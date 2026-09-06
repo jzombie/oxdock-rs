@@ -1,4 +1,11 @@
 name = "write_stdin"
 
-[expect]
+# Script runs `RUN @CAPTURE_RUN_CMD@` piped into `WRITE`: Unix expands to
+# `printf %s "hello"` (no trailing newline) while Windows expands to
+# `echo hello` via `cmd /C`, which always appends CRLF. RUN is the one
+# DSL command allowed to differ per-OS, so expectations are split here.
+[expect.platform.unix]
 files = { "out.txt" = "hello" }
+
+[expect.platform.windows]
+files = { "out.txt" = "hello\r\n" }

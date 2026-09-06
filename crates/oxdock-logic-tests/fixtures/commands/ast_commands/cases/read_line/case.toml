@@ -1,0 +1,4 @@
+name = "read_line"
+
+[expect]
+files = { "a.txt" = "first", "b.txt" = "second" }

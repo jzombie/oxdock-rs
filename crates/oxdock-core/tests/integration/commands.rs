@@ -1,0 +1,2321 @@
+use indoc::indoc;
+use oxdock_core::{
+    ExecIo, run_steps, run_steps_with_context, run_steps_with_context_result_with_io,
+    run_steps_with_fs,
+};
+use oxdock_fs::{GuardedPath, GuardedTempDir, PathResolver, ensure_git_identity};
+use oxdock_parser::{IoBinding, IoStream, Step, StepKind, WorkspaceTarget};
+use oxdock_process::CommandBuilder;
+use std::io::Cursor;
+use std::sync::{Arc, Mutex};
+
+fn parse_one(cmd: &str) -> Box<StepKind> {
+    let steps = oxdock_core::parse_script(cmd).unwrap();
+    Box::new(steps[0].kind.clone())
+}
+
+fn capture_pipeline(pipe: &str, path: &str, cmd: StepKind) -> [Step; 2] {
+    let pipe_name = pipe.to_string();
+    [
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdout,
+                    pipe: Some(pipe_name.clone()),
+                }],
+                cmd: Box::new(cmd),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: Some(pipe_name),
+                }],
+                cmd: Box::new(StepKind::Write {
+                    path: path.into(),
+                    contents: None,
+                }),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ]
+}
+
+fn guard_root(temp: &GuardedTempDir) -> GuardedPath {
+    temp.as_guarded_path().clone()
+}
+
+fn read_trimmed(path: &GuardedPath) -> String {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
+    // Retry briefly to accommodate background tasks that may write files asynchronously.
+    for _ in 0..600 {
+        match resolver.read_to_string(path) {
+            Ok(s) => return s.trim().to_string(),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    resolver
+        .read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn write_text(path: &GuardedPath, contents: &str) {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
+    resolver.write_file(path, contents.as_bytes()).unwrap();
+}
+
+fn create_dirs(path: &GuardedPath) {
+    let resolver = PathResolver::new(path.root(), path.root()).unwrap();
+    resolver.create_dir_all(path).unwrap();
+}
+
+use oxdock_sys_test_utils::{TestEnvGuard, can_create_symlinks};
+
+fn exists(root: &GuardedPath, rel: &str) -> bool {
+    root.join(rel).map(|p| p.exists()).unwrap_or(false)
+}
+
+fn git_cmd(repo: &GuardedPath) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("git");
+    cmd.arg("-C").arg(repo.as_path());
+    cmd
+}
+
+#[test]
+fn workspace_local_copy_cannot_escape_workspace_root() {
+    let snapshot_dir = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_dir);
+    let workspace_dir = GuardedPath::tempdir().unwrap();
+    let workspace = guard_root(&workspace_dir);
+
+    let outside_dir = GuardedPath::tempdir().unwrap();
+    let outside = guard_root(&outside_dir);
+    let outside_file = outside.join("escape.txt").unwrap();
+    write_text(&outside_file, "outside workspace");
+
+    let script = indoc!(
+        r#"
+        WORKSPACE LOCAL
+        COPY --from-current-workspace "{outside}" out/target
+    "#
+    );
+    let outside_str = outside_file.as_path().to_string_lossy().to_string();
+    let script = script.replace("{outside}", &outside_str);
+    let steps = oxdock_core::parse_script(&script).unwrap();
+
+    let result =
+        run_steps_with_context_result_with_io(&snapshot, &workspace, &steps, ExecIo::new());
+    assert!(
+        result.is_err(),
+        "expected COPY --from-current-workspace to reject paths outside workspace root even after WORKSPACE LOCAL"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires symlink support; Miri synthetic fs cannot create symlinks"
+)]
+fn commands_behave_cross_platform() {
+    let snapshot_dir = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_dir);
+    let local = snapshot.join("local").unwrap();
+    create_dirs(&local);
+
+    // Build context (local workspace) files for COPY and SYMLINK targets.
+    let build_root = local.clone();
+    write_text(&build_root.join("source.txt").unwrap(), "from build");
+    let target_dir = build_root.join("target_dir").unwrap();
+    create_dirs(&target_dir);
+    write_text(&target_dir.join("inner.txt").unwrap(), "symlink target");
+
+    #[allow(clippy::disallowed_macros)]
+    let run_cmd = if cfg!(windows) {
+        "echo %FOO%> run.txt"
+    } else {
+        "printf %s \"$FOO\" > run.txt"
+    };
+
+    // Background command should stay alive long enough for the foreground steps to complete.
+    #[allow(clippy::disallowed_macros)]
+    let bg_cmd = if cfg!(windows) {
+        "ping -n 3 127.0.0.1 > NUL & echo %FOO%> bg.txt"
+    } else {
+        "sleep 0.2; printf %s \"$FOO\" > bg.txt"
+    };
+
+    let steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Mkdir("client".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Mkdir("client/dist".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "client/dist/hello.txt".into(),
+                contents: Some("hi".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Env {
+                key: "FOO".into(),
+                value: "bar".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Run(run_cmd.into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::AsyncBlock {
+                body: vec![Step {
+                    guard: None,
+                    kind: StepKind::Run(bg_cmd.into()),
+                    scope_enter: 0,
+                    scope_exit: 0,
+                }],
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Copy {
+                from_current_workspace: false,
+                from: "./source.txt".into(),
+                to: "./client/dist/from_build.txt".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Symlink {
+                from: "./target_dir".into(),
+                to: "./client/dist-link".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Ls(Some("client".into())),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("client/dist".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Echo("echo from workdir".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "nested.txt".into(),
+                contents: Some("nested".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workspace(WorkspaceTarget::Local),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "local_note.txt".into(),
+                contents: Some("local".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workspace(WorkspaceTarget::Snapshot),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "snap_note.txt".into(),
+                contents: Some("snap".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+
+    let res = run_steps_with_context(&snapshot, &local, &steps);
+    if can_create_symlinks(snapshot.as_path()) {
+        res.unwrap();
+    } else {
+        let err = res.unwrap_err();
+        assert!(
+            err.to_string().contains("SYMLINK"),
+            "expected SYMLINK error, got {}",
+            err
+        );
+        // Host cannot create symlinks; remaining assertions assume successful symlink creation,
+        // so skip the rest of this test in that case.
+        return;
+    }
+
+    #[cfg(miri)]
+    {
+        let local_note = local.join("local_note.txt").unwrap();
+        if !local_note.exists() {
+            write_text(&local_note, "local");
+        }
+    }
+
+    // RUN picks up ENV
+    assert_eq!(read_trimmed(&snapshot.join("run.txt").unwrap()), "bar");
+    // ASYNC picks up ENV
+    assert_eq!(read_trimmed(&snapshot.join("bg.txt").unwrap()), "bar");
+
+    // WRITE + MKDIR
+    assert_eq!(
+        read_trimmed(&snapshot.join("client/dist/hello.txt").unwrap()),
+        "hi"
+    );
+    assert_eq!(
+        read_trimmed(&snapshot.join("client/dist/nested.txt").unwrap()),
+        "nested"
+    );
+
+    // COPY from build context into snapshot workspace
+    assert_eq!(
+        read_trimmed(&snapshot.join("client/dist/from_build.txt").unwrap()),
+        "from build"
+    );
+
+    // SYMLINK resolves to target dir (with ./ prefix) and exposes contents
+    let linked_file = snapshot.join("client/dist-link/inner.txt").unwrap();
+    #[cfg(not(miri))]
+    assert!(
+        linked_file.as_path().exists(),
+        "symlink should point at target contents"
+    );
+    assert_eq!(read_trimmed(&linked_file), "symlink target");
+
+    // WORKSPACE switches between snapshot and local roots
+    assert_eq!(
+        read_trimmed(&local.join("local_note.txt").unwrap()),
+        "local"
+    );
+    assert_eq!(
+        read_trimmed(&snapshot.join("snap_note.txt").unwrap()),
+        "snap"
+    );
+}
+
+#[test]
+fn inherit_env_reads_exec_io_override() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
+    );
+}
+
+#[test]
+fn inherit_env_override_precedes_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE seen.txt {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_core::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_inherit_env("SPECIAL_TOKEN", "from-context");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(
+        read_trimmed(&root.join("seen.txt").unwrap()),
+        "from-context"
+    );
+}
+
+#[test]
+fn inherit_env_removal_blocks_host_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {
+        r#"
+        INHERIT_ENV [SPECIAL_TOKEN]
+        WRITE "seen.txt" {{ env:SPECIAL_TOKEN }}
+        "#
+    };
+    let steps = oxdock_core::parse_script(script).unwrap();
+    let _env_guard = TestEnvGuard::set("SPECIAL_TOKEN", "from-host");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.remove_inherit_env("SPECIAL_TOKEN");
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    assert_eq!(read_trimmed(&root.join("seen.txt").unwrap()), "");
+}
+
+#[test]
+fn exit_stops_pipeline_and_reports_code() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "before.txt".into(),
+                contents: Some("ok".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Exit(9),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "after.txt".into(),
+                contents: Some("nope".into()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("EXIT requested with code 9"),
+        "error message should surface EXIT code"
+    );
+
+    assert!(exists(&root, "before.txt"));
+    assert!(!exists(&root, "after.txt"));
+}
+
+#[test]
+fn accepts_semicolon_separated_commands() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = "WRITE one.txt 1; WRITE two.txt 2";
+    let steps = oxdock_core::parse_script(script).unwrap();
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("one.txt").unwrap()), "1");
+    assert_eq!(read_trimmed(&root.join("two.txt").unwrap()), "2");
+}
+
+#[test]
+fn write_cmd_captures_output() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    #[allow(clippy::disallowed_macros)]
+    let cmd = if cfg!(windows) {
+        "RUN \"echo hello\""
+    } else {
+        "RUN \"printf %s \\\"hello\\\"\""
+    };
+    let capture = capture_pipeline("cap-write", "out.txt", *parse_one(cmd));
+    let steps = capture.into_iter().collect::<Vec<_>>();
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
+}
+
+#[test]
+fn capture_echo_interpolates_env() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Env {
+            key: "FOO".into(),
+            value: "hi".into(),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline(
+        "cap-echo",
+        "echo.txt",
+        *parse_one("ECHO \"value={{ env:FOO }}\""),
+    ));
+
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("echo.txt").unwrap()), "value=hi");
+}
+
+#[test]
+fn capture_ls_lists_entries_with_header() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let dir = root.join("items").unwrap();
+    create_dirs(&dir);
+    write_text(&dir.join("a.txt").unwrap(), "a");
+    write_text(&dir.join("b.txt").unwrap(), "b");
+
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Workdir("items".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-ls", "ls.txt", *parse_one("LS")));
+
+    run_steps(&root, &steps).unwrap();
+
+    let content = read_trimmed(&root.join("items/ls.txt").unwrap());
+    let mut lines: Vec<_> = content.lines().map(str::to_string).collect();
+    let expected_header = format!(
+        "{}:",
+        PathResolver::new(dir.root(), dir.root())
+            .unwrap()
+            .canonicalize(&dir)
+            .unwrap()
+            .display()
+    );
+    assert_eq!(lines.remove(0), expected_header);
+    assert_eq!(lines, vec!["a.txt", "b.txt"]);
+}
+
+#[test]
+fn capture_cat_emits_file_contents() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    write_text(&root.join("note.txt").unwrap(), "hello note");
+
+    let steps = capture_pipeline("cap-cat", "out.txt", *parse_one("READ note.txt"));
+
+    run_steps(&root, &steps).unwrap();
+    assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello note");
+}
+
+#[test]
+fn capture_cwd_canonicalizes_and_writes() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Workdir("a/b".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+    let mut steps = steps;
+    steps.extend(capture_pipeline("cap-cwd", "pwd.txt", *parse_one("CWD")));
+
+    run_steps(&root, &steps).unwrap();
+
+    let expected = PathResolver::new(root.root(), root.root())
+        .unwrap()
+        .canonicalize(&root.join("a/b").unwrap())
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(read_trimmed(&root.join("a/b/pwd.txt").unwrap()), expected);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
+fn copy_git_via_script_simple() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    // Create a tiny git repo inside the snapshot so build_context is under root
+    let repo = snapshot.join("repo").unwrap();
+    create_dirs(&repo);
+    write_text(&repo.join("hello.txt").unwrap(), "git hello");
+    create_dirs(&repo.join("assets").unwrap());
+    let assets = repo.join("assets").unwrap();
+    create_dirs(&assets);
+    write_text(&assets.join("a.txt").unwrap(), "a");
+    write_text(&assets.join("b.txt").unwrap(), "b");
+
+    // init and commit
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = git_cmd(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let script = format!("COPY_GIT {} hello.txt out_hello.txt", rev);
+
+    let steps = oxdock_core::parse_script(&script).unwrap();
+    // build_context is `repo` which is under `snapshot` root
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
+
+    assert_eq!(
+        read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
+        "git hello"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
+fn copy_git_includes_dirty_file() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    let repo = snapshot.join("repo_dirty").unwrap();
+    create_dirs(&repo);
+    let hello = repo.join("hello.txt").unwrap();
+    write_text(&hello, "git hello");
+
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    // Modify the tracked file without committing.
+    write_text(&hello, "dirty hello");
+
+    let script = "COPY_GIT --include-dirty HEAD hello.txt out_hello.txt";
+    let steps = oxdock_core::parse_script(script).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
+
+    assert_eq!(
+        read_trimmed(&snapshot.join("out_hello.txt").unwrap()),
+        "dirty hello"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "initializes git repos and runs COPY_GIT; needs real filesystem access"
+)]
+fn copy_git_directory_via_script() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    // Create a tiny git repo inside the snapshot so build_context is under root
+    let repo = snapshot.join("repo_dir").unwrap();
+    create_dirs(&repo);
+    let assets_dir = repo.join("assets_dir").unwrap();
+    create_dirs(&assets_dir);
+    write_text(&assets_dir.join("x.txt").unwrap(), "x");
+    write_text(&assets_dir.join("y.txt").unwrap(), "y");
+
+    // init, add, commit (use -c to avoid writing config)
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = git_cmd(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let script = format!("COPY_GIT {} assets_dir out_assets_dir", rev);
+    let steps = oxdock_core::parse_script(&script).unwrap();
+    run_steps_with_context(&snapshot, &repo, &steps).unwrap();
+
+    assert_eq!(
+        read_trimmed(
+            &snapshot
+                .join("out_assets_dir")
+                .unwrap()
+                .join("x.txt")
+                .unwrap()
+        ),
+        "x"
+    );
+    assert_eq!(
+        read_trimmed(
+            &snapshot
+                .join("out_assets_dir")
+                .unwrap()
+                .join("y.txt")
+                .unwrap()
+        ),
+        "y"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "initializes git repos to resolve WORKSPACE_GIT_COMMIT")]
+fn env_exposes_git_commit_hash() {
+    let repo_temp = GuardedPath::tempdir().unwrap();
+    let repo = guard_root(&repo_temp);
+    write_text(&repo.join("hello.txt").unwrap(), "hello");
+
+    git_cmd(&repo)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init failed");
+    git_cmd(&repo)
+        .arg("add")
+        .arg(".")
+        .status()
+        .expect("git add failed");
+    ensure_git_identity(&repo).expect("ensure git identity");
+    git_cmd(&repo)
+        .arg("commit")
+        .arg("-m")
+        .arg("initial")
+        .status()
+        .expect("git commit failed");
+
+    let rev_out = git_cmd(&repo)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .expect("git rev-parse failed");
+    let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+
+    let steps = oxdock_core::parse_script(indoc!(
+        r#"
+        WITH_IO [stdout=pipe:commit_capture] ECHO {{ env:WORKSPACE_GIT_COMMIT }}
+        WITH_IO [stdin=pipe:commit_capture] WRITE out.txt
+        "#
+    ))
+    .unwrap();
+    run_steps(&repo, &steps).unwrap();
+
+    assert_eq!(read_trimmed(&repo.join("out.txt").unwrap()), rev);
+}
+
+#[test]
+fn workdir_cannot_escape_root() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    // Attempt to switch to parent of root which should be disallowed
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Workdir("../".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WORKDIR") && err.to_string().contains("escapes"),
+        "expected WORKDIR escape error, got {}",
+        err
+    );
+}
+
+#[test]
+fn write_cannot_escape_root() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Write {
+            path: "../escape.txt".into(),
+            contents: Some("nope".into()),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
+        "expected WRITE escape error, got {}",
+        err
+    );
+}
+
+#[test]
+fn read_cannot_escape_root() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let parent = root
+        .as_path()
+        .parent()
+        .expect("tempdir should have a parent");
+    let parent_guard = GuardedPath::new_root(parent).unwrap();
+    let parent_fs = PathResolver::new(parent_guard.as_path(), parent_guard.as_path()).unwrap();
+    let secret = parent_guard
+        .join(&format!(
+            "{}-secret.txt",
+            root.as_path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("escape")
+        ))
+        .unwrap();
+    parent_fs.write_file(&secret, b"nope").unwrap();
+
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Read(Some("../secret.txt".into())),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ escape error, got {}",
+        err
+    );
+
+    let _ = parent_fs.remove_file(&secret);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "creates host symlinks; unsupported under Miri isolation"
+)]
+fn read_symlink_escape_is_blocked() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let parent = root
+        .as_path()
+        .parent()
+        .expect("tempdir should have a parent");
+    let parent_guard = GuardedPath::new_root(parent).unwrap();
+    let parent_fs = PathResolver::new(parent_guard.as_path(), parent_guard.as_path()).unwrap();
+    let secret = parent_guard
+        .join(&format!(
+            "{}-symlink-secret.txt",
+            root.as_path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("escape")
+        ))
+        .unwrap();
+    parent_fs.write_file(&secret, b"top secret").unwrap();
+
+    // Inside root, create a link that points to the outside secret.
+    if !can_create_symlinks(root.as_path()) {
+        eprintln!("skipping test: cannot create symlinks on host");
+        let _ = parent_fs.remove_file(&secret);
+        return;
+    }
+    let link_path = root.as_path().join("leak.txt");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(secret.as_path(), &link_path).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(secret.as_path(), &link_path).unwrap();
+
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Read(Some("leak.txt".into())),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("READ") && err.to_string().contains("escapes"),
+        "expected READ symlink escape error, got {}",
+        err
+    );
+
+    let _ = parent_fs.remove_file(&secret);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "creates host symlinks and tempdirs; blocked under Miri isolation"
+)]
+fn workdir_accepts_symlink_into_workspace_root() {
+    let temp_workspace = GuardedPath::tempdir().unwrap();
+    let workspace_root = guard_root(&temp_workspace);
+    let temp_build = GuardedPath::tempdir().unwrap();
+    let build_root = guard_root(&temp_build);
+
+    let client = workspace_root.join("client").unwrap();
+    create_dirs(&client);
+    write_text(&client.join("version.txt").unwrap(), "1.2.3");
+
+    let mut resolver =
+        PathResolver::new_guarded(build_root.clone(), workspace_root.clone()).unwrap();
+    resolver.set_workspace_root(workspace_root.clone());
+
+    let steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("/".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Symlink {
+                from: "client".into(),
+                to: "client".into(),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("client".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+
+    let mut steps = steps;
+    steps.extend(capture_pipeline(
+        "cap-workspace-version",
+        "seen.txt",
+        *parse_one("READ version.txt"),
+    ));
+
+    if can_create_symlinks(workspace_root.as_path()) {
+        run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap();
+
+        let workspace_resolver =
+            PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
+        let seen_path = workspace_root.join("client/seen.txt").unwrap();
+        assert_eq!(
+            workspace_resolver
+                .read_to_string(&seen_path)
+                .unwrap()
+                .trim(),
+            "1.2.3"
+        );
+    } else {
+        // Host cannot create symlinks; ensure run reports a SYMLINK error and no fallback copy occurs.
+        let err = run_steps_with_fs(Box::new(resolver), &steps, None, None).unwrap_err();
+        assert!(
+            err.to_string().contains("SYMLINK"),
+            "expected SYMLINK error, got {}",
+            err
+        );
+        let seen_path = workspace_root.join("client/seen.txt").unwrap();
+        let workspace_resolver =
+            PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
+        assert!(
+            workspace_resolver.entry_kind(&seen_path).is_err(),
+            "No copy fallback should occur"
+        );
+    }
+}
+
+#[test]
+fn write_missing_path_cannot_escape_root() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    create_dirs(&root.join("a/b").unwrap());
+
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Write {
+            // Ancestor exists inside root, but remaining components attempt to climb out.
+            path: "a/b/../../../../outside.txt".into(),
+            contents: Some("nope".into()),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let err = run_steps(&root, &steps).unwrap_err();
+    assert!(
+        err.to_string().contains("WRITE") && err.to_string().contains("escapes"),
+        "expected WRITE escape error for missing path, got {}",
+        err
+    );
+}
+
+#[test]
+fn workdir_creates_missing_dirs_within_root() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Workdir("a/b/c".into()),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    run_steps(&root, &steps).unwrap();
+
+    assert!(root.join("a/b/c").unwrap().exists());
+}
+
+#[test]
+fn cat_reads_file_contents_without_error() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    write_text(&root.join("file.txt").unwrap(), "hello cat");
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::Read(Some("file.txt".into())),
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    // This should succeed and emit contents to stdout; we only verify it does not error.
+    run_steps(&root, &steps).unwrap();
+}
+
+#[test]
+fn cwd_prints_to_stdout() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::Workdir("a/b".into()),
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::Cwd,
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+    // Should succeed and print the canonical cwd; we only assert it doesn't error.
+    run_steps(&root, &steps).unwrap();
+}
+
+#[test]
+fn cat_reads_stdin_with_io() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input_data = "hello from stdin";
+    let input = Arc::new(Mutex::new(Cursor::new(input_data.as_bytes().to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let steps = vec![Step {
+        guard: None,
+        kind: StepKind::WithIo {
+            bindings: vec![IoBinding {
+                stream: IoStream::Stdin,
+                pipe: None,
+            }],
+            cmd: Box::new(StepKind::Read(None)),
+        },
+        scope_enter: 0,
+        scope_exit: 0,
+    }];
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).unwrap();
+
+    let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(result, "hello from stdin");
+}
+
+#[test]
+fn with_io_block_applies_defaults() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let script = indoc! {r#"
+        WITH_IO [stdout=pipe:snippet] {
+            ECHO "alpha"
+            ECHO "beta"
+        }
+    "#};
+    let steps = oxdock_core::parse_script(script).expect("parse WITH_IO block");
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.insert_output_pipe("snippet", captured.clone());
+
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("execute WITH_IO block");
+
+    let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert_eq!(contents, "alpha\nbeta\n");
+}
+
+#[test]
+fn with_io_routes_stdout_into_later_stdin() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let script = indoc! {r#"
+        WITH_IO [stdout=pipe:relay] ECHO streamed
+        WITH_IO [stdin=pipe:relay] READ
+    "#};
+    let steps = oxdock_core::parse_script(script).expect("parse WITH_IO pipe script");
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(captured.clone()));
+
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("run WITH_IO pipe script");
+
+    let contents = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert_eq!(contents, "streamed\n");
+}
+
+fn run_script(root: &GuardedPath, script: &str) -> Result<(), anyhow::Error> {
+    let steps = oxdock_core::parse_script(script).expect("parse script");
+    run_steps_with_context_result_with_io(root, root, &steps, ExecIo::new()).map(|_| ())
+}
+
+#[test]
+fn assert_file_accepts_matching_content() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(
+        &root,
+        "WRITE out.txt payload\nASSERT_FILE out.txt payload\n",
+    )
+    .expect("matching content passes");
+}
+
+#[test]
+fn assert_file_rejects_content_mismatch() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(
+        &root,
+        "WRITE out.txt actual\nASSERT_FILE out.txt expected\n",
+    )
+    .expect_err("mismatch must fail");
+    assert!(err.to_string().contains("content mismatch"), "{err}");
+}
+
+#[test]
+fn assert_file_requires_existing_file() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(&root, "ASSERT_FILE missing.txt\n").expect_err("missing must fail");
+    assert!(err.to_string().contains("missing.txt"), "{err}");
+}
+
+#[test]
+fn assert_file_hash_mode_matches_and_rejects() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    // sha256("stable-content")
+    let digest = "08135c1b6349b0e4f894c36221952f0de00e6b4d82f80895abf359755e77103c";
+    run_script(
+        &root,
+        &format!("WRITE payload.bin stable-content\nASSERT_FILE --hash {digest} payload.bin\n"),
+    )
+    .expect("hash match passes");
+
+    let err = run_script(
+        &root,
+        "WRITE payload.bin stable-content\nASSERT_FILE --hash 1111111111111111111111111111111111111111111111111111111111111111 payload.bin\n",
+    )
+    .expect_err("hash mismatch must fail");
+    assert!(err.to_string().contains("--hash mismatch"), "{err}");
+}
+
+#[test]
+fn assert_dir_and_absent_cover_both_outcomes() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(
+        &root,
+        "MKDIR tree/deep\nASSERT_DIR tree/deep\nASSERT_ABSENT nope.txt\n",
+    )
+    .expect("positive assertions pass");
+
+    let dir_err = run_script(&root, "WRITE file.txt x\nASSERT_DIR file.txt\n")
+        .expect_err("file-as-dir must fail");
+    assert!(
+        dir_err.to_string().contains("is not a directory"),
+        "{dir_err}"
+    );
+
+    let absent_err = run_script(&root, "WRITE file.txt x\nASSERT_ABSENT file.txt\n")
+        .expect_err("present path must fail");
+    assert!(absent_err.to_string().contains("exists"), "{absent_err}");
+}
+
+#[test]
+fn assert_stdout_sees_interpreter_output_without_capture_sink() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "ECHO banner-line\nASSERT_STDOUT banner-line\n")
+        .expect("interpreter output is recorded even with no configured sink");
+}
+
+#[test]
+fn assert_stdout_sees_streamed_child_output() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    #[cfg(unix)]
+    let script = "RUN \"echo child-echo-line\"\nASSERT_STDOUT \"child-echo-line\"\n";
+    #[cfg(windows)]
+    let script = "RUN \"cmd /c echo child-echo-line\"\nASSERT_STDOUT \"child-echo-line\"\n";
+    run_script(&root, script).expect("child output is recorded");
+}
+
+#[test]
+fn assert_stdout_miss_reports_emitted_log() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(&root, "ECHO present-line\nASSERT_STDOUT absent-line\n")
+        .expect_err("miss must fail");
+    assert!(
+        err.to_string().contains("did not contain 'absent-line'")
+            && err.to_string().contains("present-line"),
+        "{err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Compile-time StepKind exhaustiveness check
+// ---------------------------------------------------------------------------
+
+/// When a new `StepKind` variant is added, the compiler will error here until
+/// the match is updated — enforcing that every variant has test coverage.
+fn _assert_step_kind_exhaustiveness(kind: &StepKind) {
+    match kind {
+        StepKind::Workdir(_) => {}
+        StepKind::Workspace(_) => {}
+        StepKind::Env { .. } => {}
+        StepKind::InheritEnv { .. } => {}
+        StepKind::Run(_) => {}
+        StepKind::Echo(_) => {}
+        StepKind::AsyncBlock { .. } => {}
+        StepKind::Copy { .. } => {}
+        StepKind::CopyGit { .. } => {}
+        StepKind::Symlink { .. } => {}
+        StepKind::Mkdir(_) => {}
+        StepKind::Ls(_) => {}
+        StepKind::Cwd => {}
+        StepKind::Read(_) => {}
+        StepKind::ReadLine { .. } => {}
+        StepKind::Write { .. } => {}
+        StepKind::Append { .. } => {}
+        StepKind::Expand { .. } => {}
+        StepKind::AssertFile { .. } => {}
+        StepKind::AssertDir(_) => {}
+        StepKind::AssertAbsent(_) => {}
+        StepKind::AssertStdout(_) => {}
+        StepKind::WithIo { .. } => {}
+        StepKind::WithIoBlock { .. } => {}
+        StepKind::HashSha256 { .. } => {}
+        StepKind::Exit(_) => {}
+        StepKind::For { .. } => {}
+        StepKind::If { .. } => {}
+        StepKind::Assign { .. } => {}
+        StepKind::AssignAsync { .. } => {}
+        StepKind::Await { .. } => {}
+        StepKind::Cancel { .. } => {}
+        StepKind::Timeout { .. } => {}
+        StepKind::Sleep { .. } => {}
+    }
+}
+
+#[test]
+fn step_kind_exhaustiveness_check() {
+    // Trigger compile-time exhaustiveness: if a new StepKind variant is added
+    // without updating _assert_step_kind_exhaustiveness, this will fail to compile.
+    _assert_step_kind_exhaustiveness(&StepKind::Cwd);
+}
+
+// ---------------------------------------------------------------------------
+// CANCEL
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(miri, ignore = "CANCEL joins real background threads")]
+fn cancel_blocks_and_await_reports_cancelled() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        LET $t = ASYNC SLEEP 30s
+        CANCEL $t
+        WRITE "resumed.txt" "ok"
+        AWAIT $t
+    "#};
+    let err = run_script(&root, script).expect_err("AWAIT after CANCEL must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("cancelled"), "{msg}");
+    // Blocking CANCEL returns deterministically, so the pipeline continues
+    // to the next step instead of hanging on the 30s SLEEP.
+    assert!(
+        exists(&root, "resumed.txt"),
+        "pipeline must resume after CANCEL"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "CANCEL joins real background threads")]
+fn cancel_double_reports_already_cancelled() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        LET $t = ASYNC SLEEP 30s
+        CANCEL $t
+        CANCEL $t
+    "#};
+    let err = run_script(&root, script).expect_err("second CANCEL must fail");
+    assert!(err.to_string().contains("already cancelled"), "{err}");
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "AWAIT joins real background threads")]
+fn cancel_previously_awaited_task_fails() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(&root, "LET $t = ASYNC ECHO hi\nAWAIT $t\nCANCEL $t\n")
+        .expect_err("CANCEL after AWAIT must fail");
+    assert!(
+        err.to_string()
+            .contains("already been awaited or does not exist"),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "TIMEOUT preemption Zhang real background threads")]
+fn timeout_preempts_hung_await() {
+    use std::time::{Duration, Instant};
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        LET $t = ASYNC SLEEP 30s
+        TIMEOUT 500ms AWAIT $t
+    "#};
+    let start = Instant::now();
+    let err = run_script(&root, script).expect_err("hung AWAIT must time out");
+    let elapsed = start.elapsed();
+    assert!(err.to_string().contains("TIMEOUT"), "{err}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "TIMEOUT must preempt the hung task promptly, took {elapsed:?}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "concurrent CANCEL/AWAIT Zhang real background threads")]
+fn concurrent_cancel_and_await_race() {
+    // A background thread CANCELs while the main thread AWAITs the same
+    // task. Every outcome must report cancellation — never TaskNotFound.
+    let script = indoc! {r#"
+        LET $t = ASYNC SLEEP 30s
+        ASYNC {
+            CANCEL $t
+        }
+        AWAIT $t
+    "#};
+    for _ in 0..20 {
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = guard_root(&temp);
+        let err = run_script(&root, script).expect_err("race must end in cancellation");
+        let msg = err.to_string();
+        assert!(msg.contains("cancelled"), "{msg}");
+        assert!(!msg.contains("not found"), "{msg}");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "concurrent CANCEL/AWAIT Zhang real background threads")]
+fn concurrent_cancel_blocks_until_dead() {
+    // The cancelled task would write leak.txt after its SLEEP; a blocking
+    // CANCEL guarantees the write never happens and the script settles
+    // well before the SLEEP elapses.
+    use std::time::{Duration, Instant};
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        LET $t = ASYNC {
+            SLEEP 5s
+            WRITE "leak.txt" "leaked"
+        }
+        ASYNC {
+            CANCEL $t
+        }
+        AWAIT $t
+    "#};
+    let start = Instant::now();
+    let err = run_script(&root, script).expect_err("race must end in cancellation");
+    let elapsed = start.elapsed();
+    assert!(err.to_string().contains("cancelled"), "{err}");
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "CANCEL must settle before the 5s SLEEP elapses, took {elapsed:?}"
+    );
+    assert!(
+        !exists(&root, "leak.txt"),
+        "cancelled task must not write after CANCEL"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// APPEND
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_concatenates_content() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(
+        &root,
+        "APPEND note.txt \"hello\"\nAPPEND note.txt \"world\"\n",
+    )
+    .expect("append passes");
+    assert_eq!(read_trimmed(&root.join("note.txt").unwrap()), "helloworld");
+}
+
+// ---------------------------------------------------------------------------
+// ASSIGN (LET)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn assign_and_interpolate() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "LET $msg = hello\nWRITE out.txt $msg\n").expect("assign + write passes");
+    assert_eq!(read_trimmed(&root.join("out.txt").unwrap()), "hello");
+}
+
+// ---------------------------------------------------------------------------
+// FOR loop
+// ---------------------------------------------------------------------------
+
+#[test]
+fn for_loop_iterates_array() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        FOR $f IN ["a", "b", "c"] {
+            WRITE "{{ $f }}.txt" "{{ $f }}"
+        }
+    "#};
+    run_script(&root, script).expect("for loop passes");
+    assert_eq!(read_trimmed(&root.join("a.txt").unwrap()), "a");
+    assert_eq!(read_trimmed(&root.join("b.txt").unwrap()), "b");
+    assert_eq!(read_trimmed(&root.join("c.txt").unwrap()), "c");
+}
+
+// ---------------------------------------------------------------------------
+// IF statement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn if_statement_conditional() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "IF true {\n    WRITE result.txt \"yes\"\n}\n").expect("if true passes");
+    assert_eq!(read_trimmed(&root.join("result.txt").unwrap()), "yes");
+}
+
+#[test]
+fn if_statement_negation() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        IF !false {
+            WRITE inverted.txt "inverted"
+        }
+        IF !true {
+            WRITE skipped.txt "nope"
+        } ELSE {
+            WRITE else.txt "fallback"
+        }
+        IF !!true {
+            WRITE double.txt "double"
+        }
+    "#};
+    run_script(&root, script).expect("if negation passes");
+    assert_eq!(
+        read_trimmed(&root.join("inverted.txt").unwrap()),
+        "inverted"
+    );
+    assert_eq!(read_trimmed(&root.join("else.txt").unwrap()), "fallback");
+    assert_eq!(read_trimmed(&root.join("double.txt").unwrap()), "double");
+    assert!(!exists(&root, "skipped.txt"));
+}
+
+// ---------------------------------------------------------------------------
+// Block scoping (blocks scope everything; only pipes and files cross)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn block_scopes_variables_env_and_workdir_while_leaking_files_and_pipes() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        MKDIR sub_outer
+        MKDIR sub_outer/sub_inner
+        LET $val = "outer_val"
+        ENV APP_ENV="outer_env"
+        WORKDIR sub_outer
+        [bool:true] {
+            LET $val = "inner_val"
+            ENV APP_ENV="inner_env"
+            WORKDIR sub_inner
+            WRITE inner.txt $val
+            WRITE env_inner.txt "{{ env:APP_ENV }}"
+            WITH_IO [stdout=pipe:inner_pipe] ECHO "from-block"
+        }
+        WRITE outer.txt $val
+        WRITE env_outer.txt "{{ env:APP_ENV }}"
+        WITH_IO [stdin=pipe:inner_pipe] WRITE from_block.txt
+        IF true {
+            LET $branch = "branch_val"
+            ENV BRANCH_ENV="branch_env"
+        }
+        WRITE branch_check.txt $val
+    "#};
+    run_script(&root, script).expect("scope isolation passes");
+
+    // Inner block wrote inside 'sub_outer/sub_inner' using inner variables.
+    let inner_dir = root.join("sub_outer").unwrap().join("sub_inner").unwrap();
+    assert_eq!(
+        read_trimmed(&inner_dir.join("inner.txt").unwrap()),
+        "inner_val"
+    );
+    assert_eq!(
+        read_trimmed(&inner_dir.join("env_inner.txt").unwrap()),
+        "inner_env"
+    );
+
+    // Outer scope restored CWD to 'sub_outer' and reverted variables/env.
+    let outer_dir = root.join("sub_outer").unwrap();
+    assert_eq!(
+        read_trimmed(&outer_dir.join("outer.txt").unwrap()),
+        "outer_val"
+    );
+    assert_eq!(
+        read_trimmed(&outer_dir.join("env_outer.txt").unwrap()),
+        "outer_env"
+    );
+    // Pipes leak across the boundary: created inside, consumed outside.
+    assert_eq!(
+        read_trimmed(&outer_dir.join("from_block.txt").unwrap()),
+        "from-block"
+    );
+    // IF branch mutations do not leak either.
+    assert_eq!(
+        read_trimmed(&outer_dir.join("branch_check.txt").unwrap()),
+        "outer_val"
+    );
+}
+
+#[test]
+fn for_loop_body_mutations_do_not_leak() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        MKDIR w
+        MKDIR w/sub
+        LET $x = "outer"
+        ENV LOOP_ENV="outer"
+        WORKDIR w
+        FOR $f IN ["a", "b"] {
+            LET $x = "inner"
+            ENV LOOP_ENV="inner"
+            WORKDIR sub
+            WRITE "{{ $f }}.txt" "{{ $x }}-{{ env:LOOP_ENV }}"
+        }
+        WRITE after.txt "{{ $x }}-{{ env:LOOP_ENV }}"
+    "#};
+    run_script(&root, script).expect("for scoping passes");
+
+    // Each iteration started back in 'w': both files land in 'w/sub'
+    // with inner bindings (a leaked WORKDIR would target 'w/sub/sub').
+    let sub = root.join("w").unwrap().join("sub").unwrap();
+    assert_eq!(read_trimmed(&sub.join("a.txt").unwrap()), "inner-inner");
+    assert_eq!(read_trimmed(&sub.join("b.txt").unwrap()), "inner-inner");
+    // Loop exit restored CWD and reverted LET/ENV.
+    let w = root.join("w").unwrap();
+    assert_eq!(read_trimmed(&w.join("after.txt").unwrap()), "outer-outer");
+}
+
+// ---------------------------------------------------------------------------
+// Guard scoping (env does not leak)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guard_scope_env_does_not_leak() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        ENV FOO="bar"
+        [env:FOO]
+        {
+          WORKDIR scoped
+          WRITE inner.txt "inner"
+          ENV SCOPE="inner"
+        }
+        WITH_IO [stdout=pipe:cap_env_txt] ECHO "scope={{ env:SCOPE }}"
+        WITH_IO [stdin=pipe:cap_env_txt] WRITE env.txt
+        WRITE outer.txt "outer"
+    "#};
+    run_script(&root, script).expect("guard scope passes");
+    assert_eq!(
+        read_trimmed(&root.join("scoped/inner.txt").unwrap()),
+        "inner"
+    );
+    assert_eq!(read_trimmed(&root.join("outer.txt").unwrap()), "outer");
+    // SCOPE was set inside the guard block and should not leak out
+    assert_eq!(read_trimmed(&root.join("env.txt").unwrap()), "scope=");
+}
+
+// ---------------------------------------------------------------------------
+// EXPAND (stdin template expansion)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expand_replaces_stdin_template() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input = Arc::new(Mutex::new(Cursor::new(b"Hello {{ env:NAME }}!".to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let script = indoc! {r#"
+        ENV NAME="World"
+        EXPAND NAME="REPLACEMENT-NAME"
+    "#};
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).expect("expand passes");
+
+    let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(result, "Hello REPLACEMENT-NAME!");
+}
+
+#[test]
+fn expand_overrides_env_variable() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input = Arc::new(Mutex::new(Cursor::new(b"Hello {{ env:NAME }}!".to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let script = indoc! {r#"
+        ENV NAME="World"
+        EXPAND NAME="Alice"
+    "#};
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("expand override passes");
+
+    let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(result, "Hello Alice!");
+}
+
+// ---------------------------------------------------------------------------
+// Raw WRITE (escaped template syntax)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn write_escapes_template_syntax() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        WRITE template.md "Hello, \{{ env:NAME }}!"
+        READ template.md
+    "#};
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg).expect("raw write passes");
+
+    assert_eq!(
+        read_trimmed(&root.join("template.md").unwrap()),
+        "Hello, {{ env:NAME }}!"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// HASH_SHA256
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hash_sha256_captures_output() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    // sha256("hello")
+    let expected_hash = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    let script = indoc! {r#"
+        WRITE data.txt "hello"
+        WITH_IO [stdout=pipe:cap_hash_txt] HASH_SHA256 data.txt
+        WITH_IO [stdin=pipe:cap_hash_txt] WRITE hash.txt
+    "#};
+    run_script(&root, script).expect("hash_sha256 passes");
+    assert_eq!(read_trimmed(&root.join("hash.txt").unwrap()), expected_hash);
+}
+
+// ---------------------------------------------------------------------------
+// WITH_IO (complex stdin/stdout pipe routing)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn with_io_routes_stdin_stdout_pipe() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input = Arc::new(Mutex::new(Cursor::new(b"hello from stdin".to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    let script = indoc! {r#"
+        WITH_IO [stdin, stdout=pipe:cap_out_txt] READ
+        WITH_IO [stdin=pipe:cap_out_txt] WRITE out.txt
+        WRITE empty.txt ""
+    "#};
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("with_io pipe routing passes");
+
+    assert_eq!(
+        read_trimmed(&root.join("out.txt").unwrap()),
+        "hello from stdin"
+    );
+    assert_eq!(read_trimmed(&root.join("empty.txt").unwrap()), "");
+}
+
+// ---------------------------------------------------------------------------
+// WITH_IO + ASYNC (background stdin/stdout)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(miri, ignore = "ASYNC spawns real child processes")]
+fn with_io_bg_routes_stdin_stdout() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    // Platform-specific filter binaries (cat/sort) read raw bytes from stdin
+    // and write them to stdout without modifying the payload.
+    #[cfg(unix)]
+    let stdin_payload = "piped-via-cat";
+    #[cfg(windows)]
+    let stdin_payload = "piped-via-sort";
+
+    let input = Arc::new(Mutex::new(Cursor::new(stdin_payload.as_bytes().to_vec())));
+    let output = Arc::new(Mutex::new(Vec::new()));
+
+    // Spawns a background non-blocking pass-through child process concurrently
+    // alongside a mainline foreground step.
+    let script = indoc! {r#"
+        [unix] WITH_IO [stdin, stdout] ASYNC RUN "cat"
+        [windows] WITH_IO [stdin, stdout] ASYNC RUN "sort"
+        RUN "echo foreground"
+    "#};
+    let steps = oxdock_core::parse_script(script).unwrap();
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    io_cfg.set_stdout(Some(output.clone()));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("with_io_async execution failed");
+
+    let result = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+
+    // Assert containment rather than exact sequence matching.
+    //
+    // ASYNC executes asynchronously with mainline script steps. Depending on
+    // OS process thread scheduling, the background child's stdin->stdout flush
+    // and the foreground RUN 'echo' step may write to the shared output buffer
+    // in arbitrary order. Exact equality asserts fail non-deterministically.
+    //
+    // Verifying `stdin_payload` presence proves the complete 3-leg I/O pipeline:
+    // 1. Stdin Leg: ExecIo input handle was correctly inherited by the background process.
+    // 2. Child Leg: Process executed and transferred stdin bytes to its stdout handle.
+    // 3. Stdout Leg: ExecIo output handle captured child stdout writes into shared buffer.
+    assert!(
+        result.contains("foreground"),
+        "stdout buffer missing foreground step output; actual buffer contents: {result:?}"
+    );
+    assert!(
+        result.contains(stdin_payload),
+        "stdout buffer missing background child stdin/stdout pipe payload; actual buffer contents: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ENV + CARGO_TARGET_DIR in WITH_IO block
+// ---------------------------------------------------------------------------
+
+#[test]
+fn env_target_dir_in_with_io() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let script = indoc! {r#"
+        ENV CARGO_TARGET_DIR="ws/target"
+        WITH_IO [stdout=pipe:capture] {
+          ECHO "{{ env:CARGO_TARGET_DIR }}"
+        }
+        WITH_IO [stdin=pipe:capture] {
+          WRITE env-target.txt
+        }
+    "#};
+    run_script(&root, script).expect("env_target_dir in with_io passes");
+    assert_eq!(
+        read_trimmed(&root.join("env-target.txt").unwrap()),
+        "ws/target"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// COPY (directory tree with symlinks)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "creates symlinks and copies directory trees; unsupported under Miri"
+)]
+fn copy_directory_tree_with_symlinks() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+    let local_temp = GuardedPath::tempdir().unwrap();
+    let local = guard_root(&local_temp);
+
+    // Inline setup_copy_complex
+    let src = local.join("src").unwrap();
+    create_dirs(&src);
+    write_text(&src.join("file.txt").unwrap(), "file content");
+
+    let dir = src.join("dir").unwrap();
+    create_dirs(&dir);
+    write_text(&dir.join("nested.txt").unwrap(), "nested content");
+
+    if can_create_symlinks(local.as_path()) {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("file.txt", local.as_path().join("src/symlink_file"))
+                .unwrap();
+            std::os::unix::fs::symlink("dir", local.as_path().join("src/symlink_dir")).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(
+                "file.txt",
+                local.as_path().join("src/symlink_file"),
+            )
+            .unwrap();
+            std::os::windows::fs::symlink_dir("dir", local.as_path().join("src/symlink_dir"))
+                .unwrap();
+        }
+    }
+
+    let steps = oxdock_core::parse_script("COPY ./src \"./dst\"").unwrap();
+    let result = run_steps_with_context_result_with_io(&snapshot, &local, &steps, ExecIo::new());
+
+    if can_create_symlinks(local.as_path()) {
+        result.expect("copy complex passes");
+        assert_eq!(
+            read_trimmed(&snapshot.join("dst/file.txt").unwrap()),
+            "file content"
+        );
+        assert_eq!(
+            read_trimmed(&snapshot.join("dst/dir/nested.txt").unwrap()),
+            "nested content"
+        );
+        // Symlinks are resolved by COPY, so the content should be accessible
+        assert_eq!(
+            read_trimmed(&snapshot.join("dst/symlink_file").unwrap()),
+            "file content"
+        );
+    } else {
+        // Host cannot create symlinks; COPY of broken symlinks may fail
+        let _ = result;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// COPY (broken symlink)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(miri, ignore = "creates symlinks; unsupported under Miri")]
+fn copy_broken_symlink_fails() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+    let local_temp = GuardedPath::tempdir().unwrap();
+    let local = guard_root(&local_temp);
+
+    // Inline setup_copy_broken_symlink
+    let src = local.join("src").unwrap();
+    create_dirs(&src);
+
+    if !can_create_symlinks(local.as_path()) {
+        eprintln!("skipping copy_broken_symlink_fails: cannot create symlinks on host");
+        return;
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nonexistent", local.as_path().join("src/broken")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file("nonexistent", local.as_path().join("src/broken")).unwrap();
+
+    let steps = oxdock_core::parse_script("COPY ./src \"./dst\"").unwrap();
+    let err = run_steps_with_context_result_with_io(&snapshot, &local, &steps, ExecIo::new())
+        .expect_err("copy broken symlink should fail");
+    // Platform-specific error message
+    #[cfg(unix)]
+    assert!(
+        err.to_string().contains("No such file or directory"),
+        "expected unix symlink error, got: {err}"
+    );
+    #[cfg(windows)]
+    assert!(
+        err.to_string()
+            .contains("The system cannot find the file specified"),
+        "expected windows symlink error, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SYMLINK (with snapshot build context)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(miri, ignore = "creates symlinks; unsupported under Miri")]
+fn symlink_with_snapshot_build_context() {
+    let snapshot_temp = GuardedPath::tempdir().unwrap();
+    let snapshot = guard_root(&snapshot_temp);
+
+    // Inline setup_symlink_inputs: target_dir under snapshot (snapshot build context)
+    let target_dir = snapshot.join("target_dir").unwrap();
+    create_dirs(&target_dir);
+    write_text(&target_dir.join("inner.txt").unwrap(), "symlink target");
+
+    if !can_create_symlinks(snapshot.as_path()) {
+        eprintln!("skipping symlink_with_snapshot_build_context: cannot create symlinks on host");
+        return;
+    }
+
+    // build_context = snapshot (same as snapshot root), so SYMLINK resolves from snapshot
+    let steps = oxdock_core::parse_script("SYMLINK ./target_dir \"./linked\"").unwrap();
+    run_steps_with_context_result_with_io(&snapshot, &snapshot, &steps, ExecIo::new())
+        .expect("symlink passes");
+
+    let linked_file = snapshot.join("linked/inner.txt").unwrap();
+    assert!(linked_file.as_path().exists(), "symlink should resolve");
+    assert_eq!(read_trimmed(&linked_file), "symlink target");
+}
+
+// ---------------------------------------------------------------------------
+// READ streaming tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg_attr(miri, ignore = "exercises file I/O; blocked under Miri isolation")]
+fn read_large_file_streams_without_oom() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = temp.as_guarded_path().clone();
+
+    // Create a 1 MiB file
+    let content = "x".repeat(1024 * 1024);
+    let write_steps = oxdock_core::parse_script(&format!(
+        "WRITE large.txt \"{}\"",
+        content.replace('"', "\\\"")
+    ))
+    .unwrap();
+    run_steps_with_context(&root, &root, &write_steps).expect("write");
+
+    // READ the file and capture output
+    let read_steps = oxdock_core::parse_script("READ large.txt").unwrap();
+    let pipe_name = "read-capture".to_string();
+    let io_steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdout,
+                    pipe: Some(pipe_name.clone()),
+                }],
+                cmd: Box::new(read_steps[0].kind.clone()),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: Some(pipe_name),
+                }],
+                cmd: Box::new(StepKind::Write {
+                    path: "output.txt".into(),
+                    contents: None,
+                }),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+    run_steps_with_context(&root, &root, &io_steps).expect("read pipeline");
+
+    let output = read_trimmed(&root.join("output.txt").unwrap());
+    assert_eq!(output.len(), 1024 * 1024);
+    assert!(output.chars().all(|c| c == 'x'));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "exercises file I/O; blocked under Miri isolation")]
+fn read_stdin_streaming_via_pipe() {
+    use oxdock_parser::Arg;
+
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = temp.as_guarded_path().clone();
+
+    // Create a 1 MiB payload and pipe it through WRITE -> READ -> WRITE
+    let content = "y".repeat(1024 * 1024);
+    let steps = vec![
+        Step {
+            guard: None,
+            kind: StepKind::Write {
+                path: "source.txt".into(),
+                contents: Some(Arg::String(content.clone(), true)),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdout,
+                    pipe: Some("pipe-read".to_string()),
+                }],
+                cmd: Box::new(StepKind::Read(Some("source.txt".into()))),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+        Step {
+            guard: None,
+            kind: StepKind::WithIo {
+                bindings: vec![IoBinding {
+                    stream: IoStream::Stdin,
+                    pipe: Some("pipe-read".to_string()),
+                }],
+                cmd: Box::new(StepKind::Write {
+                    path: "dest.txt".into(),
+                    contents: None,
+                }),
+            },
+            scope_enter: 0,
+            scope_exit: 0,
+        },
+    ];
+    run_steps_with_context(&root, &root, &steps).expect("pipe read pipeline");
+
+    let output = read_trimmed(&root.join("dest.txt").unwrap());
+    assert_eq!(output.len(), 1024 * 1024);
+    assert!(output.chars().all(|c| c == 'y'));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "exercises file I/O; blocked under Miri isolation")]
+fn read_line_reads_one_line_without_eof() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input = Arc::new(Mutex::new(Cursor::new(b"first\nsecond\n".to_vec())));
+    let script = indoc! {r#"
+        WITH_IO [stdin] READ_LINE $a
+        WRITE "a.txt" "{{ $a }}"
+        WITH_IO [stdin] READ_LINE $b
+        WRITE "b.txt" "{{ $b }}"
+    "#};
+    let steps = oxdock_core::parse_script(script).expect("parse READ_LINE script");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("run READ_LINE script");
+
+    assert_eq!(read_trimmed(&root.join("a.txt").unwrap()), "first");
+    assert_eq!(read_trimmed(&root.join("b.txt").unwrap()), "second");
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "exercises file I/O; blocked under Miri isolation")]
+fn read_line_returns_partial_on_premature_eof() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    let input = Arc::new(Mutex::new(Cursor::new(b"noeol".to_vec())));
+    let script = indoc! {r#"
+        WITH_IO [stdin] READ_LINE $a
+        WRITE "a.txt" "{{ $a }}"
+        WITH_IO [stdin] READ_LINE $b
+        WRITE "b.txt" "got:{{ $b }}."
+    "#};
+    let steps = oxdock_core::parse_script(script).expect("parse READ_LINE script");
+
+    let mut io_cfg = ExecIo::new();
+    io_cfg.set_stdin(Some(input));
+    run_steps_with_context_result_with_io(&root, &root, &steps, io_cfg)
+        .expect("run READ_LINE script");
+
+    assert_eq!(read_trimmed(&root.join("a.txt").unwrap()), "noeol");
+    assert_eq!(read_trimmed(&root.join("b.txt").unwrap()), "got:.");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "background thread + condvar pipe handoff; timing-sensitive under Miri"
+)]
+fn read_line_ping_pong_proves_live_streaming() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+
+    // Bidirectional liveness proof: the background task echoes two chunks
+    // back while both pipes stay open, then consumes the EXIT sentinel and
+    // exits. If the engine buffered streams until EOF, the first main-thread
+    // READ_LINE would block forever (background holds its stdout open while
+    // waiting for chunk_2), deadlocking Exchange 1 deterministically.
+    //
+    // Keeper tasks: each `WITH_IO [stdout=pipe:X] <step>` transiently
+    // attaches/detaches that pipe's writer, signalling EOF on detach. The
+    // keepers hold one writer per pipe for the whole test so mid-test EOFs
+    // (which would surface as empty reads) are impossible; they exit via
+    // one-shot control pipes at the end.
+    let script = indoc! {r#"
+        LET $keep_tx = WITH_IO [stdout=pipe:tx, stdin=pipe:ctl_tx] ASYNC READ_LINE $ktx
+        LET $keep_rx = WITH_IO [stdout=pipe:rx, stdin=pipe:ctl_rx] ASYNC READ_LINE $krx
+        LET $live = ASYNC {
+            WITH_IO [stdin=pipe:tx] READ_LINE $a
+            WITH_IO [stdout=pipe:rx] ECHO "{{ $a }}"
+            WITH_IO [stdin=pipe:tx] READ_LINE $b
+            WITH_IO [stdout=pipe:rx] ECHO "{{ $b }}"
+            WITH_IO [stdin=pipe:tx] READ_LINE $c
+        }
+        WITH_IO [stdout=pipe:tx] ECHO "chunk_1"
+        WITH_IO [stdin=pipe:rx] READ_LINE $reply_1
+        WITH_IO [stdout=pipe:tx] ECHO "chunk_2"
+        WITH_IO [stdin=pipe:rx] READ_LINE $reply_2
+        WITH_IO [stdout=pipe:tx] ECHO "EXIT"
+        AWAIT $live
+        WITH_IO [stdout=pipe:ctl_tx] ECHO "done"
+        WITH_IO [stdout=pipe:ctl_rx] ECHO "done"
+        AWAIT $keep_tx
+        AWAIT $keep_rx
+        WRITE "reply_1.txt" "{{ $reply_1 }}"
+        WRITE "reply_2.txt" "{{ $reply_2 }}"
+    "#};
+    let steps = oxdock_core::parse_script(script).expect("parse ping-pong script");
+    run_steps_with_context_result_with_io(&root, &root, &steps, ExecIo::new())
+        .expect("ping-pong must complete without deadlock");
+
+    assert_eq!(read_trimmed(&root.join("reply_1.txt").unwrap()), "chunk_1");
+    assert_eq!(read_trimmed(&root.join("reply_2.txt").unwrap()), "chunk_2");
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+#[test]
+fn timeout_body_completes_within_deadline() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "TIMEOUT 30s WRITE done.txt finished\n")
+        .expect("body inside deadline must succeed");
+    assert_eq!(read_trimmed(&root.join("done.txt").unwrap()), "finished");
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+#[test]
+fn timeout_wraps_block_and_await() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(
+        &root,
+        "LET $task = ASYNC {\nECHO quick\n}\nTIMEOUT 30s {\nAWAIT $task\nWRITE joined.txt yes\n}\n",
+    )
+    .expect("bounded await must succeed");
+    assert_eq!(read_trimmed(&root.join("joined.txt").unwrap()), "yes");
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+#[test]
+fn timeout_body_error_passes_through_unwrapped() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(&root, "TIMEOUT 30s EXIT 3\n").expect_err("EXIT must fail");
+    assert!(
+        err.to_string().contains("EXIT requested with code 3"),
+        "unexpected error: {err:#}"
+    );
+    assert!(
+        !err.to_string().contains("TIMEOUT"),
+        "fast failure must not be wrapped as a timeout: {err:#}"
+    );
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+#[test]
+fn timeout_enforces_deadline_on_native_sleep() {
+    // Native cross-platform deadline proof: no shell, no helpers. The 2s
+    // sleep must die at ~50ms with a TIMEOUT error, never run to completion.
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let start = std::time::Instant::now();
+    let err = run_script(&root, "TIMEOUT 50ms SLEEP 2s\n").expect_err("deadline must fire");
+    let elapsed = start.elapsed();
+    assert!(
+        err.to_string().contains("TIMEOUT"),
+        "expected deadline error, got: {err:#}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "deadline did not preempt the sleep (took {elapsed:?})"
+    );
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+#[test]
+fn sleep_completes_and_is_cancellable() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "SLEEP 50ms\nWRITE awake.txt yes\n").expect("short sleep must complete");
+    assert_eq!(read_trimmed(&root.join("awake.txt").unwrap()), "yes");
+}

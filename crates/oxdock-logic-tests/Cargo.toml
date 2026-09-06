@@ -10,18 +10,27 @@ repository.workspace = true
 # This crate should not be published
 publish = false
 
+[features]
+slow-integration = []
+
 [dependencies]
 anyhow.workspace = true
+cargo_metadata = "0.19"
 libtest-mimic.workspace = true
+oxdock-core.workspace = true
 oxdock-fixture.workspace = true
 oxdock-fs.workspace = true
+oxdock-parser.workspace = true
+oxdock-process.workspace = true
 oxdock-sys-test-utils.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 toml_edit.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
 line-ending.workspace = true
-oxdock-core.workspace = true
+oxdock-macros.workspace = true
 oxdock-parser = { workspace = true, features = ["proc-macro-api"] }
 proc-macro2.workspace = true
 proptest.workspace = true
@@ -37,3 +46,6 @@ harness = false
 [[test]]
 name = "commands_harness"
 harness = false
+
+[lints]
+workspace = true

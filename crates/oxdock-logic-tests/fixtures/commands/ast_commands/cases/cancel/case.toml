@@ -1,0 +1,7 @@
+name = "cancel"
+
+[expect]
+status = "failure"
+
+[expect.error]
+contains = "cancelled"

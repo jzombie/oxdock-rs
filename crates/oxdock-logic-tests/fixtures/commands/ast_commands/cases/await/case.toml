@@ -1,0 +1,4 @@
+name = "await"
+
+[expect]
+files = { "file1.txt" = "output1\n", "file2.txt" = "output2\n" }

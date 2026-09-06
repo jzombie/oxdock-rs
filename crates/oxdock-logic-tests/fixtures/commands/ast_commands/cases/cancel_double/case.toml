@@ -1,0 +1,7 @@
+name = "cancel_double"
+
+[expect]
+status = "failure"
+
+[expect.error]
+contains = "already cancelled"

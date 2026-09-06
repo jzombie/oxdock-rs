@@ -1,0 +1,3 @@
+# The sleep runs far past the deadline; the deadline watcher must kill it
+# and the trial must fail with a TIMEOUT error (not hang, not succeed).
+TIMEOUT 2s RUN @SLEEP_LONG_CMD@

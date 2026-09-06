@@ -1,3 +1,5 @@
+// TODO: This likely can be replaced entirely with the oxdock crate
+
 // Included only while rustdoc collects doctests, keeping normal `cargo doc`
 // free of README-relative link warnings.
 //
@@ -6,3 +8,4 @@
 // parser for this documentation-only crate.
 #![cfg_attr(doctest, allow(rustdoc::invalid_codeblock_attributes))]
 #![cfg_attr(doctest, doc = include_str!("../../../README.md"))]
+#![cfg_attr(doctest, doc = include_str!("../../../oxdock/README.md"))]

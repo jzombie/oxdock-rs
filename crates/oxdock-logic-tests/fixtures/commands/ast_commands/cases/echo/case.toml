@@ -1,4 +1,4 @@
 name = "echo"
 
 [expect]
-files = { "echo.txt" = "hello" }
+files = { "echo.txt" = "hello\n" }

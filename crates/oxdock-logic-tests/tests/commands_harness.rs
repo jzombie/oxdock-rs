@@ -1,9 +1,9 @@
 #[cfg(not(miri))]
 use libtest_mimic::Arguments;
 #[cfg(not(miri))]
-use oxdock_fs::{GuardedPath, PathResolver};
+use oxdock_fs::PathResolver;
 #[cfg(not(miri))]
-use oxdock_logic_tests::harness::{HarnessConfig, build_trials};
+use oxdock_logic_tests::harness::{HarnessConfig, build_trials, prefer_tmpfs_for_tempdirs};
 
 #[cfg(miri)]
 fn main() {
@@ -14,8 +14,14 @@ fn main() {
 
 #[cfg(not(miri))]
 fn main() {
-    let mut args = Arguments::from_args();
-    args.test_threads = Some(1);
+    // Process-global setup first: must precede the libtest-mimic worker pool.
+    prefer_tmpfs_for_tempdirs();
+
+    // No `test_threads` override: `ast_commands` trials run the shared
+    // in-process runner against isolated tempdirs, so they scale across all
+    // available cores. (The legacy per-trial `cargo run` fast path that
+    // required serial execution has been removed.)
+    let args = Arguments::from_args();
 
     let resolver = PathResolver::from_manifest_env().unwrap_or_else(|err| {
         eprintln!("commands harness failed to resolve manifest dir: {err:#}");
@@ -31,22 +37,15 @@ fn main() {
             std::process::exit(1);
         });
 
-    let temp_target = GuardedPath::tempdir().unwrap_or_else(|err| {
-        eprintln!("commands harness failed to create temp target dir: {err:#}");
-        std::process::exit(1);
-    });
-    let shared_target = temp_target.as_guarded_path().clone();
-
     let mut config = HarnessConfig::new("commands", fixtures_root);
     config.set_workspace_root_env = true;
-    config.set_temp_target_dir = true;
-    config.shared_target_dir = Some(shared_target);
     config.case_config = Some(oxdock_logic_tests::harness::CaseConfig {
         fixture_name: "ast_commands".to_string(),
         cases_dir: "cases".to_string(),
         case_env: "OXDOCK_AST_CASE".to_string(),
         coverage_env: Some("OXDOCK_AST_ONLY_COVERAGE".to_string()),
         coverage_case_name: "coverage".to_string(),
+        smoke_cases: vec!["write".to_string(), "with_io".to_string()],
     });
 
     let tests = build_trials(&resolver, &config).unwrap_or_else(|err| {
@@ -54,7 +53,5 @@ fn main() {
         std::process::exit(1);
     });
 
-    let result = libtest_mimic::run(&args, tests);
-    drop(temp_target);
-    result.exit();
+    libtest_mimic::run(&args, tests).exit();
 }

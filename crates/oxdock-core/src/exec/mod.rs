@@ -1,3 +1,4 @@
+mod args;
 mod fs_ops;
 mod handlers;
 mod io;
@@ -7,14 +8,24 @@ mod steps;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::handlers::{
+    dispatch_append, dispatch_assert_absent, dispatch_assert_dir, dispatch_assert_file,
+    dispatch_assert_stdout, dispatch_assign, dispatch_assign_async_step, dispatch_async_block,
+    dispatch_await_step, dispatch_cancel_step, dispatch_copy, dispatch_copy_git, dispatch_cwd,
+    dispatch_echo, dispatch_env, dispatch_exit, dispatch_expand, dispatch_for_loop,
+    dispatch_hash_sha256, dispatch_if_then, dispatch_inherit_env, dispatch_ls, dispatch_mkdir,
+    dispatch_read, dispatch_read_line, dispatch_run, dispatch_sleep_step, dispatch_symlink,
+    dispatch_timeout_step, dispatch_with_io, dispatch_with_io_block, dispatch_workdir,
+    dispatch_workspace, dispatch_write,
+};
 pub use self::io::ExecIo;
+pub(crate) use self::steps::StepCtx;
 
 use anyhow::Result;
 use oxdock_fs::{GuardedPath, PathResolver, WorkspaceFs};
-use oxdock_parser::{Step, TemplateString};
+use oxdock_parser::Step;
 use oxdock_process::{
-    BuiltinEnv, CommandContext, ProcessManager, SharedInput, SharedOutput, default_process_manager,
-    expand_command_env,
+    BuiltinEnv, ProcessManager, SharedInput, SharedOutput, default_process_manager,
 };
 
 use std::sync::Arc;
@@ -23,10 +34,6 @@ use self::fs_ops::describe_dir;
 use self::io::{StreamHandle, assemble_default_io, teed_stdout};
 use self::state::ExecState;
 use self::steps::execute_steps;
-
-fn expand_template(t: &TemplateString, ctx: &CommandContext) -> String {
-    expand_command_env(&t.0, ctx)
-}
 
 pub fn run_steps(fs_root: &GuardedPath, steps: &[Step]) -> Result<()> {
     run_steps_with_context(fs_root, fs_root, steps)
@@ -135,8 +142,12 @@ fn run_steps_with_manager<P: ProcessManager>(
     let fs_root = fs.root().clone();
     let cwd = fs.root().clone();
     let build_context = fs.build_context().clone();
-    let envs = Arc::new(BuiltinEnv::collect(&build_context).into_envs());
-    let stdout_log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut envs = BuiltinEnv::collect(&build_context).into_envs();
+    for (key, value) in io.inherit_env_overrides() {
+        envs.insert(key.clone(), value.clone());
+    }
+    let envs = Arc::new(envs);
+    let assert_windows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut state = ExecState {
         fs,
         cargo_target_dir: fs_root.join(".cargo-target")?,
@@ -145,8 +156,19 @@ fn run_steps_with_manager<P: ProcessManager>(
         bg_children: Vec::new(),
         scope_stack: Vec::new(),
         io,
-        stdout_log,
+        assert_windows: assert_windows.clone(),
+        var_scopes: Vec::new(),
+        cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_process: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        named_tasks: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_task_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        inside_async: false,
+        cancellable: false,
+        _marker: std::marker::PhantomData,
     };
+
+    // Push a global variable scope so top-level LET assignments are captured.
+    state.push_var_scope();
 
     let _default_stdout = std::io::stdout();
     let stdin = state.io.stdin();
@@ -155,7 +177,7 @@ fn run_steps_with_manager<P: ProcessManager>(
     // sink was configured (forwarding to real stdout in that case).
     let stdout = Some(StreamHandle::Stream(teed_stdout(
         state.io.stdout(),
-        Arc::clone(&state.stdout_log),
+        assert_windows,
     )));
     let stderr = state.io.stderr().map(StreamHandle::Stream);
     let mut proc_mgr = process;
