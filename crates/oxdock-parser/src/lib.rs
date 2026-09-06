@@ -904,6 +904,128 @@ mod tests {
     }
 
     #[test]
+    fn with_io_async_block_nested_for_parses() {
+        // Regression: structural statements nested inside a WITH_IO-wrapped
+        // ASYNC block must parse. WITH_IO is compound-atomic (implicit
+        // whitespace suppressed), so nested rules carry explicit gaps.
+        let script = indoc! {r#"
+            WITH_IO [stdout=pipe:out] ASYNC {
+                FOR $x IN [0, 1] {
+                    ECHO hi
+                }
+            }
+        "#};
+        let steps = parse_script(script, test_lower).expect("parse should succeed");
+        assert_eq!(steps.len(), 1);
+        match &steps[0].kind {
+            StepKind::WithIo { bindings, cmd } => {
+                assert_eq!(bindings.len(), 1);
+                assert!(matches!(bindings[0].stream, IoStream::Stdout));
+                assert_eq!(bindings[0].pipe.as_deref(), Some("out"));
+                match cmd.as_ref() {
+                    StepKind::AsyncBlock { body } => {
+                        assert_eq!(body.len(), 1);
+                        match &body[0].kind {
+                            StepKind::For { var, body, .. } => {
+                                assert_eq!(var, "x");
+                                assert_eq!(body.len(), 1);
+                                assert!(matches!(&body[0].kind, StepKind::Echo(_)));
+                            }
+                            other => panic!("expected For, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected AsyncBlock, got {:?}", other),
+                }
+            }
+            other => panic!("expected WithIo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn with_io_async_block_nested_if_else_parses() {
+        // Spaced comparison and ELSE chain inside a WITH_IO-wrapped block.
+        let script = indoc! {r#"
+            WITH_IO [stdout=pipe:out] ASYNC {
+                IF $a == $b {
+                    ECHO yes
+                } ELSE {
+                    ECHO no
+                }
+            }
+        "#};
+        let steps = parse_script(script, test_lower).expect("parse should succeed");
+        match &steps[0].kind {
+            StepKind::WithIo { cmd, .. } => match cmd.as_ref() {
+                StepKind::AsyncBlock { body } => {
+                    assert!(matches!(&body[0].kind, StepKind::If { .. }));
+                    match &body[0].kind {
+                        StepKind::If { else_body, .. } => {
+                            assert_eq!(else_body.as_ref().map(Vec::len), Some(1));
+                        }
+                        other => panic!("expected If, got {:?}", other),
+                    }
+                }
+                other => panic!("expected AsyncBlock, got {:?}", other),
+            },
+            other => panic!("expected WithIo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn timeout_block_nested_for_parses() {
+        // TIMEOUT is compound-atomic too; nested structural statements must
+        // parse inside its block form.
+        let script = indoc! {r#"
+            TIMEOUT 30s {
+                FOR $x IN [1] {
+                    ECHO hi
+                }
+            }
+        "#};
+        let steps = parse_script(script, test_lower).expect("parse should succeed");
+        match &steps[0].kind {
+            StepKind::Timeout { body, .. } => {
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0].kind, StepKind::For { .. }));
+            }
+            other => panic!("expected Timeout, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn with_io_async_block_nested_let_map_parses() {
+        // LET with a spaced map literal inside a WITH_IO-wrapped block.
+        let script = indoc! {r#"
+            WITH_IO [stdout] ASYNC {
+                LET $m = {a: 1, b: 2}
+            }
+        "#};
+        let steps = parse_script(script, test_lower).expect("parse should succeed");
+        match &steps[0].kind {
+            StepKind::WithIo { cmd, .. } => match cmd.as_ref() {
+                StepKind::AsyncBlock { body } => {
+                    assert!(matches!(&body[0].kind, StepKind::Assign { .. }));
+                }
+                other => panic!("expected AsyncBlock, got {:?}", other),
+            },
+            other => panic!("expected WithIo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn variable_sigil_binds_tightly() {
+        // `$` and its identifier are one atomic unit: whitespace between the
+        // sigil and the name must not parse as a variable reference. (In
+        // argument position this already failed; in expression position the
+        // old non-atomic `variable` rule accepted `$   y` via implicit
+        // whitespace.)
+        parse_script("ECHO $   x", test_lower).expect_err("spaced sigil must fail");
+        parse_script("LET $x = $   y", test_lower).expect_err("spaced sigil must fail");
+        let steps = parse_script("ECHO $x", test_lower).expect("tight sigil parses");
+        assert!(matches!(&steps[0].kind, StepKind::Echo(_)));
+    }
+
+    #[test]
     fn let_async_block_parses() {
         let script = indoc! {r#"
             LET $task = ASYNC {

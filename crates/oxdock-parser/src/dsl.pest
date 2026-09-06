@@ -17,7 +17,7 @@ element = _{ blank | hash_comment | COMMENT | semicolon | guard_line | block_sta
 // Inside for/let blocks, block_start/block_end must NOT appear as elements
 // (the block's own braces handle them).  Nested guard blocks use guard_block.
 block_element = _{ blank | hash_comment | COMMENT | semicolon | guard_block | guard_line | if_statement | for_statement | let_async_statement | await_statement | cancel_statement | let_statement | timeout_statement | async_statement_block | async_statement | command }
-guard_block = { guard_line ~ block }
+guard_block = ${ guard_line ~ gap ~ block }
 
 block_start = { "{" }
 
@@ -67,36 +67,39 @@ or_op = @{ "||" }
 and_op = @{ "&&" }
 // eq_op and neq_op already defined above in guard section
 
-parenthesized_expr = { "(" ~ expr ~ ")" }
+parenthesized_expr = ${ "(" ~ gap ~ expr ~ gap ~ ")" }
 
 quoted_string = @{
     "\"" ~ ( "\\\"" | (!"\"" ~ ANY) )* ~ "\"" |
     "'" ~ ( "\\'" | (!"'" ~ ANY) )* ~ "'"
 }
 bare_word = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
-func_call = { ident ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
-variable = { "$" ~ ident }
-key_path_segment = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* | ASCII_DIGIT+ }
-key_path = { "$" ~ ident ~ ("." ~ key_path_segment)+ }
-list_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
-map_entry = { (quoted_string | bare_word) ~ ":" ~ ws? ~ expr }
-map_literal = { "{" ~ ws? ~ (map_entry ~ (ws? ~ "," ~ ws? ~ map_entry)*)? ~ ws? ~ "}" }
+func_call = ${ ident ~ gap ~ "(" ~ gap ~ (expr ~ gap ~ ("," ~ gap ~ expr ~ gap)*)? ~ gap ~ ")" }
+variable = ${ "$" ~ ident }
+key_path_segment = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHA | "_" | ASCII_DIGIT)* | ASCII_DIGIT+ }
+key_path = ${ "$" ~ ident ~ ("." ~ key_path_segment)+ }
+list_literal = ${ "[" ~ gap ~ (expr ~ gap ~ ("," ~ gap ~ expr ~ gap)*)? ~ gap ~ "]" }
+map_entry = ${ (quoted_string | bare_word) ~ gap ~ ":" ~ gap ~ ws? ~ gap ~ expr }
+map_literal = ${ "{" ~ gap ~ ws? ~ gap ~ (map_entry ~ gap ~ (ws? ~ "," ~ ws? ~ map_entry ~ gap)*)? ~ ws? ~ gap ~ "}" }
 string_literal = { quoted_string }
 expr_atom = { parenthesized_expr | func_call | key_path | variable | list_literal | map_literal | string_literal | bare_word }
 
 // Comparison level (==, !=) — operands are unary so `!` binds tighter
 // than equality (C-like): `!a == b` parses as `(!a) == b`.
-expr_comparison = { expr_unary ~ ((eq_op | neq_op) ~ expr_unary)? }
+expr_comparison = ${ expr_unary ~ gap ~ ((eq_op | neq_op) ~ gap ~ expr_unary)? }
 
 // Unary NOT — one or more `!` prefixes over an atom (`!true`, `!!$flag`).
 not_op = { "!" }
-expr_unary = { not_op* ~ expr_atom }
+// The gap sits behind the optional `not_op+` (never leading): a leading gap
+// would let `expr` match whitespace and glue adjacent instruction arguments
+// into one under atomic parents, where only explicit gaps consume whitespace.
+expr_unary = ${ (not_op+ ~ gap)? ~ expr_atom }
 
 // Logical AND (&&) — binds tighter than ||
-expr_logical_and = { expr_comparison ~ (and_op ~ expr_comparison)* }
+expr_logical_and = ${ expr_comparison ~ gap ~ (and_op ~ gap ~ expr_comparison)* }
 
 // Logical OR (||) — binds loosest
-expr_logical_or = { expr_logical_and ~ (or_op ~ expr_logical_and)* }
+expr_logical_or = ${ expr_logical_and ~ gap ~ (or_op ~ gap ~ expr_logical_and)* }
 
 // Entry point for all expressions
 expr = { expr_logical_or }
@@ -111,12 +114,12 @@ in_keyword = @{ "IN" ~ !(ASCII_ALPHANUMERIC | "_") }
 if_keyword = @{ "IF" ~ !(ASCII_ALPHANUMERIC | "_") }
 else_keyword = @{ "ELSE" ~ !(ASCII_ALPHANUMERIC | "_") }
 
-for_statement = { for_keyword ~ dollar_ident ~ ("," ~ dollar_ident)? ~ in_keyword ~ expr ~ block }
-let_statement = { let_keyword ~ dollar_ident ~ "=" ~ expr }
+for_statement = ${ for_keyword ~ gap ~ dollar_ident ~ gap ~ ("," ~ gap ~ dollar_ident ~ gap)? ~ in_keyword ~ gap ~ expr ~ gap ~ block }
+let_statement = ${ let_keyword ~ gap ~ dollar_ident ~ gap ~ "=" ~ gap ~ expr }
 
-else_if_clause = { else_keyword ~ if_keyword ~ expr ~ block }
-else_clause = { else_keyword ~ block }
-if_statement = { if_keyword ~ expr ~ block ~ (blank* ~ else_if_clause)* ~ blank* ~ else_clause? }
+else_if_clause = ${ else_keyword ~ gap ~ if_keyword ~ gap ~ expr ~ gap ~ block }
+else_clause = ${ else_keyword ~ gap ~ block }
+if_statement = ${ if_keyword ~ gap ~ expr ~ gap ~ block ~ gap ~ (blank* ~ gap ~ else_if_clause ~ gap)* ~ blank* ~ gap ~ else_clause? }
 
 // Commands
 // Structural rules with special syntax stay as PEG rules.
@@ -142,7 +145,7 @@ async_statement_block = { async_keyword ~ sep? ~ block }
 // LET $var = WITH_IO [flags] ASYNC <single command> binds a pipe-wired
 // background task. The bindings apply inside the task thread. Block form is
 // rejected during lowering: use LET $var = ASYNC { ... } instead.
-let_async_statement = { let_keyword ~ dollar_ident ~ "=" ~ ("ASYNC" ~ (block | command_inner) | with_io_command) }
+let_async_statement = ${ let_keyword ~ gap ~ dollar_ident ~ gap ~ "=" ~ gap ~ ("ASYNC" ~ gap ~ (block | command_inner) | with_io_command) }
 
 // AWAIT $var — block until task $var completes, propagate error if failed.
 // NOTE: explicit `sep?` (not implicit whitespace) so this rule also matches
@@ -190,6 +193,13 @@ instruction = ${ command_name ~ (sep ~ argument)* }
 command_name = @{ ASCII_ALPHA_UPPER ~ (ASCII_ALPHA_UPPER | ASCII_DIGIT | "_")* }
 
 sep = _{ WHITESPACE+ }
+
+// Explicit whitespace for compound-atomic rules, replicating exactly what
+// implicit matching (WHITESPACE | COMMENT) accepts at top level. Atomic
+// parents (WITH_IO, TIMEOUT, ASYNC bodies) suppress implicit whitespace, so
+// nestable rules carry their own gaps and behave identically in both contexts.
+// `gap` intentionally excludes linebreaks, matching implicit matching.
+gap = _{ (WHITESPACE | COMMENT)* }
 
 // Unquoted arguments — Docker-style bare words.
 // Leading !$ rejects tokens starting with $ (forces $var to expr).

@@ -234,7 +234,7 @@ mod tests {
     use std::sync::Mutex;
 
     // For Windows, fixing COMSPEC override test race condition
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn shell_program_prefers_env_override() {
@@ -349,6 +349,7 @@ mod tests {
 
 #[cfg(test)]
 mod interactive_shell_tests {
+    use super::tests::ENV_LOCK;
     use super::{clear_shell_command_hook, set_shell_command_hook, spawn_interactive_shell};
     use crate::CommandSnapshot;
     use anyhow::Result;
@@ -358,6 +359,10 @@ mod interactive_shell_tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn spawn_interactive_shell_builds_command_for_platform() -> Result<()> {
+        // Serializes against sibling tests that mutate SHELL/COMSPEC: the
+        // snapshot below bakes in `shell_program()` at build time and
+        // re-reads it at assert time, so a concurrent mutation fails it.
+        let _lock = ENV_LOCK.lock().expect("env lock");
         let workspace = GuardedPath::tempdir()?;
         let workspace_root = workspace.as_guarded_path().clone();
         let cwd = workspace_root.join("subdir")?;
