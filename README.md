@@ -1255,25 +1255,35 @@ Environment variables understood by the toolchain (workspace roots, caching fing
 ## GitHub Actions Integration
 
 OxDock scripts can emit GitHub Actions workflow commands using native DSL primitives.
-All examples below use `[env:GITHUB_ACTIONS]` guards so they execute on CI runners
-but are skipped during local `docs_conformance` tests.
+Steps that only make sense on a runner live inside `[env:GITHUB_ACTIONS]` blocks:
+guards consult the script environment, so each snippet first bridges the runner
+variable in with `INHERIT_ENV`. Where `GITHUB_ACTIONS` is absent the whole block
+skips and `docs_conformance` still passes; on a hosted runner it executes.
 
 ### Log annotations
 
 `ECHO` writes to stdout, which GitHub Actions intercepts for annotations:
 
 ```oxdock
-ECHO "::notice::test notice message"
-ECHO "::warning::test warning message"
-ECHO "::error::test error message"
+INHERIT_ENV [GITHUB_ACTIONS]
+[env:GITHUB_ACTIONS] {
+    ECHO "::notice::test notice message"
+    ECHO "::warning::test warning message"
+    ECHO "::error::test error message"
+}
 ```
 
 ### Collapsible log groups
 
+Group markers go through `ECHO` — no shell required:
+
 ```oxdock
-RUN echo "::group::unit tests"
-RUN echo "running tests"
-RUN echo "::endgroup::"
+INHERIT_ENV [GITHUB_ACTIONS]
+[env:GITHUB_ACTIONS] {
+    ECHO "::group::unit tests"
+    ECHO "running tests"
+    ECHO "::endgroup::"
+}
 ```
 
 ### Job summary, step outputs, and environment variables
@@ -1281,9 +1291,12 @@ RUN echo "::endgroup::"
 `APPEND` writes to append-only runner state files without truncating earlier entries:
 
 ```oxdock
-APPEND dist/summary.md "### Build Report\n- Passed: 123\n- Failed: 0\n"
-APPEND dist/outputs.txt "artifact_path=dist/app.tar\n"
-APPEND dist/env.txt "NOTEBOOK_MODE=release\n"
+INHERIT_ENV [GITHUB_ACTIONS]
+[env:GITHUB_ACTIONS] {
+    APPEND dist/summary.md "### Build Report\n- Passed: 123\n- Failed: 0\n"
+    APPEND dist/outputs.txt "artifact_path=dist/app.tar\n"
+    APPEND dist/env.txt "NOTEBOOK_MODE=release\n"
+}
 ```
 
 On GitHub Actions, replace the paths with the runner-provided env vars (`{{ env:GITHUB_STEP_SUMMARY }}`, `{{ env:GITHUB_OUTPUT }}`, `{{ env:GITHUB_ENV }}`):
