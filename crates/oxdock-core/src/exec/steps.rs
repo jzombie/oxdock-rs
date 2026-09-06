@@ -685,7 +685,10 @@ fn execute_steps_inner<P: ProcessManager>(
             if failed_status.is_none() && reap_named {
                 let entries: Vec<(u64, Arc<TaskEntry>)> = {
                     let named = state.named_tasks.lock().unwrap_or_else(|e| e.into_inner());
-                    named.iter().map(|(id, entry)| (*id, Arc::clone(entry))).collect()
+                    named
+                        .iter()
+                        .map(|(id, entry)| (*id, Arc::clone(entry)))
+                        .collect()
                 };
                 for (id, entry) in &entries {
                     enum Poll {
@@ -694,8 +697,7 @@ fn execute_steps_inner<P: ProcessManager>(
                         CompletedErr(anyhow::Error),
                     }
                     let poll = {
-                        let mut guard =
-                            entry.state.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut guard = entry.state.lock().unwrap_or_else(|e| e.into_inner());
                         match guard.phase {
                             TaskPhase::Running | TaskPhase::Awaiting => {
                                 match guard.handle.as_mut() {
@@ -750,15 +752,12 @@ fn execute_steps_inner<P: ProcessManager>(
                 }
                 if reap_named {
                     let entries: Vec<Arc<TaskEntry>> = {
-                        let named =
-                            state.named_tasks.lock().unwrap_or_else(|e| e.into_inner());
+                        let named = state.named_tasks.lock().unwrap_or_else(|e| e.into_inner());
                         named.values().cloned().collect()
                     };
-                    let mut to_kill: Vec<(Arc<TaskEntry>, Box<dyn BackgroundHandle>)> =
-                        Vec::new();
+                    let mut to_kill: Vec<(Arc<TaskEntry>, Box<dyn BackgroundHandle>)> = Vec::new();
                     for entry in &entries {
-                        let mut guard =
-                            entry.state.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut guard = entry.state.lock().unwrap_or_else(|e| e.into_inner());
                         match guard.phase {
                             TaskPhase::Running | TaskPhase::Awaiting => {
                                 guard.phase = TaskPhase::Cancelled;
@@ -791,8 +790,7 @@ fn execute_steps_inner<P: ProcessManager>(
                     named
                         .values()
                         .filter(|entry| {
-                            let guard =
-                                entry.state.lock().unwrap_or_else(|e| e.into_inner());
+                            let guard = entry.state.lock().unwrap_or_else(|e| e.into_inner());
                             matches!(guard.phase, TaskPhase::Cancelled) && !guard.reaped
                         })
                         .cloned()

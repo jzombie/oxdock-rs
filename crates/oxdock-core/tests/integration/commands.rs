@@ -1353,7 +1353,10 @@ fn cancel_blocks_and_await_reports_cancelled() {
     assert!(msg.contains("cancelled"), "{msg}");
     // Blocking CANCEL returns deterministically, so the pipeline continues
     // to the next step instead of hanging on the 30s SLEEP.
-    assert!(exists(&root, "resumed.txt"), "pipeline must resume after CANCEL");
+    assert!(
+        exists(&root, "resumed.txt"),
+        "pipeline must resume after CANCEL"
+    );
 }
 
 #[test]
@@ -1367,10 +1370,7 @@ fn cancel_double_reports_already_cancelled() {
         CANCEL $t
     "#};
     let err = run_script(&root, script).expect_err("second CANCEL must fail");
-    assert!(
-        err.to_string().contains("already cancelled"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("already cancelled"), "{err}");
 }
 
 #[test]
@@ -1381,7 +1381,8 @@ fn cancel_previously_awaited_task_fails() {
     let err = run_script(&root, "LET $t = ASYNC ECHO hi\nAWAIT $t\nCANCEL $t\n")
         .expect_err("CANCEL after AWAIT must fail");
     assert!(
-        err.to_string().contains("already been awaited or does not exist"),
+        err.to_string()
+            .contains("already been awaited or does not exist"),
         "{err}"
     );
 }
@@ -1636,20 +1637,11 @@ fn for_loop_body_mutations_do_not_leak() {
     // Each iteration started back in 'w': both files land in 'w/sub'
     // with inner bindings (a leaked WORKDIR would target 'w/sub/sub').
     let sub = root.join("w").unwrap().join("sub").unwrap();
-    assert_eq!(
-        read_trimmed(&sub.join("a.txt").unwrap()),
-        "inner-inner"
-    );
-    assert_eq!(
-        read_trimmed(&sub.join("b.txt").unwrap()),
-        "inner-inner"
-    );
+    assert_eq!(read_trimmed(&sub.join("a.txt").unwrap()), "inner-inner");
+    assert_eq!(read_trimmed(&sub.join("b.txt").unwrap()), "inner-inner");
     // Loop exit restored CWD and reverted LET/ENV.
     let w = root.join("w").unwrap();
-    assert_eq!(
-        read_trimmed(&w.join("after.txt").unwrap()),
-        "outer-outer"
-    );
+    assert_eq!(read_trimmed(&w.join("after.txt").unwrap()), "outer-outer");
 }
 
 // ---------------------------------------------------------------------------

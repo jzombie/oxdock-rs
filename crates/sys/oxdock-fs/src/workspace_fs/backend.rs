@@ -262,8 +262,8 @@ mod miri_backend {
     impl Clone for MiriBackend {
         fn clone(&self) -> Self {
             Self {
-                root_state: self.root_state.as_ref().map(|s| Arc::clone(s)),
-                build_state: self.build_state.as_ref().map(|s| Arc::clone(s)),
+                root_state: self.root_state.as_ref().map(Arc::clone),
+                build_state: self.build_state.as_ref().map(Arc::clone),
                 root_path: self.root_path.clone(),
             }
         }

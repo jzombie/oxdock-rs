@@ -50,7 +50,7 @@ pub fn oxdock_embed(input: TokenStream) -> TokenStream {
     expand_embed_tokens(&input).into()
 }
 
-/// Executes the DSL like [`oxdock_embed`] but emits no runtime module. Use this when
+/// Executes the DSL like [`oxdock_embed!`] but emits no runtime module. Use this when
 /// the assets only need to exist during the build.
 #[proc_macro]
 pub fn oxdock_prepare(input: TokenStream) -> TokenStream {
