@@ -1,0 +1,5 @@
+CANCEL $task
+ASYNC CANCEL $task
+TIMEOUT 5s CANCEL $task
+LET $a = ASYNC TIMEOUT 5s RUN "echo hi"
+TIMEOUT 5s ASYNC RUN "echo hi"

@@ -1,16 +1,17 @@
 [package]
 name = "fixture-ast-commands"
-version = "0.6.0-alpha"
+version = "0.0.0"
 edition = "2024"
-publish = false
 license = "Apache-2.0"
+
+# This crate should not be published
+publish = false
+
+[[bin]]
+name = "ast_commands"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-oxdock-core.workspace = true
 oxdock-fs.workspace = true
-oxdock-parser.workspace = true
-oxdock-process.workspace = true
 oxdock-logic-tests.workspace = true
-sha2.workspace = true
-toml_edit.workspace = true

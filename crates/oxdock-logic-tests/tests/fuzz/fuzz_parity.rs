@@ -1,5 +1,5 @@
 use oxdock_parser::ast::*;
-use oxdock_parser::{parse_braced_tokens, parse_script};
+use oxdock_parser::parse_braced_tokens;
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
 use std::str::FromStr;
@@ -17,16 +17,10 @@ fn arb_platform_guard() -> impl Strategy<Value = PlatformGuard> {
 
 fn arb_guard() -> impl Strategy<Value = Guard> {
     prop_oneof![
-        (arb_platform_guard(), any::<bool>())
-            .prop_map(|(target, invert)| Guard::Platform { target, invert }),
-        ("[a-zA-Z_][a-zA-Z0-9_]*", any::<bool>())
-            .prop_map(|(key, invert)| Guard::EnvExists { key, invert }),
-        (
-            "[a-zA-Z_][a-zA-Z0-9_]*",
-            "[a-zA-Z_][a-zA-Z0-9_]*",
-            any::<bool>(),
-        )
-            .prop_map(|(key, value, invert)| Guard::EnvEquals { key, value, invert }),
+        arb_platform_guard().prop_map(|target| Guard::Platform { target }),
+        "[a-zA-Z_][a-zA-Z0-9_]*".prop_map(|key| Guard::EnvExists { key }),
+        ("[a-zA-Z_][a-zA-Z0-9_]*", "[a-zA-Z_][a-zA-Z0-9_]*",)
+            .prop_map(|(key, value)| Guard::EnvEquals { key, value }),
     ]
 }
 
@@ -55,32 +49,13 @@ fn arb_guard_expr() -> impl Strategy<Value = GuardExpr> {
 
 fn canonical_not(expr: GuardExpr) -> GuardExpr {
     match expr {
-        GuardExpr::Predicate(guard) => GuardExpr::Predicate(invert_guard_predicate(guard)),
         GuardExpr::Not(inner) => *inner,
-        other => !other,
-    }
-}
-
-fn invert_guard_predicate(guard: Guard) -> Guard {
-    match guard {
-        Guard::Platform { target, invert } => Guard::Platform {
-            target,
-            invert: !invert,
-        },
-        Guard::EnvExists { key, invert } => Guard::EnvExists {
-            key,
-            invert: !invert,
-        },
-        Guard::EnvEquals { key, value, invert } => Guard::EnvEquals {
-            key,
-            value,
-            invert: !invert,
-        },
+        other => GuardExpr::Not(Box::new(other)),
     }
 }
 
 fn safe_string() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_./-]+"
+    "[a-zA-Z0-9_./:-]+"
         .prop_filter("Avoids comments", |s| !s.contains("//"))
         .prop_filter("Avoids invalid numeric prefixes", |s| {
             !has_invalid_prefixed_literal(s)
@@ -178,7 +153,6 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         }),
         safe_msg().prop_map(|s| StepKind::Run(s.into())),
         safe_msg().prop_map(|s| StepKind::Echo(s.into())),
-        safe_msg().prop_map(|s| StepKind::RunBg(s.into())),
         (safe_string(), safe_string()).prop_map(|(from, to)| StepKind::Copy {
             from_current_workspace: false,
             from: from.into(),
@@ -192,6 +166,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         prop::option::of(safe_string()).prop_map(|s| StepKind::Ls(s.map(Into::into))),
         Just(StepKind::Cwd),
         prop::option::of(safe_string()).prop_map(|s| StepKind::Read(s.map(Into::into))),
+        "[a-zA-Z_][a-zA-Z0-9_]*".prop_map(|v| StepKind::ReadLine { var: v }),
         (safe_string(), safe_msg()).prop_map(|(path, contents)| StepKind::Write {
             path: path.into(),
             contents: Some(contents.into())
@@ -245,6 +220,10 @@ fn arb_step() -> impl Strategy<Value = Step> {
         })
 }
 
+fn arg_content_eq(a: &Arg, b: &Arg) -> bool {
+    a.as_str() == b.as_str()
+}
+
 fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
     assert_eq!(left.guard, right.guard, "Guards mismatch: {}", msg);
     assert_eq!(
@@ -260,10 +239,164 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
 
     match (&left.kind, &right.kind) {
         (StepKind::Run(l), StepKind::Run(r)) => {
-            assert_eq!(l, r, "Run cmd mismatch: {}", msg)
+            assert_eq!(l.as_str(), r.as_str(), "Run cmd mismatch: {}", msg)
         }
-        (StepKind::RunBg(l), StepKind::RunBg(r)) => {
-            assert_eq!(l, r, "RunBg cmd mismatch: {}", msg)
+        (StepKind::Workdir(l), StepKind::Workdir(r)) => {
+            assert!(arg_content_eq(l, r), "Workdir mismatch: {}", msg)
+        }
+        (StepKind::Echo(l), StepKind::Echo(r)) => {
+            assert!(arg_content_eq(l, r), "Echo mismatch: {}", msg)
+        }
+        (StepKind::Mkdir(l), StepKind::Mkdir(r)) => {
+            assert!(arg_content_eq(l, r), "Mkdir mismatch: {}", msg)
+        }
+        (StepKind::Ls(l), StepKind::Ls(r)) => assert_eq!(
+            l.as_ref().map(|a| a.as_str()),
+            r.as_ref().map(|a| a.as_str()),
+            "Ls mismatch: {}",
+            msg
+        ),
+        (StepKind::Read(l), StepKind::Read(r)) => assert_eq!(
+            l.as_ref().map(|a| a.as_str()),
+            r.as_ref().map(|a| a.as_str()),
+            "Read mismatch: {}",
+            msg
+        ),
+        (
+            StepKind::Write {
+                path: lp,
+                contents: lc,
+            },
+            StepKind::Write {
+                path: rp,
+                contents: rc,
+            },
+        ) => {
+            assert!(arg_content_eq(lp, rp), "Write path mismatch: {}", msg);
+            assert_eq!(
+                lc.as_ref().map(|a| a.as_str()),
+                rc.as_ref().map(|a| a.as_str()),
+                "Write contents mismatch: {}",
+                msg
+            );
+        }
+        (
+            StepKind::Append {
+                path: lp,
+                contents: lc,
+            },
+            StepKind::Append {
+                path: rp,
+                contents: rc,
+            },
+        ) => {
+            assert!(arg_content_eq(lp, rp), "Append path mismatch: {}", msg);
+            assert_eq!(
+                lc.as_ref().map(|a| a.as_str()),
+                rc.as_ref().map(|a| a.as_str()),
+                "Append contents mismatch: {}",
+                msg
+            );
+        }
+        (
+            StepKind::Copy {
+                from: lf, to: lt, ..
+            },
+            StepKind::Copy {
+                from: rf, to: rt, ..
+            },
+        ) => {
+            assert!(arg_content_eq(lf, rf), "Copy from mismatch: {}", msg);
+            assert!(arg_content_eq(lt, rt), "Copy to mismatch: {}", msg);
+        }
+        (
+            StepKind::CopyGit {
+                rev: lr,
+                from: lf,
+                to: lt,
+                ..
+            },
+            StepKind::CopyGit {
+                rev: rr,
+                from: rf,
+                to: rt,
+                ..
+            },
+        ) => {
+            assert!(arg_content_eq(lr, rr), "CopyGit rev mismatch: {}", msg);
+            assert!(arg_content_eq(lf, rf), "CopyGit from mismatch: {}", msg);
+            assert!(arg_content_eq(lt, rt), "CopyGit to mismatch: {}", msg);
+        }
+        (StepKind::Symlink { from: lf, to: lt }, StepKind::Symlink { from: rf, to: rt }) => {
+            assert!(arg_content_eq(lf, rf), "Symlink from mismatch: {}", msg);
+            assert!(arg_content_eq(lt, rt), "Symlink to mismatch: {}", msg);
+        }
+        (
+            StepKind::AssertFile {
+                hash: lh,
+                path: lp,
+                contents: lc,
+            },
+            StepKind::AssertFile {
+                hash: rh,
+                path: rp,
+                contents: rc,
+            },
+        ) => {
+            assert_eq!(lh, rh, "AssertFile hash mismatch: {}", msg);
+            assert!(arg_content_eq(lp, rp), "AssertFile path mismatch: {}", msg);
+            assert_eq!(
+                lc.as_ref().map(|a| a.as_str()),
+                rc.as_ref().map(|a| a.as_str()),
+                "AssertFile contents mismatch: {}",
+                msg
+            );
+        }
+        (StepKind::AssertDir(l), StepKind::AssertDir(r)) => {
+            assert!(arg_content_eq(l, r), "AssertDir mismatch: {}", msg)
+        }
+        (StepKind::AssertAbsent(l), StepKind::AssertAbsent(r)) => {
+            assert!(arg_content_eq(l, r), "AssertAbsent mismatch: {}", msg)
+        }
+        (StepKind::AssertStdout(l), StepKind::AssertStdout(r)) => {
+            assert!(arg_content_eq(l, r), "AssertStdout mismatch: {}", msg)
+        }
+        (StepKind::HashSha256 { path: lp }, StepKind::HashSha256 { path: rp }) => {
+            assert!(arg_content_eq(lp, rp), "HashSha256 mismatch: {}", msg)
+        }
+        (StepKind::ReadLine { var: lv }, StepKind::ReadLine { var: rv }) => {
+            assert_eq!(lv, rv, "ReadLine mismatch: {}", msg)
+        }
+        (
+            StepKind::Expand {
+                path: lp,
+                overrides: lo,
+            },
+            StepKind::Expand {
+                path: rp,
+                overrides: ro,
+            },
+        ) => {
+            assert_eq!(
+                lp.as_ref().map(|a| a.as_str()),
+                rp.as_ref().map(|a| a.as_str()),
+                "Expand path mismatch: {}",
+                msg
+            );
+            assert_eq!(
+                lo.len(),
+                ro.len(),
+                "Expand overrides length mismatch: {}",
+                msg
+            );
+            for ((lk, lv), (rk, rv)) in lo.iter().zip(ro.iter()) {
+                assert_eq!(lk, rk, "Expand override key mismatch: {}", msg);
+                assert!(
+                    arg_content_eq(lv, rv),
+                    "Expand override value mismatch: {}",
+                    msg
+                );
+            }
         }
         _ => assert_eq!(left.kind, right.kind, "Kind mismatch: {}", msg),
     }
@@ -279,7 +412,7 @@ proptest! {
         let s = step.to_string();
 
         // 1. Parse string
-        let parsed_steps = parse_script(&s).expect("failed to parse generated string");
+        let parsed_steps = oxdock_core::parse_script(&s).expect("failed to parse generated string");
         assert_eq!(parsed_steps.len(), 1);
         let mut parsed_step = parsed_steps[0].clone();
         parsed_step.scope_enter = 0;
@@ -289,7 +422,7 @@ proptest! {
 
         // 2. Parse tokens (if feature enabled)
         let ts: proc_macro2::TokenStream = s.parse().expect("failed to tokenize string");
-        let token_steps = parse_braced_tokens(&ts).expect("failed to parse tokens");
+        let token_steps = parse_braced_tokens(&ts, oxdock_core::lower_command).expect("failed to parse tokens");
 
         assert_eq!(token_steps.len(), 1);
         let mut token_step = token_steps[0].clone();

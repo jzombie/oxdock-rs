@@ -191,6 +191,47 @@ impl GuardedPath {
     pub(crate) fn from_guarded_parts(root: PathBuf, path: PathBuf) -> Self {
         Self { root, path }
     }
+
+    /// Evaluate a glob pattern against the sandbox root.
+    /// Normalizes backslashes, escapes the root path, and returns workspace-relative paths.
+    #[allow(
+        clippy::disallowed_types,
+        clippy::disallowed_methods,
+        clippy::disallowed_macros
+    )]
+    pub fn glob_paths(&self, pattern: &str) -> std::result::Result<Vec<PathBuf>, std::io::Error> {
+        let clean = if cfg!(not(windows)) && pattern.as_bytes().get(1) == Some(&b':') {
+            &pattern[2..]
+        } else {
+            pattern
+        };
+        let posix = clean.replace('\\', "/");
+        let path_pattern = Path::new(&posix);
+
+        let rel_pattern = if path_pattern.is_absolute() {
+            path_pattern
+                .strip_prefix(&self.root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| posix.trim_start_matches('/').to_string())
+        } else {
+            posix.trim_start_matches('/').to_string()
+        };
+
+        let root_str = self.root.to_string_lossy().replace('\\', "/");
+        let escaped_root = glob::Pattern::escape(&root_str);
+        let search = format!("{}/{}", escaped_root, rel_pattern);
+
+        let mut results = Vec::new();
+        for entry in glob::glob(&search)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+        {
+            let path = entry?;
+            if path.starts_with(&self.root) {
+                results.push(path);
+            }
+        }
+        Ok(results)
+    }
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]

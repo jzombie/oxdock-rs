@@ -15,7 +15,7 @@ use proc_macro2::{Delimiter, LineColumn, Spacing, TokenStream as TokenStream2, T
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token};
 
-/// Parsed macro arguments for `embed!` and `prepare!`.
+/// Parsed macro arguments for `oxdock_embed!` and `oxdock_prepare!`.
 pub struct DslMacroInput {
     pub name: Ident,
     pub script: ScriptSource,
@@ -142,6 +142,63 @@ fn current_line_command(line: &str) -> Option<Command> {
     Command::parse(head)
 }
 
+/// Check if a brace group is a `{{ ... }}` template placeholder.
+/// Rust lexes `{{ env:KEY }}` as a brace group containing a single nested brace group.
+fn is_template_group(g: &proc_macro2::Group) -> bool {
+    let mut inner_tokens = g.stream().into_iter();
+    matches!(
+        inner_tokens.next(),
+        Some(TokenTree::Group(inner))
+            if inner.delimiter() == Delimiter::Brace && inner_tokens.next().is_none()
+    )
+}
+
+/// Emit a `{{ ... }}` template placeholder on the current line,
+/// reconstructing interior spacing from span positions.
+fn emit_template_placeholder(
+    g: &proc_macro2::Group,
+    line: &mut String,
+    span: proc_macro2::Span,
+    gap_space: bool,
+    last_span_end: &mut Option<LineColumn>,
+) {
+    let Some(TokenTree::Group(inner)) = g.stream().into_iter().next() else {
+        unreachable!("is_template_group checked above")
+    };
+    push_fragment(line, "{{", gap_space);
+
+    let mut inner_tokens = inner.stream().into_iter();
+    let leading_space = inner_tokens
+        .next()
+        .map(|tt| {
+            let start = tt.span().start();
+            start.line == span.start().line && start.column > span.start().column + 2
+        })
+        .unwrap_or(false);
+    if leading_space {
+        line.push(' ');
+    }
+    let mut inner_span_end = None;
+    let mut last_was_command = false;
+    let mut capture_has_inner = false;
+    walk(
+        inner.stream(),
+        line,
+        &mut Vec::new(),
+        &mut last_was_command,
+        false,
+        &mut capture_has_inner,
+        &mut inner_span_end,
+    )
+    .ok();
+    let trailing_space = inner_span_end
+        .map(|end| span.end().line == end.line && span.end().column > end.column + 2)
+        .unwrap_or(false);
+    let close_text = if trailing_space { " }}" } else { "}}" };
+    push_fragment(line, close_text, false);
+    *last_span_end = Some(span.end());
+}
+
 fn line_expects_inner_command(line: &str) -> bool {
     matches!(
         current_line_command(line),
@@ -150,10 +207,7 @@ fn line_expects_inner_command(line: &str) -> bool {
 }
 
 fn line_is_run_context(line: &str) -> bool {
-    matches!(
-        current_line_command(line),
-        Some(Command::Run | Command::RunBg)
-    )
+    matches!(current_line_command(line), Some(Command::Run))
 }
 
 fn walk(
@@ -179,8 +233,12 @@ fn walk(
                 if let Some((open, close)) = delim_pair(g.delimiter()) {
                     match g.delimiter() {
                         Delimiter::Brace => {
-                            if line.trim_end().ends_with('$') {
-                                push_fragment(line, &open.to_string(), gap_space);
+                            let trimmed = line.trim_end();
+
+                            // 1. Interpolation context: ${var} or #{expr}
+                            //    Keep the entire expression on one line.
+                            if trimmed.ends_with('$') || trimmed.ends_with('#') {
+                                push_fragment(line, &open.to_string(), false);
                                 *last_was_command = false;
                                 let mut inner_span_end = None;
                                 walk(
@@ -193,9 +251,15 @@ fn walk(
                                     &mut inner_span_end,
                                 )?;
                                 push_fragment(line, &close.to_string(), false);
-                            } else if *last_was_command {
-                                // Keep the opening brace attached to commands that expect an inner block
-                                // (e.g., WITH_IO block form), then break to a new line for the body.
+                            }
+                            // 2. Template placeholder: {{ env:KEY }}
+                            //    Rust lexes this as nested brace groups.
+                            else if is_template_group(&g) {
+                                emit_template_placeholder(&g, line, span, gap_space, last_span_end);
+                            }
+                            // 3. DSL statement block: WITH_IO [...] {, FOR ..., LET ...
+                            //    Attach opening brace to the current line, then walk body.
+                            else if !trimmed.is_empty() {
                                 push_fragment(line, &open.to_string(), gap_space);
                                 finalize_line(lines, line, capture_has_inner);
                                 *last_was_command = false;
@@ -212,91 +276,33 @@ fn walk(
                                 finalize_line(lines, line, capture_has_inner);
                                 push_fragment(line, &close.to_string(), false);
                                 finalize_line(lines, line, capture_has_inner);
-                            } else {
-                                // `{{ ... }}` template placeholder: Rust lexes
-                                // this as a brace group whose stream is a single
-                                // nested brace group. Emit both braces literally
-                                // on the current line so the string DSL sees the
-                                // templated_arg shape it expects.
-                                let mut inner_tokens = g.stream().into_iter();
-                                let nested_is_template = matches!(
-                                    inner_tokens.next(),
-                                    Some(TokenTree::Group(inner))
-                                        if inner.delimiter() == Delimiter::Brace
-                                            && inner_tokens.next().is_none()
-                                );
-                                if nested_is_template {
-                                    let Some(TokenTree::Group(inner)) =
-                                        g.stream().into_iter().next()
-                                    else {
-                                        unreachable!("nested_is_template checked above")
-                                    };
-                                    push_fragment(line, "{{", gap_space);
-
-                                    // Interior spacing is reconstructed
-                                    // explicitly on both sides: exactly two
-                                    // braces separate real content from the
-                                    // outer delimiters, so a larger offset on
-                                    // either side means source whitespace.
-                                    let mut inner_tokens = inner.stream().into_iter();
-                                    let leading_space = inner_tokens
-                                        .next()
-                                        .map(|tt| {
-                                            let start = tt.span().start();
-                                            start.line == span.start().line
-                                                && start.column > span.start().column + 2
-                                        })
-                                        .unwrap_or(false);
-                                    if leading_space {
-                                        line.push(' ');
-                                    }
-                                    let mut inner_span_end = None;
-                                    walk(
-                                        inner.stream(),
-                                        line,
-                                        lines,
-                                        last_was_command,
-                                        in_interpolation,
-                                        capture_has_inner,
-                                        &mut inner_span_end,
-                                    )?;
-                                    let trailing_space = inner_span_end
-                                        .map(|end| {
-                                            span.end().line == end.line
-                                                && span.end().column > end.column + 2
-                                        })
-                                        .unwrap_or(false);
-                                    let close_text = if trailing_space { " }}" } else { "}}" };
-                                    push_fragment(line, close_text, false);
-                                    *last_span_end = Some(span.end());
-                                } else {
-                                    finalize_line(lines, line, capture_has_inner);
-                                    line.push(open);
-                                    finalize_line(lines, line, capture_has_inner);
-                                    *last_was_command = false;
-                                    let mut inner_span_end = None;
-                                    walk(
-                                        g.stream(),
-                                        line,
-                                        lines,
-                                        last_was_command,
-                                        false,
-                                        capture_has_inner,
-                                        &mut inner_span_end,
-                                    )?;
-                                    finalize_line(lines, line, capture_has_inner);
-                                    line.push(close);
-                                    finalize_line(lines, line, capture_has_inner);
-                                    *last_was_command = false;
-                                }
+                            }
+                            // 4. Standalone / top-level block
+                            else {
+                                finalize_line(lines, line, capture_has_inner);
+                                line.push(open);
+                                finalize_line(lines, line, capture_has_inner);
+                                *last_was_command = false;
+                                let mut inner_span_end = None;
+                                walk(
+                                    g.stream(),
+                                    line,
+                                    lines,
+                                    last_was_command,
+                                    false,
+                                    capture_has_inner,
+                                    &mut inner_span_end,
+                                )?;
+                                finalize_line(lines, line, capture_has_inner);
+                                line.push(close);
+                                finalize_line(lines, line, capture_has_inner);
+                                *last_was_command = false;
                             }
                         }
                         Delimiter::Bracket => {
                             if *last_was_command {
-                                // Keep bracketed flags (e.g., WITH_IO [...] or guard lists) on the same line
-                                // when they immediately follow a command token. This avoids rendering a
-                                // newline between the command and its bracket payload, which the string DSL
-                                // parser would reject.
+                                // First bracket group after a command: attach to the command
+                                // (e.g., INHERIT_ENV [keys], WITH_IO [bindings]).
                                 push_fragment(line, &open.to_string(), gap_space);
                                 let mut inner_span_end = None;
                                 walk(
@@ -309,8 +315,12 @@ fn walk(
                                     &mut inner_span_end,
                                 )?;
                                 push_fragment(line, &close.to_string(), false);
-                                *last_was_command = true;
+                                // Reset so the next bracket group (if any) is recognized as a guard.
+                                *last_was_command = false;
                             } else {
+                                // Guard bracket (e.g., [#flag], [env:KEY])
+                                // or second bracket group after a command.
+                                // Finalize previous line and start guard on a new line.
                                 finalize_line(lines, line, capture_has_inner);
                                 push_fragment(line, &open.to_string(), gap_space);
                                 finalize_line(lines, line, capture_has_inner);
@@ -392,12 +402,20 @@ fn walk(
                     continue;
                 }
                 let is_command = super::Command::parse(&ident_text).is_some();
+                // LET and FOR introduce new statements but aren't in the Command enum.
+                // They must still trigger line finalization so they start on a new line.
+                let is_new_statement = is_command
+                    || matches!(ident_text.as_str(), "LET" | "FOR" | "IF" | "ELSE" | "ASYNC");
                 let trimmed = line.trim();
                 let trimmed_empty = trimmed.is_empty();
                 let guard_prefix = trimmed.starts_with('[');
                 let line_requires_inner = line_expects_inner_command(trimmed);
                 let mut should_finalize = false;
-                if is_command && !trimmed_empty && !guard_prefix {
+                // ELSE always appends to current line — grammar handles } \n ELSE via blank*
+                // IF after ELSE stays on same line (ELSE IF clause)
+                if ident_text == "ELSE" || (ident_text == "IF" && trimmed.ends_with("ELSE")) {
+                    should_finalize = false;
+                } else if is_new_statement && !trimmed_empty && !guard_prefix {
                     let current_expects_inner = line_expects_inner_command(trimmed);
                     should_finalize = !line_is_run_context(trimmed) && !current_expects_inner;
                 }
@@ -406,6 +424,7 @@ fn walk(
                     && !guard_prefix
                     && *capture_has_inner
                     && line_requires_inner
+                    && ident_text != "ASYNC"
                 {
                     finalize_line(lines, line, capture_has_inner);
                 }
@@ -422,7 +441,7 @@ fn walk(
                 {
                     *capture_has_inner = true;
                 }
-                *last_was_command = is_command;
+                *last_was_command = is_new_statement;
                 *last_span_end = Some(span.end());
             }
         }
@@ -452,9 +471,13 @@ pub fn script_from_braced_tokens(ts: &TokenStream2) -> Result<String> {
 }
 
 /// Parse a braced token stream directly into DSL steps.
-pub fn parse_braced_tokens(ts: &TokenStream2) -> Result<Vec<Step>> {
+/// Requires a lowering function — callers must provide it.
+pub fn parse_braced_tokens(
+    ts: &TokenStream2,
+    lower: impl Fn(&str, Vec<crate::Arg>) -> anyhow::Result<crate::StepKind>,
+) -> Result<Vec<Step>> {
     let script = script_from_braced_tokens(ts)?;
-    parse_script(&script)
+    parse_script(&script, lower)
 }
 
 #[cfg(test)]
@@ -463,6 +486,11 @@ mod tests {
     use crate::StepKind;
     use indoc::indoc;
     use quote::quote;
+
+    /// Mock lowering for macro_input tests.
+    fn mock_lower(name: &str, args: Vec<crate::Arg>) -> anyhow::Result<StepKind> {
+        crate::test_lower_mock::lower(name, args)
+    }
 
     #[test]
     fn parse_dsl_macro_input_literal_script() {
@@ -508,7 +536,7 @@ mod tests {
                 WRITE inner.txt inside
             }
         };
-        let steps = parse_braced_tokens(&ts).expect("parse guarded block");
+        let steps = parse_braced_tokens(&ts, mock_lower).expect("parse guarded block");
         assert_eq!(steps.len(), 1);
     }
 
@@ -526,7 +554,7 @@ mod tests {
             "template placeholder must round-trip"
         );
 
-        let steps = parse_braced_tokens(&ts).expect("parse templated script");
+        let steps = parse_braced_tokens(&ts, mock_lower).expect("parse templated script");
         match &steps[0].kind {
             StepKind::Write { path, contents } => {
                 assert_eq!(path.as_ref(), "dist/hello.txt");
@@ -547,8 +575,8 @@ mod tests {
         "#}
         .trim();
         let ts: proc_macro2::TokenStream = text.parse().expect("tokens");
-        let braced = parse_braced_tokens(&ts).expect("braced parse");
-        let string = parse_script(text).expect("string parse");
+        let braced = parse_braced_tokens(&ts, mock_lower).expect("braced parse");
+        let string = parse_script(text, mock_lower).expect("string parse");
         assert_eq!(braced, string, "template AST parity between forms");
     }
 
@@ -563,9 +591,10 @@ mod tests {
                 .unwrap_or_else(|e| panic!("render failed for {source}: {e}"));
             assert_eq!(script, source, "spacing must round-trip verbatim");
 
-            let steps = parse_braced_tokens(&ts).expect("parse");
+            let steps = parse_braced_tokens(&ts, mock_lower).expect("parse");
             match &steps[0].kind {
-                StepKind::Write { contents, .. } => {
+                StepKind::Write { path, contents } => {
+                    assert_eq!(path.as_ref(), "f.txt", "path must match for {source}");
                     assert_eq!(
                         contents.as_ref().map(AsRef::as_ref),
                         Some(source.strip_prefix("WRITE f.txt ").expect("prefix")),

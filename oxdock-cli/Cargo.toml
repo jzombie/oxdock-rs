@@ -14,11 +14,6 @@ normal = ["tracing"]
 development = []
 build = []
 
-# Use non-cli-suffixed binary name if installing from Cargo
-[[bin]]
-name = "oxdock"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
 indoc.workspace = true

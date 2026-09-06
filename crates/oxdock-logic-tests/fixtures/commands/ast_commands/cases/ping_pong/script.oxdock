@@ -1,0 +1,28 @@
+# Bidirectional live-streaming proof (no timers, no external helpers):
+# the background task echoes chunks back while both pipes stay open.
+# Keeper tasks hold one writer per pipe so mid-test EOFs are impossible;
+# they exit via one-shot control pipes at the end. If the engine buffered
+# streams until EOF, the first READ_LINE would block forever (the
+# background task holds its stdout open while waiting for chunk_2),
+# deadlocking Exchange 1 deterministically.
+LET $keep_tx = WITH_IO [stdout=pipe:tx, stdin=pipe:ctl_tx] ASYNC READ_LINE $ktx
+LET $keep_rx = WITH_IO [stdout=pipe:rx, stdin=pipe:ctl_rx] ASYNC READ_LINE $krx
+LET $live = ASYNC {
+    WITH_IO [stdin=pipe:tx] READ_LINE $a
+    WITH_IO [stdout=pipe:rx] ECHO "{{ $a }}"
+    WITH_IO [stdin=pipe:tx] READ_LINE $b
+    WITH_IO [stdout=pipe:rx] ECHO "{{ $b }}"
+    WITH_IO [stdin=pipe:tx] READ_LINE $c
+}
+WITH_IO [stdout=pipe:tx] ECHO "chunk_1"
+WITH_IO [stdin=pipe:rx] READ_LINE $reply_1
+WITH_IO [stdout=pipe:tx] ECHO "chunk_2"
+WITH_IO [stdin=pipe:rx] READ_LINE $reply_2
+WITH_IO [stdout=pipe:tx] ECHO "EXIT"
+AWAIT $live
+WITH_IO [stdout=pipe:ctl_tx] ECHO "done"
+WITH_IO [stdout=pipe:ctl_rx] ECHO "done"
+AWAIT $keep_tx
+AWAIT $keep_rx
+WRITE "reply_1.txt" "{{ $reply_1 }}"
+WRITE "reply_2.txt" "{{ $reply_2 }}"

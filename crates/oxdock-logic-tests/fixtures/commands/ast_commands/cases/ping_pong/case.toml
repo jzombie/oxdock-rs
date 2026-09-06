@@ -1,0 +1,4 @@
+name = "ping_pong"
+
+[expect]
+files = { "reply_1.txt" = "chunk_1", "reply_2.txt" = "chunk_2" }

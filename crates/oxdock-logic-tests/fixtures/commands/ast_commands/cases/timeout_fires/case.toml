@@ -1,0 +1,7 @@
+name = "timeout_fires"
+
+[expect]
+status = "failure"
+
+[expect.error]
+contains = "TIMEOUT"

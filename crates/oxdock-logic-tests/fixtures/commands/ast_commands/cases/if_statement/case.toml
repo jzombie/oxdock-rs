@@ -1,0 +1,5 @@
+name = "if_statement"
+
+[expect]
+files = { "result.txt" = "yes", "inverted.txt" = "inverted", "else.txt" = "fallback" }
+missing = ["skipped.txt"]

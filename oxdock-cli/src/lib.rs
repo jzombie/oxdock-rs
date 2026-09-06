@@ -8,8 +8,10 @@ use std::io::{self, IsTerminal, Read};
 use std::sync::{Arc, Mutex};
 
 use oxdock_core::{ExecIo, run_steps_with_context_result_with_io};
-pub use oxdock_core::{run_steps, run_steps_with_context, run_steps_with_context_result};
-pub use oxdock_parser::{Guard, Step, StepKind, parse_script};
+pub use oxdock_core::{
+    parse_script, run_steps, run_steps_with_context, run_steps_with_context_result,
+};
+pub use oxdock_parser::{Guard, Step, StepKind};
 pub use oxdock_process::shell_program;
 
 pub fn run() -> Result<()> {
@@ -17,7 +19,17 @@ pub fn run() -> Result<()> {
     let workspace_root = discover_workspace_root().context("guard workspace root")?;
 
     let mut args = std::env::args().skip(1);
-    let opts = Options::parse(&mut args, &workspace_root)?;
+    // `--help`/`-h` surfaces as the usage text in the parse error (parse must
+    // not exit the process itself: it is public library API). Print it and
+    // succeed so the binary exits 0.
+    let opts = match Options::parse(&mut args, &workspace_root) {
+        Ok(opts) => opts,
+        Err(err) if err.to_string() == usage() => {
+            print!("{err}");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
     execute(opts, workspace_root)
 }
 
@@ -40,6 +52,13 @@ impl Options {
     ) -> Result<Self> {
         let mut script: Option<ScriptSource> = None;
         let mut shell = false;
+        let mut set_script = |source: ScriptSource, origin: &str| -> Result<()> {
+            if script.is_some() {
+                bail!("script given multiple times ({origin})");
+            }
+            script = Some(source);
+            Ok(())
+        };
         while let Some(arg) = args.next() {
             if arg.is_empty() {
                 continue;
@@ -50,19 +69,34 @@ impl Options {
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--script requires a path"))?;
                     if p == "-" {
-                        script = Some(ScriptSource::Stdin);
+                        set_script(ScriptSource::Stdin, "--script -")?;
                     } else {
-                        script = Some(ScriptSource::Path(
-                            workspace_root
-                                .join(&p)
-                                .with_context(|| format!("guard script path {p}"))?,
-                        ));
+                        set_script(
+                            ScriptSource::Path(
+                                workspace_root
+                                    .join(&p)
+                                    .with_context(|| format!("guard script path {p}"))?,
+                            ),
+                            "--script",
+                        )?;
                     }
                 }
                 "--shell" => {
                     shell = true;
                 }
-                other => bail!("unexpected flag: {}", other),
+                "--help" | "-h" => {
+                    bail!("{}", usage());
+                }
+                "-" => set_script(ScriptSource::Stdin, "positional `-`")?,
+                other if other.starts_with('-') => bail!("unexpected flag: {}", other),
+                other => set_script(
+                    ScriptSource::Path(
+                        workspace_root
+                            .join(other)
+                            .with_context(|| format!("guard script path {other}"))?,
+                    ),
+                    "positional argument",
+                )?,
             }
         }
 
@@ -70,6 +104,21 @@ impl Options {
 
         Ok(Self { script, shell })
     }
+}
+
+/// Human-readable CLI usage, printed for `--help`/`-h`.
+pub fn usage() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let description = env!("CARGO_PKG_DESCRIPTION");
+    indoc::formatdoc! {"
+        oxdock {version} — {description}
+        Usage: oxdock [OPTIONS] [SCRIPT]
+          SCRIPT             script file path (same as `--script <file>`); `-` reads stdin
+          --script <file|->  script file under the workspace root, or `-` for stdin
+          --shell            run the script, then drop into an interactive shell (requires a TTY)
+          --help, -h         print this help and exit
+        With no script given, reads the script from stdin (must be piped unless `--shell`).
+    "}
 }
 
 pub fn execute(opts: Options, workspace_root: GuardedPath) -> Result<()> {
@@ -424,6 +473,103 @@ mod tests {
         match opts.script {
             ScriptSource::Path(path) => assert_eq!(path, script_path),
             ScriptSource::Stdin => panic!("expected path script"),
+        }
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_positional_script_path() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut args = vec!["script.txt".to_string()].into_iter();
+        let opts = Options::parse(&mut args, &workspace_root).expect("parse");
+        assert!(!opts.shell);
+        match opts.script {
+            ScriptSource::Path(path) => assert_eq!(
+                path,
+                workspace_root.join("script.txt").expect("script path")
+            ),
+            ScriptSource::Stdin => panic!("expected path script"),
+        }
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_positional_dash_reads_stdin() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let mut args = vec!["-".to_string()].into_iter();
+        let opts = Options::parse(&mut args, workspace.as_guarded_path()).expect("parse");
+        assert!(matches!(opts.script, ScriptSource::Stdin));
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_rejects_duplicate_script_sources() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let workspace_root = workspace.as_guarded_path().clone();
+        let mut args = vec![
+            "a.ox".to_string(),
+            "--script".to_string(),
+            "b.ox".to_string(),
+        ]
+        .into_iter();
+        let err = Options::parse(&mut args, &workspace_root)
+            .expect_err("expected duplicate script error");
+        assert!(err.to_string().contains("multiple times"), "{err:?}");
+
+        let mut args = vec!["a.ox".to_string(), "b.ox".to_string()].into_iter();
+        let err = Options::parse(&mut args, &workspace_root)
+            .expect_err("expected duplicate script error");
+        assert!(err.to_string().contains("multiple times"), "{err:?}");
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_rejects_unknown_flags() {
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        let mut args = vec!["--frobnicate".to_string()].into_iter();
+        let err = Options::parse(&mut args, workspace.as_guarded_path())
+            .expect_err("expected unknown flag error");
+        assert!(err.to_string().contains("unexpected flag"), "{err:?}");
+    }
+
+    #[test]
+    fn usage_describes_positional_script_and_help() {
+        let text = usage();
+        assert!(text.contains("Usage: oxdock"), "{text}");
+        assert!(text.contains("SCRIPT"), "{text}");
+        assert!(text.contains("--script"), "{text}");
+        assert!(text.contains("--help"), "{text}");
+        // Tagline is single-sourced from the package manifest, not hardcoded.
+        assert!(text.contains(env!("CARGO_PKG_DESCRIPTION")), "{text}");
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn options_parse_help_returns_usage_error_without_exiting() {
+        // Regression: parse is public library API and must return instead of
+        // terminating the process; `run()` turns this error into a clean exit 0.
+        let workspace = GuardedPath::tempdir().expect("tempdir");
+        for flag in ["--help", "-h"] {
+            let mut args = vec![flag.to_string()].into_iter();
+            let err = Options::parse(&mut args, workspace.as_guarded_path())
+                .expect_err("help flag must not parse as options");
+            assert_eq!(err.to_string(), usage());
         }
     }
 

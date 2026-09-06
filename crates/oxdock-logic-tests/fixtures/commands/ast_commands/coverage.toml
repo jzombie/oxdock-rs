@@ -11,15 +11,17 @@ Env = ["env"]
 InheritEnv = ["inherit_env"]
 Run = ["run"]
 Echo = ["echo"]
-RunBg = ["run_bg"]
+AsyncBlock = ["async_run"]
 Copy = ["copy"]
 Symlink = ["symlink"]
 Mkdir = ["mkdir"]
 Ls = ["ls"]
 Cwd = ["cwd"]
 Read = ["read"]
+ReadLine = ["read_line"]
 Write = ["write"]
 Append = ["append"]
+Expand = ["expand"]
 AssertFile = ["assert_file"]
 AssertDir = ["assert_dir"]
 AssertAbsent = ["assert_absent"]
@@ -28,6 +30,14 @@ WithIo = ["with_io"]
 CopyGit = ["copy_git"]
 HashSha256 = ["hash_sha256"]
 Exit = ["exit"]
+Assign = ["assign"]
+For = ["for_loop"]
+If = ["if_statement"]
+AssignAsync = ["let_async"]
+Await = ["await"]
+Cancel = ["cancel"]
+Timeout = ["timeout"]
+Sleep = ["sleep"]
 
 [extras]
 cases = [
@@ -45,9 +55,18 @@ cases = [
   "env_target_dir",
   "inherit_env_blocking",
   "cwd_stdout",
-  "with_io_bg",
+  "with_io_async",
   "copy_complex",
   "copy_broken_symlink",
   "with_io_block",
-  "write_stdin"
+  "write_stdin",
+  "async_block_direct",
+  "async_run_direct",
+  "async_inline_direct_proof",
+  "async_proof",
+  "ping_pong",
+  "timeout_fires",
+  "cancel_double",
+  "async_timeout",
+  "timeout_await"
 ]
