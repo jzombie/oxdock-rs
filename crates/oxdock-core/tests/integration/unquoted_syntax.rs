@@ -63,6 +63,10 @@ fn copy_unquoted_paths() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "requires symlink support; Miri synthetic fs cannot create symlinks"
+)]
 fn symlink_unquoted_paths() {
     // SYMLINK arg order: SYMLINK <source> <destination>
     // The first arg is resolved as a copy source, second as write destination.
