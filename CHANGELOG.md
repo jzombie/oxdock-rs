@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - `spawn_interactive_shell` moved to `oxdock-process`; CLI runner is a thin delegate
 - Test layout collapsed to single integration binaries per crate with a `slow-integration` feature gate
 - `oxdock-fs` path handling normalized for Windows CI parity
+- Bump `syn` 2.0.119 → 3.0.4
 
 ### Removed
 
