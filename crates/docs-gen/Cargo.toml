@@ -2,8 +2,10 @@
 name = "docs-gen"
 version = "0.0.0"
 edition = "2024"
-publish = false
 license = "Apache-2.0"
+
+# Prototype crate; don't publish with this name
+publish = false
 
 [[bin]]
 name = "docs-gen"
