@@ -1008,8 +1008,10 @@ fn workdir_accepts_symlink_into_workspace_root() {
             err
         );
         let seen_path = workspace_root.join("client/seen.txt").unwrap();
+        let workspace_resolver =
+            PathResolver::new(workspace_root.as_path(), workspace_root.as_path()).unwrap();
         assert!(
-            !seen_path.as_path().exists(),
+            workspace_resolver.entry_kind(&seen_path).is_err(),
             "No copy fallback should occur"
         );
     }

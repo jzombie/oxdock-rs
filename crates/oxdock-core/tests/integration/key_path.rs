@@ -18,6 +18,14 @@ fn write_file(root: &GuardedPath, rel: &str, content: &[u8]) {
     resolver.write_file(&path, content).unwrap();
 }
 
+fn assert_absent(root: &GuardedPath, rel: &str) {
+    // Guarded existence check: raw `Path::exists` issues a host `statx`,
+    // which Miri isolation rejects.
+    let path = root.join(rel).unwrap();
+    let resolver = PathResolver::new(root.root(), root.root()).unwrap();
+    assert!(resolver.entry_kind(&path).is_err(), "{rel} should not exist");
+}
+
 // ============================================================================
 // Parser unit tests
 // ============================================================================
@@ -1141,7 +1149,7 @@ fn comparison_false_is_falsy() {
     "#},
     )
     .unwrap();
-    assert!(!root.join("out.txt").unwrap().as_path().exists());
+    assert_absent(&root, "out.txt");
 }
 
 // ============================================================================
@@ -1162,7 +1170,7 @@ fn logical_and_short_circuit() {
     "#},
     )
     .unwrap();
-    assert!(!root.join("out.txt").unwrap().as_path().exists());
+    assert_absent(&root, "out.txt");
 }
 
 #[test]
@@ -1293,8 +1301,8 @@ fn if_nested_inside_for() {
     )
     .unwrap();
     assert_eq!(read_trimmed(&root, "b.txt"), "found");
-    assert!(!root.join("a.txt").unwrap().as_path().exists());
-    assert!(!root.join("c.txt").unwrap().as_path().exists());
+    assert_absent(&root, "a.txt");
+    assert_absent(&root, "c.txt");
 }
 
 // ============================================================================
@@ -1341,7 +1349,7 @@ fn if_literal_false_skips() {
     "#},
     )
     .unwrap();
-    assert!(!root.join("out.txt").unwrap().as_path().exists());
+    assert_absent(&root, "out.txt");
 }
 
 #[test]
