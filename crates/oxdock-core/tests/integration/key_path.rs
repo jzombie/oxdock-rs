@@ -23,7 +23,10 @@ fn assert_absent(root: &GuardedPath, rel: &str) {
     // which Miri isolation rejects.
     let path = root.join(rel).unwrap();
     let resolver = PathResolver::new(root.root(), root.root()).unwrap();
-    assert!(resolver.entry_kind(&path).is_err(), "{rel} should not exist");
+    assert!(
+        resolver.entry_kind(&path).is_err(),
+        "{rel} should not exist"
+    );
 }
 
 // ============================================================================
