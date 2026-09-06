@@ -70,21 +70,31 @@ fn generate_crate_docs(repo_root: &Path, template_dir: &Path) -> Result<()> {
             continue;
         }
 
-        let meta = parse_cargo_metadata(&member_cargo_toml)?;
+        let meta = parse_cargo_metadata(&member_cargo_toml, &workspace_toml)?;
         let mut env = ExecIo::new();
         env.insert_inherit_env("CRATE_NAME", &meta.name);
         env.insert_inherit_env("CRATE_DESCRIPTION", &meta.description);
+        env.insert_inherit_env("CRATE_VERSION", &meta.version);
 
         // Workspace-relative glob pattern (not absolute)
         let glob = format!("docs/crates/{}/*.md", meta.name);
 
-        // Build manifest as JSON array
-        let manifest = serde_json::json!([
-            { "kind": "template", "path": header_str },
-            { "kind": "glob", "pattern": glob },
-            { "kind": "template", "path": footer_str }
-        ]);
-        let manifest_json = manifest.to_string();
+        // Build manifest as JSON array. An optional `dependency.tmpl` beside
+        // the body sources is expanded through OxDock's own EXPAND (with
+        // CRATE_VERSION in scope), so versioned snippets track the workspace
+        // version with nothing hardcoded. Body `*.md` files stay verbatim by
+        // design: EXPAND is strict and would reject DSL examples documented
+        // as `{{ env:PROJECT }}`.
+        let mut nodes = vec![
+            serde_json::json!({ "kind": "template", "path": header_str }),
+            serde_json::json!({ "kind": "glob", "pattern": glob }),
+        ];
+        let snippet_rel = format!("docs/crates/{}/dependency.tmpl", meta.name);
+        if repo_root.join(&snippet_rel).exists() {
+            nodes.push(serde_json::json!({ "kind": "template", "path": snippet_rel }));
+        }
+        nodes.push(serde_json::json!({ "kind": "template", "path": footer_str }));
+        let manifest_json = serde_json::Value::Array(nodes).to_string();
 
         let out_path = repo_root.join(member).join("README.md");
         if let Err(err) = template_doc::compile(repo_root, &manifest_json, &out_path, env) {
@@ -115,10 +125,26 @@ fn parse_workspace_members(workspace_toml: &Path) -> Result<Vec<String>> {
 struct CargoMetadata {
     name: String,
     description: String,
+    version: String,
 }
 
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-fn parse_cargo_metadata(cargo_toml: &Path) -> Result<CargoMetadata> {
+fn parse_workspace_version(workspace_toml: &Path) -> String {
+    let contents = std::fs::read_to_string(workspace_toml).unwrap_or_default();
+    let doc: Result<toml_edit::DocumentMut, _> = contents.parse();
+    let Ok(doc) = doc else {
+        return "unknown".to_string();
+    };
+    doc.get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+fn parse_cargo_metadata(cargo_toml: &Path, workspace_toml: &Path) -> Result<CargoMetadata> {
     let contents = std::fs::read_to_string(cargo_toml)?;
     let doc: toml_edit::DocumentMut = contents.parse()?;
 
@@ -136,7 +162,22 @@ fn parse_cargo_metadata(cargo_toml: &Path) -> Result<CargoMetadata> {
         .unwrap_or("No description provided.")
         .to_string();
 
-    Ok(CargoMetadata { name, description })
+    // Member crates use `version.workspace = true`, so a literal
+    // `package.version` string is only present for standalone version pins.
+    // Fall back to `workspace.package.version` otherwise so generated docs
+    // never need a hardcoded copy of the version.
+    let version = doc
+        .get("package")
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| parse_workspace_version(workspace_toml));
+
+    Ok(CargoMetadata {
+        name,
+        description,
+        version,
+    })
 }
 
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]

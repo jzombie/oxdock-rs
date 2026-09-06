@@ -8,3 +8,4 @@
 // parser for this documentation-only crate.
 #![cfg_attr(doctest, allow(rustdoc::invalid_codeblock_attributes))]
 #![cfg_attr(doctest, doc = include_str!("../../../README.md"))]
+#![cfg_attr(doctest, doc = include_str!("../../../oxdock/README.md"))]

@@ -1,6 +1,6 @@
 [package]
 name = "oxdock-doc-tests"
-description = "Executes README.md Rust examples as doctests."
+description = "Executes README Rust examples as doctests."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,8 @@ repository.workspace = true
 publish = false
 
 [package.metadata.cargo-udeps.ignore]
-development = ["oxdock-macros"]
+development = ["oxdock-macros", "oxdock"]
 
 [dev-dependencies]
+oxdock.workspace = true
 oxdock-macros.workspace = true

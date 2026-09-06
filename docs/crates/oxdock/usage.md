@@ -1,0 +1,20 @@
+## Common usage
+
+Install the binary from the registry:
+
+```sh
+cargo install oxdock
+```
+
+Run a script file:
+
+```sh
+oxdock ./build.oxfile
+# same as: oxdock --script ./build.oxfile
+```
+
+Print help:
+
+```sh
+oxdock --help
+```

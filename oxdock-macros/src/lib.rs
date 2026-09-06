@@ -1,7 +1,7 @@
 //! OxDock's primary user-facing contract: declarative build scripts written
 //! inline, directly alongside Rust code.
 //!
-//! ```rust,ignore
+//! ```rust
 //! use oxdock_macros::oxdock_embed;
 //!
 //! oxdock_embed! {
@@ -11,6 +11,11 @@
 //!         WRITE hello.txt hi
 //!     },
 //!     out_dir: "prebuilt",
+//! }
+//!
+//! fn main() {
+//!     let file = DemoAssets::get("hello.txt").expect("hello.txt must be embedded");
+//!     assert_eq!(file.data.as_ref(), b"hi");
 //! }
 //! ```
 //!

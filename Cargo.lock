@@ -471,6 +471,7 @@ dependencies = [
 name = "oxdock-doc-tests"
 version = "0.7.0-alpha"
 dependencies = [
+ "oxdock",
  "oxdock-macros",
 ]
 

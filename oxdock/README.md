@@ -1,9 +1,8 @@
 # oxdock
 
-Facade crate for OxDock: the canonical user-facing entry point.
+Facade crate for OxDock: CLI runner and build macros.
 
 > Part of the [OxDock](https://github.com/jzombie/rust-oxdock) workspace.
-
 - CLI runner: `oxdock::run()`, `oxdock::execute()`, `oxdock::Options`, ... —
   re-exported from `oxdock-cli` behind the `cli` feature (enabled by default).
   Running via `oxdock` or `oxdock-cli` executes identically.
@@ -12,10 +11,10 @@ Facade crate for OxDock: the canonical user-facing entry point.
 
 ## Common usage
 
-Install the binary:
+Install the binary from the registry:
 
 ```sh
-cargo install --path oxdock
+cargo install oxdock
 ```
 
 Run a script file:
@@ -33,13 +32,19 @@ oxdock --help
 
 Use the macros (macros-only build, no CLI):
 
+```sh
+cargo add oxdock --no-default-features
+```
+
+Or pin the version in `Cargo.toml`:
+
 ```toml
 [dependencies]
 oxdock = { version = "0.7.0-alpha", default-features = false }
 ```
 
-```rust,ignore
-use oxdock::{oxdock, oxdock_embed};
+```rust
+use oxdock::oxdock_embed;
 
 oxdock_embed! {
     name: DemoAssets,
@@ -48,6 +53,11 @@ oxdock_embed! {
         WRITE hello.txt hi
     },
     out_dir: "prebuilt",
+}
+
+fn main() {
+    let file = DemoAssets::get("hello.txt").expect("hello.txt must be embedded");
+    assert_eq!(file.data.as_ref(), b"hi");
 }
 ```
 

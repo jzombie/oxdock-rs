@@ -1,6 +1,13 @@
 ## Common usage
 
-Run a script file:
+Run a script file (positional, same as `--script`):
+
+```sh
+oxdock ./build.oxfile
+```
+
+Run a script file (explicit flag form):
+
 ```sh
 oxdock --script ./build.oxfile
 ```
