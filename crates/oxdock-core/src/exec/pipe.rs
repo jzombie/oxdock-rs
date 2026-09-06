@@ -1,23 +1,32 @@
 use std::collections::VecDeque;
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io::{self, Read, Write};
+#[cfg(not(miri))]
+use std::io::{Seek, SeekFrom};
+use std::sync::atomic::AtomicU64;
+#[cfg(not(miri))]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use oxdock_process::{SharedInput, SharedOutput};
 
 /// Memory threshold before spilling to disk.
 #[cfg(not(test))]
+#[cfg_attr(miri, allow(dead_code))]
 const PIPE_SPILL_THRESHOLD: usize = 8 * 1024 * 1024; // 8 MiB
 #[cfg(test)]
+#[cfg_attr(miri, allow(dead_code))]
 pub(super) const PIPE_SPILL_THRESHOLD: usize = 1024 * 1024; // 1 MiB for tests
 
 /// Maximum active backlog before returning an error.
 #[cfg(not(test))]
+#[cfg_attr(miri, allow(dead_code))]
 const PIPE_MAX_BACKLOG: u64 = 100 * 1024 * 1024; // 100 MiB
 #[cfg(test)]
+#[cfg_attr(miri, allow(dead_code))]
 pub(super) const PIPE_MAX_BACKLOG: u64 = 2 * 1024 * 1024; // 2 MiB for tests
 
 /// Unique temp file naming counter.
+#[cfg_attr(miri, allow(dead_code))]
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
@@ -72,6 +81,7 @@ impl ScriptPipe {
     }
 
     #[cfg(test)]
+    #[cfg_attr(miri, allow(dead_code))]
     #[allow(clippy::disallowed_types)]
     pub(super) fn temp_path(&self) -> Option<std::path::PathBuf> {
         self.inner.temp_path()
@@ -107,6 +117,7 @@ impl PipeInner {
     }
 
     #[cfg(test)]
+    #[cfg_attr(miri, allow(dead_code))]
     #[allow(clippy::disallowed_types)]
     fn temp_path(&self) -> Option<std::path::PathBuf> {
         let state = self.lock_state();
@@ -137,6 +148,7 @@ impl PipeInner {
         let mut state = self.lock_state();
         match &mut state.buffer {
             PipeBuffer::Memory(vec) => {
+                #[cfg(not(miri))]
                 let original_len = vec.len();
                 vec.extend(data.iter().copied());
                 #[cfg(not(miri))]
