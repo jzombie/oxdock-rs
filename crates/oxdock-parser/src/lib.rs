@@ -80,20 +80,7 @@ pub mod test_lower_mock {
                     })
                 }
             }
-            "ENV" => {
-                let arg = args
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow!("ENV requires key=val"))?;
-                let (k, v) = arg
-                    .as_str()
-                    .split_once('=')
-                    .ok_or_else(|| anyhow!("ENV requires key=val"))?;
-                Ok(StepKind::Env {
-                    key: k.to_string(),
-                    value: Arg::String(v.to_string(), false),
-                })
-            }
+            "ENV" => crate::commands::lower_env_legacy(args),
             "WORKSPACE" => {
                 let target = args
                     .into_iter()

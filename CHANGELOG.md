@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Fixed
+
+- Quoted values with spaces parse identically in every command: `ENV SET_FORTH="outer scope"` stores `outer scope` instead of truncating, and `EXPAND tmpl KEY="a b"` no longer fails with "accepts at most one path"
+- `KEY=$var` env values and `EXPAND` overrides evaluate the variable (parity with `ECHO $var`); `KEY="{{ $var }} tail"` interpolates with the literal tail kept
+- Multi-assignment lines split uniformly (`EXPAND K1=$x K2=$y` yields two overrides); `ENV` with more than one assignment is a precise error instead of silently merging or dropping values
+- `$var` mixed into `ECHO` / `RUN` / `WRITE` tails is preserved instead of silently dropped (`ECHO $x hello` keeps the value)
+- Both `"` and `'` quotes strip in `ENV` values (previously `"` only), and values split on the first `=` (`KEY=a=b` stores `a=b`)
+
+### Changed
+
+- `ENV` / `EXPAND` reference docs rewritten: what a template is, placeholder namespaces and precedence, override value rules, and runnable proof examples for every value form
+
 ## [0.8.0-alpha] - 2026-09-05
 
 ### Added

@@ -68,5 +68,6 @@ cases = [
   "timeout_fires",
   "cancel_double",
   "async_timeout",
-  "timeout_await"
+  "timeout_await",
+  "env_quoted_spaces"
 ]

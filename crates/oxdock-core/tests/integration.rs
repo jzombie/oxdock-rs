@@ -13,5 +13,7 @@ mod incremental;
 mod key_path;
 #[path = "integration/phase_boundary.rs"]
 mod phase_boundary;
+#[path = "integration/unified_values.rs"]
+mod unified_values;
 #[path = "integration/unquoted_syntax.rs"]
 mod unquoted_syntax;

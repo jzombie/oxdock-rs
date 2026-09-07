@@ -188,8 +188,10 @@ inherit_list = { "[" ~ ws? ~ env_key ~ (ws? ~ "," ~ ws? ~ env_key)* ~ ws? ~ "]" 
 // Generic instruction: uppercase command name followed by arguments.
 // instruction_inner (non-atomic) — used inside with_io_command's command rule.
 // instruction (atomic) — used at top-level in element.
-instruction_inner = ${ command_name ~ (sep ~ argument)* }
-instruction = ${ command_name ~ (sep ~ argument)* }
+// `assignment` is tried before plain `argument` so `KEY=...` tokens split into
+// (key, value) at tokenize time on raw spans; lowering never re-stitches them.
+instruction_inner = ${ command_name ~ (sep ~ (assignment | argument))* }
+instruction = ${ command_name ~ (sep ~ (assignment | argument))* }
 command_name = @{ ASCII_ALPHA_UPPER ~ (ASCII_ALPHA_UPPER | ASCII_DIGIT | "_")* }
 
 sep = _{ WHITESPACE+ }
@@ -211,5 +213,36 @@ unquoted_arg = @{ !"$" ~ !("{{") ~ (!WHITESPACE ~ !linebreak ~ !";" ~ !"}" ~ !"{
 argument = { (string_literal | templated_arg | unquoted_arg | expr)+ }
 
 templated_arg = @{ "{{" ~ (!"}}" ~ ANY)* ~ "}}" }
+
+// Unified key=value assignment: the single canonical value syntax bound by
+// every command (ENV values, EXPAND overrides, and any other `KEY=...` token).
+// The `=` binds with explicit `gap` on both sides (so `KEY = value` parses);
+// the value keeps its exact raw span, so quoted whitespace survives intact.
+assignment = ${ assign_key ~ gap ~ "=" ~ gap ~ assign_value? }
+assign_key = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+ }
+assign_value = { quoted_string | assign_expr | raw_fragments }
+// An assignment boundary: whitespace followed by `KEY=` — the start of a
+// sibling assignment (`EXPAND K1=$x K2=$y`). Values never consume across it,
+// so multi-assignment lines split uniformly regardless of value shape (a bare
+// `!WHITESPACE` guard would split `$x`-led values yet still glue `1`-led
+// ones into a single span).
+assignment_boundary = _{ WHITESPACE+ ~ assign_key ~ gap ~ "=" }
+// Lone `$var` / `$a.b` / `CALL(...)` values stay typed `Arg::Expr`. Each shape
+// carries its own continuation guard: strict PEG commits per-alternative, so a
+// shared trailing guard would strand input like `$a.b` on the `variable`
+// prefix. The guard requires more value content next (`{{` or a raw char past
+// any assignment boundary); a boundary, `;`, `}`, linebreak, comment, or end
+// lets the lone expression stand, and anything else falls through to
+// `raw_fragments` as literal text.
+assign_expr = { (variable ~ !assign_expr_cont | key_path ~ !assign_expr_cont | func_call ~ !assign_expr_cont) }
+assign_expr_cont = _{ "{{" | (!assignment_boundary ~ raw_text_char) }
+// Bounded raw span: everything else to the instruction boundary as fragments,
+// preserving `{{ }}` templates and quoted regions with exact bytes. Stops at
+// linebreak, `;`, `}` (single-line block bodies), comments, and lone `{`
+// (block starts); `{{` always opens a template fragment instead.
+raw_fragments = { raw_fragment+ }
+raw_fragment = _{ quoted_string | templated_arg | raw_text }
+raw_text = @{ raw_text_char+ }
+raw_text_char = _{ !assignment_boundary ~ (!linebreak ~ !";" ~ !"}" ~ !"{" ~ !"//" ~ !"/*" ~ ANY) }
 
 ws = _{ (WHITESPACE | linebreak)* }

@@ -1,0 +1,4 @@
+name = "env_quoted_spaces"
+
+[expect]
+files = { "out.txt" = "value=outer scope\n" }

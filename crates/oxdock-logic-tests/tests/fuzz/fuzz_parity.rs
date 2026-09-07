@@ -247,6 +247,12 @@ fn assert_steps_eq(left: &Step, right: &Step, msg: &str) {
         (StepKind::Echo(l), StepKind::Echo(r)) => {
             assert!(arg_content_eq(l, r), "Echo mismatch: {}", msg)
         }
+        (StepKind::Env { key: lk, value: lv }, StepKind::Env { key: rk, value: rv }) => {
+            // Quoted-ness is parse provenance (Display normalizes quoting),
+            // so compare content like every other string-carrying variant.
+            assert_eq!(lk, rk, "Env key mismatch: {}", msg);
+            assert!(arg_content_eq(lv, rv), "Env value mismatch: {}", msg)
+        }
         (StepKind::Mkdir(l), StepKind::Mkdir(r)) => {
             assert!(arg_content_eq(l, r), "Mkdir mismatch: {}", msg)
         }

@@ -14,27 +14,116 @@
 
 use std::fmt;
 
-use crate::ast::{Arg, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
+use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
 use crate::command::{ArgSpec, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-fn join_args(args: Vec<Arg>, cmd_name: &str) -> Result<Arg> {
+/// Join free-text tail arguments into one value. Single args pass through
+/// untouched (preserving `Arg::Expr`); all-`String` tails join exactly like the
+/// historical `join_args`; tails containing expressions become `Arg::Parts`
+/// with single-space separators so `$x` is never silently dropped.
+fn join_value(args: Vec<Arg>, cmd_name: &str) -> Result<Arg> {
     if args.is_empty() {
         bail!("{cmd_name} requires at least one argument");
     }
     if args.len() == 1 {
         return Ok(args.into_iter().next().unwrap());
     }
-    Ok(Arg::String(
-        args.iter()
-            .map(|a| a.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        false,
-    ))
+    if args.iter().all(|a| matches!(a, Arg::String(..))) {
+        return Ok(Arg::String(
+            args.iter()
+                .map(|a| a.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            false,
+        ));
+    }
+    let mut parts = Vec::new();
+    for (index, arg) in args.into_iter().enumerate() {
+        if index > 0 {
+            parts.push(ArgPart::Text(" ".to_string(), false));
+        }
+        match arg {
+            Arg::String(text, quoted) => parts.push(ArgPart::Text(text, quoted)),
+            Arg::Expr(expr) => parts.push(ArgPart::Expr(expr)),
+            Arg::Parts(inner) => parts.extend(inner),
+        }
+    }
+    Ok(Arg::Parts(parts))
+}
+
+/// Strip one layer of surrounding `"` or `'` quotes (both kinds, everywhere).
+pub(crate) fn strip_surrounding_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(value)
+}
+
+/// Legacy single-token `KEY=value` split for direct `lower_command` callers and
+/// exotic keys the grammar cannot classify (single tokens only — no whitespace
+/// reassembly, so the quoted-space corruption class cannot arise here).
+/// Returns `Ok(None)` when there is no `=`.
+pub(crate) fn split_legacy_assignment(text: &str) -> Result<Option<(String, Arg)>> {
+    let Some((key, raw)) = text.split_once('=') else {
+        return Ok(None);
+    };
+    if key.is_empty() {
+        bail!("assignment requires KEY=value format");
+    }
+    Ok(Some((
+        key.to_string(),
+        Arg::String(strip_surrounding_quotes(raw).to_string(), false),
+    )))
+}
+
+/// Canonical `lower_command` entry for direct callers holding one pre-joined
+/// `KEY=value` token. Script parsing never reaches this — the grammar splits
+/// assignments on raw spans first (see `lower_env_command` in parser.rs).
+pub fn lower_env_legacy(args: Vec<Arg>) -> Result<StepKind> {
+    let arg = args
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("ENV requires KEY=value"))?;
+    let Some((key, value)) = split_legacy_assignment(arg.as_str())? else {
+        bail!("ENV requires KEY=value format")
+    };
+    Ok(StepKind::Env { key, value })
+}
+
+/// Collapse a grammar-classified assignment for commands that take no
+/// assignments (`RUN`, `COPY`, ...): canonical `key=<rendered value>` text.
+/// Runtime semantics survive intact — `{{ }}` templates stay textual for
+/// `expand_string`, and `RUN`'s own post-pass expands bare `$var`.
+pub(crate) fn canonical_assignment_arg(key: &str, value: &Arg) -> Arg {
+    Arg::String(format!("{key}={}", value.render()), false)
+}
+
+/// Render one `Arg` for `Display`: expressions print raw (`$x` must never be
+/// quoted or reparsing would literalize them); mixed values print raw unless
+/// they hold instruction-boundary characters (`;`, `}`, linebreaks), which
+/// force quoting for reparseability.
+fn fmt_value(arg: &Arg, quote: fn(&str) -> String) -> String {
+    match arg {
+        Arg::Expr(_) => arg.render(),
+        Arg::String(text, _) => quote(text),
+        Arg::Parts(_) => {
+            let rendered = arg.render();
+            if rendered.contains(';')
+                || rendered.contains('}')
+                || rendered.contains('\n')
+                || rendered.contains('\r')
+            {
+                quote(&rendered)
+            } else {
+                rendered
+            }
+        }
+    }
 }
 
 fn quote_arg(s: &str) -> String {
@@ -141,7 +230,7 @@ pub fn format_duration(d: &std::time::Duration) -> String {
 fn unknown_command_error(name: &str, raw_args: &[Arg]) -> anyhow::Error {
     let received = raw_args
         .iter()
-        .map(Arg::as_str)
+        .map(Arg::render)
         .collect::<Vec<_>>()
         .join(" ");
     let hint = structural_hint(name, &received).or_else(|| case_hint(name));
@@ -369,17 +458,37 @@ declare_commands! {
         variant: Env { key: String, value: Arg },
         syntax: "ENV KEY=value",
         summary: "Set an environment variable.",
-        description: "Inserts or updates an env var.",
+        description: "Inserts or updates an env var. The value uses the unified string-value rules shared by every command: `\"...\"` or `'...'` quotes keep exact bytes (spaces, tabs), a lone `$var` evaluates that variable, `{{ ... }}` placeholders interpolate, unquoted words join with single spaces, and the first `=` splits key from value (`KEY=a=b` stores `a=b`). A `$var` inside larger text stays literal — write `{{ $var }}` to interpolate there.",
         args: &[ ArgSpec { name: "assignment", arg_type: "KEY=value", description: "KEY=value pair", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
-        examples: &[ Example { name: "set env", fence_meta: None, code: indoc! {r#"ENV APP_MODE=production"#} } ],
-        lower: |_flags, args| {
-            let arg = args.into_iter().next().ok_or_else(|| anyhow!("ENV requires KEY=value"))?;
-            let (k, v) = arg.as_str().split_once('=').ok_or_else(|| anyhow!("ENV requires KEY=value format"))?;
-            let val = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(v);
-            Ok(StepKind::Env { key: k.to_string(), value: Arg::String(val.to_string(), false) })
-        },
+        examples: &[
+            Example { name: "set env", fence_meta: None, code: indoc! {r#"ENV APP_MODE=production"#} },
+            Example { name: "quoted value with spaces", fence_meta: None, code: indoc! {r#"
+                # quotes keep the space: SET_FORTH stores `outer scope`
+                ENV SET_FORTH="outer scope"
+                WRITE out.txt "{{ env:SET_FORTH }}"
+                ASSERT_FILE out.txt "outer scope"
+            "#} },
+            Example { name: "variable value", fence_meta: None, code: indoc! {r#"
+                # a lone $var evaluates, like ECHO $var
+                LET $who = "Alice"
+                ENV GREETING=$who
+                WRITE out.txt "{{ env:GREETING }}"
+                ASSERT_FILE out.txt "Alice"
+            "#} },
+            Example { name: "all value forms agree", fence_meta: None, code: indoc! {r#"
+                # a bare variable, a quoted literal, and a template all
+                # store plain strings through the same value rules
+                LET $x = "Ada"
+                ENV A=$x
+                ENV B="hello world"
+                ENV C="{{ $x }} concatenated"
+                WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
+                ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
+            "#} },
+        ],
+        lower: |_flags, args| lower_env_legacy(args),
     ],
 
     InheritEnv => [
@@ -408,7 +517,7 @@ declare_commands! {
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "echo", fence_meta: None, code: indoc! {r#"ECHO build-complete"#} } ],
-        lower: |_flags, args| Ok(StepKind::Echo(join_args(args, "ECHO")?)),
+        lower: |_flags, args| Ok(StepKind::Echo(join_value(args, "ECHO")?)),
     ],
 
     Run => [
@@ -421,7 +530,7 @@ declare_commands! {
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "run", fence_meta: None, code: indoc! {r#"RUN echo hello"#} } ],
-        lower: |_flags, args| Ok(StepKind::Run(join_args(args, "RUN")?)),
+        lower: |_flags, args| Ok(StepKind::Run(join_value(args, "RUN")?)),
     ],
 
     Copy => [
@@ -602,7 +711,7 @@ declare_commands! {
             let mut it = args.into_iter();
             let path = it.next().ok_or_else(|| anyhow!("WRITE requires a path"))?;
             let remaining: Vec<Arg> = it.collect();
-            let contents = if remaining.is_empty() { None } else { Some(join_args(remaining, "WRITE")?) };
+            let contents = if remaining.is_empty() { None } else { Some(join_value(remaining, "WRITE")?) };
             Ok(StepKind::Write { path, contents })
         },
     ],
@@ -628,7 +737,7 @@ declare_commands! {
             let mut it = args.into_iter();
             let path = it.next().ok_or_else(|| anyhow!("APPEND requires a path"))?;
             let remaining: Vec<Arg> = it.collect();
-            let contents = if remaining.is_empty() { None } else { Some(join_args(remaining, "APPEND")?) };
+            let contents = if remaining.is_empty() { None } else { Some(join_value(remaining, "APPEND")?) };
             Ok(StepKind::Append { path, contents })
         },
     ],
@@ -637,27 +746,48 @@ declare_commands! {
         name: "EXPAND",
         variant: Expand { path: Option<Arg>, overrides: Vec<(String, Arg)> },
         syntax: "EXPAND [<path>] [<KEY=val> ...]",
-        summary: "Expand templates.",
-        description: "Expands placeholders.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Template", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        summary: "Expand a template file (or stdin) to stdout.",
+        description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`.",
+        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
-        examples: &[ Example { name: "expand", fence_meta: None, code: indoc! {r#"
-            ENV NAME="Alice"
-            WRITE template.md "Hello {{ env:NAME }}!"
-            EXPAND template.md
-            ASSERT_STDOUT "Hello Alice!"
-        "#} } ],
+        examples: &[
+            Example { name: "expand", fence_meta: None, code: indoc! {r#"
+                ENV NAME="Alice"
+                WRITE template.md "Hello {{ env:NAME }}!"
+                EXPAND template.md
+                ASSERT_STDOUT "Hello Alice!"
+            "#} },
+            Example { name: "override with spaces", fence_meta: None, code: indoc! {r#"
+                # WRITE would interpolate {{ }} right away, so escape it:
+                # the file must literally contain {{ env:NAME }} for EXPAND
+                WRITE template.md "Hello \{{ env:NAME }}!"
+                EXPAND template.md NAME="Alice Smith"
+                ASSERT_STDOUT "Hello Alice Smith!"
+            "#} },
+            Example { name: "variable override", fence_meta: None, code: indoc! {r#"
+                # same escaping: keep the placeholder literal until EXPAND;
+                # a lone $who evaluates, like ECHO $who
+                LET $who = "Bob"
+                WRITE template.md "Hi \{{ env:WHO }}!"
+                EXPAND template.md WHO=$who
+                ASSERT_STDOUT "Hi Bob!"
+            "#} },
+            Example { name: "override forms agree", fence_meta: None, code: indoc! {r#"
+                # a bare variable and a template-with-tail expand identically
+                LET $x = "Ada"
+                WRITE template.md "Hi \{{ env:NAME }} and \{{ env:NAME2 }}!"
+                EXPAND template.md NAME=$x NAME2="{{ $x }} concatenated"
+                ASSERT_STDOUT "Hi Ada and Ada concatenated!"
+            "#} },
+        ],
         lower: |_flags, args| {
             let mut path = None;
             let mut overrides = Vec::new();
             for arg in args {
-                let s = arg.as_str();
-                if let Some((k, v)) = s.split_once('=') {
-                    let val = v.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-                        .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-                        .unwrap_or(v);
-                    overrides.push((k.to_string(), Arg::String(val.to_string(), false)));
+                let text = arg.as_str();
+                if let Some((key, value)) = split_legacy_assignment(text)? {
+                    overrides.push((key, value));
                 } else if path.is_none() { path = Some(arg); }
                 else { bail!("EXPAND accepts at most one path"); }
             }
@@ -686,7 +816,7 @@ declare_commands! {
             let mut it = args.into_iter();
             let path = it.next().ok_or_else(|| anyhow!("ASSERT_FILE requires a path"))?;
             let remaining: Vec<Arg> = it.collect();
-            let contents = if remaining.is_empty() { None } else { Some(join_args(remaining, "ASSERT_FILE")?) };
+            let contents = if remaining.is_empty() { None } else { Some(join_value(remaining, "ASSERT_FILE")?) };
             Ok(StepKind::AssertFile { hash, path, contents })
         },
     ],
@@ -733,7 +863,7 @@ declare_commands! {
             ECHO build-complete
             ASSERT_STDOUT build-complete
         "#} } ],
-        lower: |_flags, args| Ok(StepKind::AssertStdout(join_args(args, "ASSERT_STDOUT")?)),
+        lower: |_flags, args| Ok(StepKind::AssertStdout(join_value(args, "ASSERT_STDOUT")?)),
     ],
 
     HashSha256 => [
@@ -998,11 +1128,13 @@ impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StepKind::InheritEnv { keys } => write!(f, "INHERIT_ENV [{}]", keys.join(", ")),
-            StepKind::Workdir(a) => write!(f, "WORKDIR {}", quote_arg(a.as_str())),
+            StepKind::Workdir(a) => write!(f, "WORKDIR {}", fmt_value(a, quote_arg)),
             StepKind::Workspace(t) => write!(f, "WORKSPACE {}", t),
-            StepKind::Env { key, value } => write!(f, "ENV {}={}", key, quote_arg(value.as_str())),
-            StepKind::Run(c) => write!(f, "RUN {}", quote_run(c.as_str())),
-            StepKind::Echo(m) => write!(f, "ECHO {}", quote_msg(m.as_str())),
+            StepKind::Env { key, value } => {
+                write!(f, "ENV {}={}", key, fmt_value(value, quote_arg))
+            }
+            StepKind::Run(c) => write!(f, "RUN {}", fmt_value(c, quote_run)),
+            StepKind::Echo(m) => write!(f, "ECHO {}", fmt_value(m, quote_msg)),
             StepKind::Copy {
                 from_current_workspace,
                 from,
@@ -1012,29 +1144,29 @@ impl fmt::Display for StepKind {
                     write!(
                         f,
                         "COPY --from-current-workspace {} {}",
-                        quote_arg(from.as_str()),
-                        quote_arg(to.as_str())
+                        fmt_value(from, quote_arg),
+                        fmt_value(to, quote_arg)
                     )
                 } else {
                     write!(
                         f,
                         "COPY {} {}",
-                        quote_arg(from.as_str()),
-                        quote_arg(to.as_str())
+                        fmt_value(from, quote_arg),
+                        fmt_value(to, quote_arg)
                     )
                 }
             }
             StepKind::Symlink { from, to } => write!(
                 f,
                 "SYMLINK {} {}",
-                quote_arg(from.as_str()),
-                quote_arg(to.as_str())
+                fmt_value(from, quote_arg),
+                fmt_value(to, quote_arg)
             ),
-            StepKind::Mkdir(a) => write!(f, "MKDIR {}", quote_arg(a.as_str())),
+            StepKind::Mkdir(a) => write!(f, "MKDIR {}", fmt_value(a, quote_arg)),
             StepKind::Ls(a) => {
                 write!(f, "LS")?;
                 if let Some(x) = a {
-                    write!(f, " {}", quote_arg(x.as_str()))?;
+                    write!(f, " {}", fmt_value(x, quote_arg))?;
                 }
                 Ok(())
             }
@@ -1042,32 +1174,32 @@ impl fmt::Display for StepKind {
             StepKind::Read(a) => {
                 write!(f, "READ")?;
                 if let Some(x) = a {
-                    write!(f, " {}", quote_arg(x.as_str()))?;
+                    write!(f, " {}", fmt_value(x, quote_arg))?;
                 }
                 Ok(())
             }
             StepKind::ReadLine { var } => write!(f, "READ_LINE ${}", var),
             StepKind::Write { path, contents } => {
-                write!(f, "WRITE {}", quote_arg(path.as_str()))?;
+                write!(f, "WRITE {}", fmt_value(path, quote_arg))?;
                 if let Some(b) = contents {
-                    write!(f, " {}", quote_msg(b.as_str()))?;
+                    write!(f, " {}", fmt_value(b, quote_msg))?;
                 }
                 Ok(())
             }
             StepKind::Append { path, contents } => {
-                write!(f, "APPEND {}", quote_arg(path.as_str()))?;
+                write!(f, "APPEND {}", fmt_value(path, quote_arg))?;
                 if let Some(b) = contents {
-                    write!(f, " {}", quote_msg(b.as_str()))?;
+                    write!(f, " {}", fmt_value(b, quote_msg))?;
                 }
                 Ok(())
             }
             StepKind::Expand { path, overrides } => {
                 write!(f, "EXPAND")?;
                 if let Some(p) = path {
-                    write!(f, " {}", quote_arg(p.as_str()))?;
+                    write!(f, " {}", fmt_value(p, quote_arg))?;
                 }
                 for (k, v) in overrides {
-                    write!(f, " {}={}", k, quote_arg(v.as_str()))?;
+                    write!(f, " {}={}", k, fmt_value(v, quote_arg))?;
                 }
                 Ok(())
             }
@@ -1077,18 +1209,18 @@ impl fmt::Display for StepKind {
                 contents,
             } => {
                 if let Some(d) = hash {
-                    write!(f, "ASSERT_FILE --hash {} {}", d, quote_arg(path.as_str()))
+                    write!(f, "ASSERT_FILE --hash {} {}", d, fmt_value(path, quote_arg))
                 } else {
-                    write!(f, "ASSERT_FILE {}", quote_arg(path.as_str()))?;
+                    write!(f, "ASSERT_FILE {}", fmt_value(path, quote_arg))?;
                     if let Some(b) = contents {
-                        write!(f, " {}", quote_msg(b.as_str()))?;
+                        write!(f, " {}", fmt_value(b, quote_msg))?;
                     }
                     Ok(())
                 }
             }
-            StepKind::AssertDir(a) => write!(f, "ASSERT_DIR {}", quote_arg(a.as_str())),
-            StepKind::AssertAbsent(a) => write!(f, "ASSERT_ABSENT {}", quote_arg(a.as_str())),
-            StepKind::AssertStdout(m) => write!(f, "ASSERT_STDOUT {}", quote_msg(m.as_str())),
+            StepKind::AssertDir(a) => write!(f, "ASSERT_DIR {}", fmt_value(a, quote_arg)),
+            StepKind::AssertAbsent(a) => write!(f, "ASSERT_ABSENT {}", fmt_value(a, quote_arg)),
+            StepKind::AssertStdout(m) => write!(f, "ASSERT_STDOUT {}", fmt_value(m, quote_msg)),
             StepKind::WithIo { bindings, cmd } => {
                 let p: Vec<String> = bindings.iter().map(fmt_io).collect();
                 write!(f, "WITH_IO [{}] {}", p.join(", "), cmd)
@@ -1107,21 +1239,23 @@ impl fmt::Display for StepKind {
                     write!(
                         f,
                         "COPY_GIT --include-dirty {} {} {}",
-                        quote_arg(rev.as_str()),
-                        quote_arg(from.as_str()),
-                        quote_arg(to.as_str())
+                        fmt_value(rev, quote_arg),
+                        fmt_value(from, quote_arg),
+                        fmt_value(to, quote_arg)
                     )
                 } else {
                     write!(
                         f,
                         "COPY_GIT {} {} {}",
-                        quote_arg(rev.as_str()),
-                        quote_arg(from.as_str()),
-                        quote_arg(to.as_str())
+                        fmt_value(rev, quote_arg),
+                        fmt_value(from, quote_arg),
+                        fmt_value(to, quote_arg)
                     )
                 }
             }
-            StepKind::HashSha256 { path } => write!(f, "HASH_SHA256 {}", quote_arg(path.as_str())),
+            StepKind::HashSha256 { path } => {
+                write!(f, "HASH_SHA256 {}", fmt_value(path, quote_arg))
+            }
             StepKind::Exit(c) => write!(f, "EXIT {}", c),
             StepKind::Sleep { duration } => write!(f, "SLEEP {}", format_duration(duration)),
             StepKind::For {

@@ -644,7 +644,7 @@ Set an environment variable.
 
 **Syntax:** `ENV KEY=value`
 
-Inserts or updates an env var.
+Inserts or updates an env var. The value uses the unified string-value rules shared by every command: `"..."` or `'...'` quotes keep exact bytes (spaces, tabs), a lone `$var` evaluates that variable, `{{ ... }}` placeholders interpolate, unquoted words join with single spaces, and the first `=` splits key from value (`KEY=a=b` stores `a=b`). A `$var` inside larger text stays literal — write `{{ $var }}` to interpolate there.
 
 **Arguments:**
 
@@ -658,6 +658,38 @@ Inserts or updates an env var.
 
 ```oxdock
 ENV APP_MODE=production
+```
+
+**Example: quoted value with spaces**
+
+```oxdock
+# quotes keep the space: SET_FORTH stores `outer scope`
+ENV SET_FORTH="outer scope"
+WRITE out.txt "{{ env:SET_FORTH }}"
+ASSERT_FILE out.txt "outer scope"
+```
+
+**Example: variable value**
+
+```oxdock
+# a lone $var evaluates, like ECHO $var
+LET $who = "Alice"
+ENV GREETING=$who
+WRITE out.txt "{{ env:GREETING }}"
+ASSERT_FILE out.txt "Alice"
+```
+
+**Example: all value forms agree**
+
+```oxdock
+# a bare variable, a quoted literal, and a template all
+# store plain strings through the same value rules
+LET $x = "Ada"
+ENV A=$x
+ENV B="hello world"
+ENV C="{{ $x }} concatenated"
+WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
+ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
 ```
 
 
@@ -986,17 +1018,17 @@ ASSERT_FILE log.txt line1line2
 
 ### EXPAND
 
-Expand templates.
+Expand a template file (or stdin) to stdout.
 
 **Syntax:** `EXPAND [<path>] [<KEY=val> ...]`
 
-Expands placeholders.
+A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\{{ ... }}`) when writing a template file for a later `EXPAND`.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Template |
+| `path` | `path` | no | Template file to expand; omit to expand stdin |
 
 **Output:** Stdout
 
@@ -1009,6 +1041,37 @@ ENV NAME="Alice"
 WRITE template.md "Hello {{ env:NAME }}!"
 EXPAND template.md
 ASSERT_STDOUT "Hello Alice!"
+```
+
+**Example: override with spaces**
+
+```oxdock
+# WRITE would interpolate {{ }} right away, so escape it:
+# the file must literally contain {{ env:NAME }} for EXPAND
+WRITE template.md "Hello \{{ env:NAME }}!"
+EXPAND template.md NAME="Alice Smith"
+ASSERT_STDOUT "Hello Alice Smith!"
+```
+
+**Example: variable override**
+
+```oxdock
+# same escaping: keep the placeholder literal until EXPAND;
+# a lone $who evaluates, like ECHO $who
+LET $who = "Bob"
+WRITE template.md "Hi \{{ env:WHO }}!"
+EXPAND template.md WHO=$who
+ASSERT_STDOUT "Hi Bob!"
+```
+
+**Example: override forms agree**
+
+```oxdock
+# a bare variable and a template-with-tail expand identically
+LET $x = "Ada"
+WRITE template.md "Hi \{{ env:NAME }} and \{{ env:NAME2 }}!"
+EXPAND template.md NAME=$x NAME2="{{ $x }} concatenated"
+ASSERT_STDOUT "Hi Ada and Ada concatenated!"
 ```
 
 

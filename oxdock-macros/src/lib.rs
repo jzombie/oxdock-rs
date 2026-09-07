@@ -437,7 +437,7 @@ fn ensure_out_dir(
 // oxdock! — runtime AST construction macro with #var interpolation
 // ---------------------------------------------------------------------------
 
-use oxdock_parser::{Arg, Expr, Step, StepKind, Value};
+use oxdock_parser::{Arg, ArgPart, Expr, Step, StepKind, Value};
 
 const INJECT_PREFIX: &str = "__OXDOCK_INJECT_";
 const INJECT_SUFFIX: &str = "__";
@@ -494,7 +494,7 @@ fn expand_oxdock(input: TokenStream) -> syn::Result<TokenStream> {
 
     let ts_out = quote! {
         {
-            use oxdock_parser::{Arg, Expr, Step, StepKind, Value,
+            use oxdock_parser::{Arg, ArgPart, Expr, Step, StepKind, Value,
                 IoBinding, IoStream, WorkspaceTarget, GuardExpr, Guard, PlatformGuard};
             vec![#(#step_tokens),*]
         }
@@ -607,6 +607,30 @@ fn emit_arg(arg: &Arg, interp: &[(proc_macro2::Ident, usize)]) -> proc_macro2::T
         Arg::Expr(e) => {
             let tok = emit_expr(e, interp);
             quote! { Arg::Expr(#tok) }
+        }
+        Arg::Parts(parts) => {
+            let toks: Vec<_> = parts.iter().map(|p| emit_arg_part(p, interp)).collect();
+            quote! { Arg::Parts(vec![#(#toks),*]) }
+        }
+    }
+}
+
+fn emit_arg_part(
+    part: &ArgPart,
+    interp: &[(proc_macro2::Ident, usize)],
+) -> proc_macro2::TokenStream {
+    match part {
+        ArgPart::Text(s, quoted) => {
+            if let Some(idx) = is_placeholder(s) {
+                let ident = &interp.iter().find(|(_, i)| *i == idx).unwrap().0;
+                quote! { ArgPart::Text(#ident.to_string(), #quoted) }
+            } else {
+                quote! { ArgPart::Text(#s.to_string(), #quoted) }
+            }
+        }
+        ArgPart::Expr(e) => {
+            let tok = emit_expr(e, interp);
+            quote! { ArgPart::Expr(#tok) }
         }
     }
 }

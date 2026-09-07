@@ -26,6 +26,10 @@ pub fn strip_flags(args: Vec<Arg>, meta: &CommandMeta) -> Result<StrippedArgs> {
             Arg::String(_, true) => {
                 positional.push(arg);
             }
+            // Expressions and mixed values are opaque to flag parsing.
+            Arg::Expr(_) | Arg::Parts(_) => {
+                positional.push(arg);
+            }
             Arg::String(s, false) if s == "--" => {
                 positional.extend(iter);
                 break;

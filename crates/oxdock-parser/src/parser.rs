@@ -189,8 +189,7 @@ impl<'a, F: Fn(&str, Vec<Arg>) -> Result<StepKind>> ScriptParser<'a, F> {
     }
 
     fn lower_instruction(&self, pair: Pair<Rule>) -> Result<StepKind> {
-        let (name, args) = extract_instruction(pair)?;
-        (self.lower)(&name, args)
+        lower_instruction_pair(pair, &self.lower)
     }
 
     fn handle_guard_token(&mut self, line_end: usize, expr: GuardExpr) -> Result<()> {
@@ -524,8 +523,7 @@ fn parse_structural_command_with_lower(
                         cmd = Some(Box::new(parse_structural_command_with_lower(inner, lower)?));
                     }
                     Rule::instruction | Rule::instruction_inner => {
-                        let (name, args) = extract_instruction(inner)?;
-                        cmd = Some(Box::new(lower(&name, args)?));
+                        cmd = Some(Box::new(lower_instruction_pair(inner, lower)?));
                     }
                     _ => {}
                 }
@@ -554,16 +552,13 @@ fn parse_structural_command_with_lower(
                 .ok_or_else(|| anyhow!("empty command_inner"))?;
             parse_structural_command_with_lower(inner, lower)?
         }
-        Rule::instruction | Rule::instruction_inner => {
-            let (name, args) = extract_instruction(pair)?;
-            lower(&name, args)?
-        }
+        Rule::instruction | Rule::instruction_inner => lower_instruction_pair(pair, lower)?,
         _ => bail!("unexpected structural command rule: {:?}", pair.as_rule()),
     };
     Ok(kind)
 }
 
-fn extract_instruction(pair: Pair<Rule>) -> Result<(String, Vec<Arg>)> {
+fn extract_instruction(pair: Pair<Rule>) -> Result<(String, Vec<InsToken>)> {
     let mut name = None;
     let mut args = Vec::new();
     for inner in pair.into_inner() {
@@ -572,13 +567,188 @@ fn extract_instruction(pair: Pair<Rule>) -> Result<(String, Vec<Arg>)> {
                 name = Some(inner.as_str().to_string());
             }
             Rule::argument => {
-                args.push(parse_argument(inner)?);
+                args.extend(parse_argument(inner)?.into_iter().map(InsToken::Pos));
+            }
+            Rule::assignment => {
+                let (key, value) = parse_assignment(inner)?;
+                args.push(InsToken::Assign(key, value));
             }
             _ => {}
         }
     }
     let name = name.ok_or_else(|| anyhow!("instruction missing command name"))?;
     Ok((name, args))
+}
+
+/// One lowered instruction token: a positional argument, or a pre-split
+/// `KEY=value` assignment from the unified grammar rule. Assignments reach
+/// ENV/EXPAND lowerings intact; every other command sees them collapsed to
+/// canonical `key=value` text (see `lower_instruction_pair`).
+enum InsToken {
+    Pos(Arg),
+    Assign(String, Arg),
+}
+
+/// Lower one generic instruction pair: ENV/EXPAND build `StepKind` directly
+/// from pre-split assignments (never via the injected `lower`, mirroring how
+/// LET/FOR/IF bypass it); all other commands flow through `lower` with
+/// assignments in canonical text form.
+fn lower_instruction_pair(
+    pair: Pair<Rule>,
+    lower: &dyn Fn(&str, Vec<Arg>) -> Result<StepKind>,
+) -> Result<StepKind> {
+    let (name, tokens) = extract_instruction(pair)?;
+    if name == "ENV" {
+        return lower_env_command(tokens);
+    }
+    if name == "EXPAND" {
+        return lower_expand_command(tokens);
+    }
+    let args = tokens
+        .into_iter()
+        .map(|token| match token {
+            InsToken::Pos(arg) => arg,
+            InsToken::Assign(key, value) => crate::commands::canonical_assignment_arg(&key, &value),
+        })
+        .collect();
+    lower(&name, args)
+}
+
+/// Split one `assignment` pair into its key and lowered value.
+fn parse_assignment(pair: Pair<Rule>) -> Result<(String, Arg)> {
+    let mut key = None;
+    let mut value = None;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::assign_key => {
+                key = Some(inner.as_str().to_string());
+            }
+            Rule::assign_value => {
+                value = Some(lower_command_value(inner)?);
+            }
+            _ => bail!("unexpected assignment rule: {:?}", inner.as_rule()),
+        }
+    }
+    Ok((
+        key.ok_or_else(|| anyhow!("assignment missing key"))?,
+        value.unwrap_or(Arg::String(String::new(), false)),
+    ))
+}
+
+/// Single unified value lowering: every command's free-text value flows through
+/// here on raw pest spans. Quoted bytes stay exact, lone `$var`/`$a.b`/`CALL()`
+/// stay typed `Arg::Expr`, and anything else becomes literal text with only
+/// `{{ }}` as the interpolation trigger. No heuristic rewriting, ever.
+fn lower_command_value(pair: Pair<Rule>) -> Result<Arg> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("assignment value is empty"))?;
+    match inner.as_rule() {
+        Rule::quoted_string => Ok(Arg::String(parse_quoted_string(inner)?, true)),
+        Rule::assign_expr => {
+            let shape = inner
+                .into_inner()
+                .next()
+                .ok_or_else(|| anyhow!("assignment expression is empty"))?;
+            match shape.as_rule() {
+                Rule::variable => Ok(Arg::Expr(Expr::Var(parse_dollar_ident(shape)))),
+                Rule::key_path => Ok(Arg::Expr(parse_key_path(shape)?)),
+                Rule::func_call => Ok(Arg::Expr(parse_func_call(shape)?)),
+                other => bail!("unexpected assignment expression shape: {:?}", other),
+            }
+        }
+        Rule::raw_fragments => lower_raw_fragments(inner),
+        other => bail!("unexpected assignment value rule: {:?}", other),
+    }
+}
+
+/// Assemble a bounded raw span into one literal `Arg::String`: `{{ }}` template
+/// chunks pass through verbatim for `expand_string`, quoted chunks unquote
+/// once with exact bytes, and unquoted runs collapse whitespace to single
+/// spaces (trailing/leading edges trimmed). Pure text needs no `Parts` — every
+/// fragment resolves through the same `expand_string` pass.
+fn lower_raw_fragments(pair: Pair<Rule>) -> Result<Arg> {
+    let mut body = String::new();
+    for fragment in pair.into_inner() {
+        match fragment.as_rule() {
+            Rule::quoted_string => body.push_str(&parse_quoted_string(fragment)?),
+            Rule::templated_arg => body.push_str(fragment.as_str()),
+            Rule::raw_text => body.push_str(&collapse_ws(fragment.as_str())),
+            other => bail!("unexpected raw value fragment: {:?}", other),
+        }
+    }
+    Ok(Arg::String(body.trim().to_string(), false))
+}
+
+/// Collapse every whitespace run to a single space, preserving edge positions
+/// (callers trim the assembled value).
+fn collapse_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_run = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !in_run {
+                out.push(' ');
+                in_run = true;
+            }
+        } else {
+            out.push(c);
+            in_run = false;
+        }
+    }
+    out
+}
+
+/// Parser-direct `ENV` lowering: exactly one assignment. A lone positional
+/// holding `=` is the exotic-key fringe (keys the grammar cannot classify);
+/// anything else is a precise error instead of a silent drop.
+fn lower_env_command(tokens: Vec<InsToken>) -> Result<StepKind> {
+    if tokens.is_empty() {
+        bail!("ENV requires KEY=value");
+    }
+    match tokens.as_slice() {
+        [InsToken::Assign(key, value)] => Ok(StepKind::Env {
+            key: key.clone(),
+            value: value.clone(),
+        }),
+        [InsToken::Pos(Arg::String(text, _))] => {
+            match crate::commands::split_legacy_assignment(text)? {
+                Some((key, value)) => Ok(StepKind::Env { key, value }),
+                None => bail!("ENV requires KEY=value format"),
+            }
+        }
+        _ => bail!("ENV requires KEY=value format"),
+    }
+}
+
+/// Parser-direct `EXPAND` lowering: positional tokens are the optional path,
+/// assignments are overrides. Split quoted values can never masquerade as
+/// extra paths — tokenize time already proved they are one value.
+fn lower_expand_command(tokens: Vec<InsToken>) -> Result<StepKind> {
+    let mut path = None;
+    let mut overrides = Vec::new();
+    for token in tokens {
+        match token {
+            InsToken::Assign(key, value) => overrides.push((key, value)),
+            InsToken::Pos(arg) => match &arg {
+                Arg::String(text, quoted) if !quoted && text.contains('=') => {
+                    let Some((key, value)) = crate::commands::split_legacy_assignment(text)? else {
+                        bail!("EXPAND requires KEY=value format for overrides")
+                    };
+                    overrides.push((key, value));
+                }
+                _ => {
+                    if path.is_none() {
+                        path = Some(arg);
+                    } else {
+                        bail!("EXPAND accepts at most one path");
+                    }
+                }
+            },
+        }
+    }
+    Ok(StepKind::Expand { path, overrides })
 }
 
 fn parse_for_statement_from_pair(
@@ -781,8 +951,7 @@ fn parse_timeout_statement_from_pair(
                 }]);
             }
             Rule::instruction | Rule::instruction_inner => {
-                let (name, args) = extract_instruction(inner)?;
-                let kind = lower(&name, args)?;
+                let kind = lower_instruction_pair(inner, lower)?;
                 body = Some(vec![Step {
                     guard: None,
                     kind,
@@ -906,15 +1075,13 @@ fn parse_async_statement_from_pair(
                         inner_cmd = Some(parse_structural_command_with_lower(child, lower)?);
                     }
                     Rule::instruction => {
-                        let (name, args) = extract_instruction(child)?;
-                        inner_cmd = Some(lower(&name, args)?);
+                        inner_cmd = Some(lower_instruction_pair(child, lower)?);
                     }
                     other => bail!("unexpected command_inner child: {:?}", other),
                 }
             }
             Rule::instruction | Rule::instruction_inner => {
-                let (name, args) = extract_instruction(inner)?;
-                inner_cmd = Some(lower(&name, args)?);
+                inner_cmd = Some(lower_instruction_pair(inner, lower)?);
             }
             Rule::block => {
                 block_body = Some(parse_block_elements_with_lower(inner, lower)?);
@@ -1015,8 +1182,7 @@ fn parse_block_elements_with_lower(
                 }
             }
             Rule::instruction | Rule::instruction_inner => {
-                let (name, args) = extract_instruction(elem)?;
-                let kind = lower(&name, args)?;
+                let kind = lower_instruction_pair(elem, lower)?;
                 steps.push(Step {
                     guard: None,
                     kind,
@@ -1039,17 +1205,45 @@ fn parse_block_elements_with_lower(
     Ok(steps)
 }
 
-fn parse_argument(pair: Pair<Rule>) -> Result<Arg> {
-    let inner: Vec<_> = pair.into_inner().collect();
-    // Single expression — preserve as Arg::Expr for runtime evaluation
-    if inner.len() == 1 && inner[0].as_rule() == Rule::expr {
-        return Ok(Arg::Expr(parse_expr(inner.into_iter().next().unwrap())?));
+fn parse_argument(pair: Pair<Rule>) -> Result<Vec<Arg>> {
+    let inners: Vec<_> = pair.into_inner().collect();
+    // An `expr` fragment can swallow its trailing separator through inner
+    // `gap` rules, gluing following text into one argument pair
+    // (`ECHO $x hello` lexes as `[expr("$x "), unquoted("hello")]`). Split
+    // groups there so expressions survive as typed `Arg::Expr`; every other
+    // fragment kind is whitespace-tight by construction.
+    let mut groups: Vec<Vec<Pair<Rule>>> = vec![Vec::new()];
+    for fragment in inners {
+        let glued = fragment.as_rule() == Rule::expr
+            && fragment.as_str().ends_with(|c: char| c.is_whitespace());
+        groups
+            .last_mut()
+            .expect("argument always holds a group")
+            .push(fragment);
+        if glued {
+            groups.push(Vec::new());
+        }
     }
-    // Single quoted string: preserve quote status and process escapes
-    if inner.len() == 1 && inner[0].as_rule() == Rule::string_literal {
-        return Ok(Arg::String(parse_fragments(&inner)?, true));
+    let mut args = Vec::new();
+    for group in groups {
+        if group.is_empty() {
+            continue;
+        }
+        // Single expression — preserve as Arg::Expr for runtime evaluation
+        if group.len() == 1 && group[0].as_rule() == Rule::expr {
+            args.push(Arg::Expr(parse_expr(
+                group.into_iter().next().expect("group holds one pair"),
+            )?));
+            continue;
+        }
+        // Single quoted string: preserve quote status and process escapes
+        if group.len() == 1 && group[0].as_rule() == Rule::string_literal {
+            args.push(Arg::String(parse_fragments(&group)?, true));
+            continue;
+        }
+        args.push(Arg::String(parse_fragments(&group)?, false));
     }
-    Ok(Arg::String(parse_fragments(&inner)?, false))
+    Ok(args)
 }
 
 fn parse_quoted_string(pair: Pair<Rule>) -> Result<String> {
