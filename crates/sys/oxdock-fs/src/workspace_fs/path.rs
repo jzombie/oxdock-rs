@@ -227,11 +227,21 @@ impl GuardedPath {
         let escaped_root = glob::Pattern::escape(&root_str);
         let search = format!("{}/{}", escaped_root, rel_pattern);
 
+        // TEMPORARY DEBUG (Windows CI diagnosis — remove before merge).
+        eprintln!("GLOBDBG root={:?} search={}", self.root, search);
+
         let mut results = Vec::new();
         for entry in glob::glob(&search)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
         {
             let path = entry?;
+            eprintln!(
+                "GLOBDBG entry={:?} starts_with={} strip={:?}",
+                path,
+                path.starts_with(&self.root),
+                path.strip_prefix(&self.root)
+                    .map(|r| r.to_string_lossy().into_owned())
+            );
             if !path.starts_with(&self.root) {
                 continue;
             }
