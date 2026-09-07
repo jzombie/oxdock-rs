@@ -265,7 +265,11 @@ impl GuardedPath {
 fn strip_verbatim_prefix(path: &str) -> &str {
     if let Some(rest) = path.strip_prefix("//?/") {
         let bytes = rest.as_bytes();
-        if bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'/' {
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'/'
+        {
             return rest;
         }
     }
@@ -1140,8 +1144,13 @@ mod tests {
     fn strip_verbatim_prefix_keeps_plain_paths() {
         assert_eq!(strip_verbatim_prefix("C:/a/b"), "C:/a/b");
         assert_eq!(strip_verbatim_prefix("//?/C:/a/b"), "C:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/c:/a/b"), "c:/a/b");
         assert_eq!(strip_verbatim_prefix("//?/UNC/srv/sh"), "//?/UNC/srv/sh");
         assert_eq!(strip_verbatim_prefix("/tmp/x"), "/tmp/x");
         assert_eq!(strip_verbatim_prefix("a/../b"), "a/../b");
+        // Non-drive prefixes must not strip: only `[A-Za-z]:/` qualifies.
+        assert_eq!(strip_verbatim_prefix("//?/_:/a"), "//?/_:/a");
+        assert_eq!(strip_verbatim_prefix("//?/1:/a"), "//?/1:/a");
+        assert_eq!(strip_verbatim_prefix("//?/:/a"), "//?/:/a");
     }
 }
