@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Both `"` and `'` quotes strip in `ENV` values (previously `"` only), and values split on the first `=` (`KEY=a=b` stores `a=b`)
 - `GLOB()` patterns containing `..` match nothing instead of traversing outside the sandbox root; every glob result is validated against the workspace boundary
 - `GLOB()` lists sandbox contents on Windows (verbatim `\\?\`-prefixed roots no longer yield empty results)
+- Windows PID liveness probe treats `ERROR_ACCESS_DENIED` as alive (parity with Unix `EPERM`), so tempdir cleanup never reaps another live process's directories
 
 ### Changed
 

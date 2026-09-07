@@ -713,7 +713,9 @@ fn is_pid_alive(pid: u32) -> bool {
 #[cfg_attr(miri, allow(dead_code))]
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, STILL_ACTIVE,
+    };
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
@@ -721,9 +723,11 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            // If the process cannot be opened, assume it is gone so we can
-            // reclaim stale tempdirs rather than leaking them.
-            return false;
+            // A NULL handle usually means the PID is gone — except
+            // ERROR_ACCESS_DENIED, where a live (elevated/foreign-session)
+            // process simply refused us. Like the Unix EPERM arm, default to
+            // keep-alive so the tempdir GC never deletes a live owner's dirs.
+            return GetLastError() == ERROR_ACCESS_DENIED;
         }
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
