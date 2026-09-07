@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - `$var` mixed into `ECHO` / `RUN` / `WRITE` tails is preserved instead of silently dropped (`ECHO $x hello` keeps the value)
 - Both `"` and `'` quotes strip in `ENV` values (previously `"` only), and values split on the first `=` (`KEY=a=b` stores `a=b`)
 - `GLOB()` patterns containing `..` match nothing instead of traversing outside the sandbox root; every glob result is validated against the workspace boundary
+- `GLOB()` lists sandbox contents on Windows (verbatim `\\?\`-prefixed roots no longer yield empty results)
 
 ### Changed
 
