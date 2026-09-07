@@ -214,52 +214,62 @@ impl GuardedPath {
         }
         let path_pattern = Path::new(&posix);
 
+        // Windows verbatim roots (`\\?\C:\...`, from canonicalization): the
+        // glob engine returns nothing for verbatim patterns, and yielded
+        // paths would never match the verbatim root either. Compare in plain
+        // drive form (same location) and rebase results onto the guarded
+        // root, which keeps `strip_prefix` callers working unchanged.
+        let root_str =
+            strip_verbatim_prefix(&self.root.to_string_lossy().replace('\\', "/")).to_string();
+        let search_root = Path::new(&root_str);
+
         let rel_pattern = if path_pattern.is_absolute() {
             path_pattern
-                .strip_prefix(&self.root)
+                .strip_prefix(search_root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| posix.trim_start_matches('/').to_string())
         } else {
             posix.trim_start_matches('/').to_string()
         };
 
-        let root_str = self.root.to_string_lossy().replace('\\', "/");
         let escaped_root = glob::Pattern::escape(&root_str);
         let search = format!("{}/{}", escaped_root, rel_pattern);
-
-        // TEMPORARY DEBUG (Windows CI diagnosis — remove before merge).
-        eprintln!("GLOBDBG root={:?} search={}", self.root, search);
 
         let mut results = Vec::new();
         for entry in glob::glob(&search)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
         {
             let path = entry?;
-            eprintln!(
-                "GLOBDBG entry={:?} starts_with={} strip={:?}",
-                path,
-                path.starts_with(&self.root),
-                path.strip_prefix(&self.root)
-                    .map(|r| r.to_string_lossy().into_owned())
-            );
-            if !path.starts_with(&self.root) {
+            // Defense in depth: only root-bounded results without `..`
+            // escapes, rebased onto the guarded root.
+            let rel = match path.strip_prefix(search_root) {
+                Ok(rel) => rel,
+                Err(_) => continue,
+            };
+            if rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
                 continue;
             }
-            // Defense in depth: never return a lexically-escaping relative
-            // path, even if a future pattern form slips past the gate above.
-            let escapes = path
-                .strip_prefix(&self.root)
-                .map(|rel| {
-                    rel.components()
-                        .any(|c| matches!(c, std::path::Component::ParentDir))
-                })
-                .unwrap_or(true);
-            if !escapes {
-                results.push(path);
-            }
+            results.push(self.root.join(rel));
         }
         Ok(results)
     }
+}
+
+/// Strip a Windows verbatim-disk prefix (`\\?\C:\...`, already
+/// forward-slashed to `//?/C:/...`) to the plain drive form the glob engine
+/// and path comparisons understand. Returns the input unchanged otherwise —
+/// notably UNC/device forms (`//?/UNC/...`), which keep their prefix.
+fn strip_verbatim_prefix(path: &str) -> &str {
+    if let Some(rest) = path.strip_prefix("//?/") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'/' {
+            return rest;
+        }
+    }
+    path
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -1080,8 +1090,7 @@ mod tests {
     }
 
     /// Parent-dir patterns never reach traversal: `..` in any component
-    /// returns empty before any directory iteration begins.
-    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    /// returns empty before any directory iteration begins.    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
     #[cfg_attr(
         miri,
         ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
@@ -1124,5 +1133,15 @@ mod tests {
             .collect();
         hits.sort();
         assert_eq!(hits, vec!["a..b.txt".to_string(), "a.txt".to_string()]);
+    }
+
+    /// Pure string transform: safe everywhere, including Miri.
+    #[test]
+    fn strip_verbatim_prefix_keeps_plain_paths() {
+        assert_eq!(strip_verbatim_prefix("C:/a/b"), "C:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/C:/a/b"), "C:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/UNC/srv/sh"), "//?/UNC/srv/sh");
+        assert_eq!(strip_verbatim_prefix("/tmp/x"), "/tmp/x");
+        assert_eq!(strip_verbatim_prefix("a/../b"), "a/../b");
     }
 }
