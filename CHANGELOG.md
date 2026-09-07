@@ -13,10 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Multi-assignment lines split uniformly (`EXPAND K1=$x K2=$y` yields two overrides); `ENV` with more than one assignment is a precise error instead of silently merging or dropping values
 - `$var` mixed into `ECHO` / `RUN` / `WRITE` tails is preserved instead of silently dropped (`ECHO $x hello` keeps the value)
 - Both `"` and `'` quotes strip in `ENV` values (previously `"` only), and values split on the first `=` (`KEY=a=b` stores `a=b`)
+- `GLOB()` patterns containing `..` match nothing instead of traversing outside the sandbox root; every glob result is validated against the workspace boundary
 
 ### Changed
 
 - `ENV` / `EXPAND` reference docs rewritten: what a template is, placeholder namespaces and precedence, override value rules, and runnable proof examples for every value form
+- `FOR` / `LET` / `ECHO` reference docs enriched (`GLOB("*")` quoting rule and end-to-end example, expression-only `LET` right-hand side, variable `ECHO` forms, piped-stdin `EXPAND`)
 
 ## [0.8.0-alpha] - 2026-09-05
 

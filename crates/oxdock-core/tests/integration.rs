@@ -5,6 +5,8 @@
 // to its original file.
 #[path = "integration/commands.rs"]
 mod commands;
+#[path = "integration/glob_sandbox.rs"]
+mod glob_sandbox;
 #[path = "integration/guard_isolation.rs"]
 mod guard_isolation;
 #[path = "integration/incremental.rs"]

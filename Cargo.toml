@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/docs-gen",
+    "crates/docs-gen",
     "crates/oxdock-core",
     "crates/oxdock-doc-tests",
     "crates/oxdock-embed",
@@ -8,7 +9,6 @@ members = [
     "crates/oxdock-logic-tests",
     "crates/oxdock-logic-tests/fixtures/commands/ast_commands",
     "crates/oxdock-parser",
-    "crates/docs-gen",
     "crates/sys/oxdock-fs",
     "crates/sys/oxdock-process",
     "crates/sys/oxdock-sys-test-utils",

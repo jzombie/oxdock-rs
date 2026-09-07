@@ -25,7 +25,7 @@ Iterate over a list or map.
 
 **Syntax:** `FOR $item IN <expr> { <commands> } | FOR $key, $value IN <expr> { <commands> }`
 
-The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key.
+The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key. Loop variables are scoped to the loop body and do not leak outward. The body may be a braced block or a single-line `{ ... }` command. `GLOB("...")` patterns must be quoted (`*` is not a bare word, so `GLOB(*)` is a parse error); GLOB returns a root-relative sorted list, empty when nothing matches, and rejects `..` escapes.
 
 **Examples:**
 
@@ -41,6 +41,15 @@ LET $map = {"x": 1}
 FOR $k, $v IN $map {
   ECHO "$k=$v"
 }
+```
+
+**Example: expand every match**
+
+```oxdock
+# single-line body; $x is a template path, WHO an override
+WRITE a.txt "hi \{{ env:WHO }}!"
+FOR $x IN GLOB("*.txt") { EXPAND $x WHO=World }
+ASSERT_STDOUT "hi World!"
 ```
 
 
@@ -81,7 +90,7 @@ Bind script-local variables.
 
 **Syntax:** `LET $var = <expr> | LET $var = ASYNC { <commands> }`
 
-Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC).
+Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here.
 
 **Examples:**
 
@@ -93,6 +102,16 @@ ECHO "hello, {{ $name }}"
 
 LET $items = ["a", "b"]
 LET $count = 42
+```
+
+**Example: glob binding**
+
+```oxdock
+# the RHS is an expression: GLOB(...) runs and binds a list
+WRITE a.txt "x"
+LET $files = GLOB("*.txt")
+FOR $f IN $files { ECHO $f }
+ASSERT_STDOUT "a.txt"
 ```
 
 
@@ -331,6 +350,16 @@ Outputs message to stdout.
 
 ```oxdock
 ECHO build-complete
+```
+
+**Example: variables**
+
+```oxdock
+# a lone $x evaluates; {{ }} interpolates inside text
+LET $x = "World"
+ECHO {{ $x }}
+ECHO $x
+ASSERT_STDOUT "World"
 ```
 
 
@@ -621,13 +650,14 @@ Expand a template file (or stdin) to stdout.
 
 **Syntax:** `EXPAND [<path>] [<KEY=val> ...]`
 
-A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\{{ ... }}`) when writing a template file for a later `EXPAND`.
+A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | `path` | no | Template file to expand; omit to expand stdin |
+| `overrides` | `KEY=val` | no | Template overrides shadowing that key (unified string values) |
 
 **Output:** Stdout
 
@@ -671,6 +701,15 @@ LET $x = "Ada"
 WRITE template.md "Hi \{{ env:NAME }} and \{{ env:NAME2 }}!"
 EXPAND template.md NAME=$x NAME2="{{ $x }} concatenated"
 ASSERT_STDOUT "Hi Ada and Ada concatenated!"
+```
+
+**Example: expand stdin**
+
+```oxdock
+# no path: the template arrives on stdin through a pipe
+WITH_IO [stdout=pipe:tpl] ECHO "Hello \{{ env:NAME }}!"
+WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
+ASSERT_STDOUT "Hello Alice!"
 ```
 
 

@@ -206,6 +206,17 @@ fn evaluate_glob<P: ProcessManager>(args: &[Expr], cx: &mut StepCtx<'_, P>) -> R
         _ => bail!("GLOB pattern argument must evaluate to a string"),
     };
 
+    // Up-front sandbox gate (mirrors `GuardedPath::glob_paths`): patterns are
+    // sandbox-root-relative, so any `..` component escapes. Return empty
+    // without traversing — the same empty-on-no-match GLOB semantics.
+    if raw_pattern
+        .replace('\\', "/")
+        .split('/')
+        .any(|seg| seg == "..")
+    {
+        return Ok(Value::List(Vec::new()));
+    }
+
     let root = cx.state.fs.root().clone();
     let root_path = root.as_path().to_path_buf();
     let mut entries: Vec<Value> = root

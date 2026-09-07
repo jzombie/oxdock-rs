@@ -390,4 +390,22 @@ mod tests {
         let escape = resolver.parse_env_path(&root, "../outside.txt");
         assert!(escape.is_err(), "env-supplied escapes must be rejected");
     }
+
+    #[test]
+    fn resolve_read_rejects_parent_dir_escapes() {
+        // LOAD_TOML / LOAD_JSON ride `resolve_read`: escapes above the root
+        // must fail, while `..` that stays contained keeps resolving.
+        let temp = GuardedPath::tempdir().unwrap();
+        let root = temp.as_guarded_path().clone();
+        let resolver = PathResolver::new_guarded(root.clone(), root.clone()).unwrap();
+
+        assert!(resolver.resolve_read(&root, "../outside.txt").is_err());
+        assert!(resolver.resolve_read(&root, "a/../../escape.txt").is_err());
+
+        let expected = root.join("sub").unwrap().join("file.txt").unwrap();
+        let resolved = resolver
+            .resolve_read(&root, "sub/../sub/file.txt")
+            .expect("contained dotdot resolves");
+        assert_eq!(resolved.as_path(), expected.as_path());
+    }
 }

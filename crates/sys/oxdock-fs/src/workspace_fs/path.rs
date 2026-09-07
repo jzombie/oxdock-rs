@@ -194,6 +194,9 @@ impl GuardedPath {
 
     /// Evaluate a glob pattern against the sandbox root.
     /// Normalizes backslashes, escapes the root path, and returns workspace-relative paths.
+    /// Patterns are sandbox-root-relative; any `..` component is rejected
+    /// up front (empty result, no filesystem traversal) so iteration can
+    /// never start outside the root.
     #[allow(
         clippy::disallowed_types,
         clippy::disallowed_methods,
@@ -206,6 +209,9 @@ impl GuardedPath {
             pattern
         };
         let posix = clean.replace('\\', "/");
+        if posix.split('/').any(|segment| segment == "..") {
+            return Ok(Vec::new());
+        }
         let path_pattern = Path::new(&posix);
 
         let rel_pattern = if path_pattern.is_absolute() {
@@ -226,7 +232,19 @@ impl GuardedPath {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
         {
             let path = entry?;
-            if path.starts_with(&self.root) {
+            if !path.starts_with(&self.root) {
+                continue;
+            }
+            // Defense in depth: never return a lexically-escaping relative
+            // path, even if a future pattern form slips past the gate above.
+            let escapes = path
+                .strip_prefix(&self.root)
+                .map(|rel| {
+                    rel.components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                })
+                .unwrap_or(true);
+            if !escapes {
                 results.push(path);
             }
         }
@@ -1049,5 +1067,52 @@ mod tests {
 
         drop(inner);
         assert!(!path.exists(), "dropping the TempDir removes it");
+    }
+
+    /// Parent-dir patterns never reach traversal: `..` in any component
+    /// returns empty before any directory iteration begins.
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn glob_parent_patterns_return_empty_without_traversal() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        for pattern in ["../", "../*", "a/../../*", "..\\*"] {
+            let hits = root.glob_paths(pattern).expect("glob");
+            assert!(
+                hits.is_empty(),
+                "pattern {pattern} must return empty, got {hits:?}"
+            );
+        }
+    }
+
+    /// Normal patterns still list sandbox contents, including names that
+    /// merely contain dots (only exact `..` components are rejected).
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    #[cfg_attr(
+        miri,
+        ignore = "glob traversal needs host filesystem iteration; blocked under Miri isolation"
+    )]
+    #[test]
+    fn glob_lists_sandbox_contents() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            crate::PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver");
+        for name in ["a.txt", "a..b.txt"] {
+            let file = root.join(name).expect("join");
+            resolver.write_file(&file, b"data").expect("write");
+        }
+        let mut hits: Vec<String> = root
+            .glob_paths("*.txt")
+            .expect("glob")
+            .iter()
+            .map(|p| p.file_name().expect("name").to_string_lossy().into_owned())
+            .collect();
+        hits.sort();
+        assert_eq!(hits, vec!["a..b.txt".to_string(), "a.txt".to_string()]);
     }
 }

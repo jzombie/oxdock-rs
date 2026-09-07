@@ -516,7 +516,16 @@ declare_commands! {
         args: &[ ArgSpec { name: "message", arg_type: "string", description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
-        examples: &[ Example { name: "echo", fence_meta: None, code: indoc! {r#"ECHO build-complete"#} } ],
+        examples: &[
+            Example { name: "echo", fence_meta: None, code: indoc! {r#"ECHO build-complete"#} },
+            Example { name: "variables", fence_meta: None, code: indoc! {r#"
+                # a lone $x evaluates; {{ }} interpolates inside text
+                LET $x = "World"
+                ECHO {{ $x }}
+                ECHO $x
+                ASSERT_STDOUT "World"
+            "#} },
+        ],
         lower: |_flags, args| Ok(StepKind::Echo(join_value(args, "ECHO")?)),
     ],
 
@@ -747,8 +756,11 @@ declare_commands! {
         variant: Expand { path: Option<Arg>, overrides: Vec<(String, Arg)> },
         syntax: "EXPAND [<path>] [<KEY=val> ...]",
         summary: "Expand a template file (or stdin) to stdout.",
-        description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.",
+        args: &[
+            ArgSpec { name: "path", arg_type: "path", description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
+            ArgSpec { name: "overrides", arg_type: "KEY=val", description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+        ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[
@@ -779,6 +791,12 @@ declare_commands! {
                 WRITE template.md "Hi \{{ env:NAME }} and \{{ env:NAME2 }}!"
                 EXPAND template.md NAME=$x NAME2="{{ $x }} concatenated"
                 ASSERT_STDOUT "Hi Ada and Ada concatenated!"
+            "#} },
+            Example { name: "expand stdin", fence_meta: None, code: indoc! {r#"
+                # no path: the template arrives on stdin through a pipe
+                WITH_IO [stdout=pipe:tpl] ECHO "Hello \{{ env:NAME }}!"
+                WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
+                ASSERT_STDOUT "Hello Alice!"
             "#} },
         ],
         lower: |_flags, args| {
@@ -956,14 +974,15 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
             name: "FOR",
             syntax: "FOR $item IN <expr> { <commands> } | FOR $key, $value IN <expr> { <commands> }",
             summary: "Iterate over a list or map.",
-            description: "The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key.",
+            description: "The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key. Loop variables are scoped to the loop body and do not leak outward. The body may be a braced block or a single-line `{ ... }` command. `GLOB(\"...\")` patterns must be quoted (`*` is not a bare word, so `GLOB(*)` is a parse error); GLOB returns a root-relative sorted list, empty when nothing matches, and rejects `..` escapes.",
             args: &[],
             flags: &[],
             default_output: None,
-            examples: &[Example {
-                name: "for loop",
-                fence_meta: None,
-                code: indoc! {r#"
+            examples: &[
+                Example {
+                    name: "for loop",
+                    fence_meta: None,
+                    code: indoc! {r#"
                 LET $items = ["a", "b"]
                 FOR $item IN $items {
                   ECHO $item
@@ -974,7 +993,18 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
                   ECHO "$k=$v"
                 }
             "#},
-            }],
+                },
+                Example {
+                    name: "expand every match",
+                    fence_meta: None,
+                    code: indoc! {r#"
+                # single-line body; $x is a template path, WHO an override
+                WRITE a.txt "hi \{{ env:WHO }}!"
+                FOR $x IN GLOB("*.txt") { EXPAND $x WHO=World }
+                ASSERT_STDOUT "hi World!"
+            "#},
+                },
+            ],
         },
         CommandMeta {
             name: "IF",
@@ -1010,21 +1040,34 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
             name: "LET",
             syntax: "LET $var = <expr> | LET $var = ASYNC { <commands> }",
             summary: "Bind script-local variables.",
-            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC).",
+            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB(\"*.md\")` — never a `{{ ... }}` template; interpolation happens in string values, not here.",
             args: &[],
             flags: &[],
             default_output: None,
-            examples: &[Example {
-                name: "let",
-                fence_meta: None,
-                code: indoc! {r#"
+            examples: &[
+                Example {
+                    name: "let",
+                    fence_meta: None,
+                    code: indoc! {r#"
                 LET $name = "world"
                 ECHO "hello, {{ $name }}"
 
                 LET $items = ["a", "b"]
                 LET $count = 42
             "#},
-            }],
+                },
+                Example {
+                    name: "glob binding",
+                    fence_meta: None,
+                    code: indoc! {r#"
+                # the RHS is an expression: GLOB(...) runs and binds a list
+                WRITE a.txt "x"
+                LET $files = GLOB("*.txt")
+                FOR $f IN $files { ECHO $f }
+                ASSERT_STDOUT "a.txt"
+            "#},
+                },
+            ],
         },
         CommandMeta {
             name: "ASYNC",
