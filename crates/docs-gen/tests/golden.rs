@@ -370,19 +370,19 @@ fn discover_finds_target_json_dirs_only() {
 )]
 fn sparse_target_synthesizes_local_convention() {
     // A two-line target.json (nothing to get wrong) expands to the local
-    // layout: header.tmpl + fragments globs + footer.tmpl, all owned by
-    // the target directory. No document vocabulary in the engine.
+    // layout: header.md.tmpl + fragments globs + footer.md.tmpl, all owned
+    // by the target directory. No document vocabulary in the engine.
     let fx = Fixture::new();
     fx.write(
         "crates/beta/.oxdock/template/target.json",
         r#"{"name":"beta","out":"crates/beta/README.md"}"#,
     );
     fx.write(
-        "crates/beta/.oxdock/template/header.tmpl",
+        "crates/beta/.oxdock/template/header.md.tmpl",
         "# {{ $docs_ctx.name }}\n",
     );
     fx.write("crates/beta/.oxdock/template/fragments/a.md", "A\n");
-    fx.write("crates/beta/.oxdock/template/footer.tmpl", "F\n");
+    fx.write("crates/beta/.oxdock/template/footer.md.tmpl", "F\n");
     let config = DocsGenConfig::default();
     let found =
         discover_targets(fx.repo_root(), &config, &["crates/beta".to_string()]).expect("discover");
@@ -396,7 +396,7 @@ fn sparse_target_synthesizes_local_convention() {
     assert_eq!(kinds, ["template", "glob", "glob", "template"]);
     assert_eq!(
         found[0].spec.stages[0].path.as_deref(),
-        Some("crates/beta/.oxdock/template/header.tmpl")
+        Some("crates/beta/.oxdock/template/header.md.tmpl")
     );
     assert_eq!(found[0].spec.member.as_deref(), Some("crates/beta"));
 }

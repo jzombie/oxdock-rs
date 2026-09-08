@@ -55,9 +55,12 @@ lines: discovery fills in the rest from the target directory layout:
 {"name": "oxdock-core-readme", "out": "crates/oxdock-core/README.md"}
 ```
 
-An empty `stages` list synthesizes: `header.tmpl` expanded when
+An empty `stages` list synthesizes: `header.md.tmpl` expanded when
 present, then verbatim `fragments/*.md`, then expanded
-`fragments/*.tmpl`, then `footer.tmpl` when present. Each crate owns
+`fragments/*.md.tmpl`, then `footer.md.tmpl` when present. The engine
+matches any `*.tmpl` suffix, so other formats use their own extension
+(e.g. `module.rs.tmpl`); this repo standardizes on `*.md.tmpl` for
+markdown so the output type is visible. Each crate owns
 its wrapper copies; global *strings* (workspace name, URLs) stay
 single-sourced in the global values file and are referenced as
 `{{ $docs_global.workspace }}`.
@@ -67,7 +70,7 @@ at a master template instead. Order comes from `{{> path }}`
 positions in the document itself:
 
 ```json
-{"name": "readme", "out": "README.md", "template": ".oxdock/template/readme/output.tmpl"}
+{"name": "readme", "out": "README.md", "template": ".oxdock/template/readme/output.md.tmpl"}
 ```
 
 ```text

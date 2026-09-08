@@ -98,12 +98,13 @@ pub fn discover_targets(
 /// document-specific vocabulary (the engine only knows files in a
 /// directory):
 ///
-/// - `<dir>/header.tmpl` present → prepend an EXPAND stage for it;
+/// - `<dir>/header.md.tmpl` present → prepend an EXPAND stage for it;
 /// - `<dir>/fragments/` present → a verbatim `*.md` glob plus an expanded
-///   `*.tmpl` glob (empty globs are no-ops; `.tmpl`-means-expand is the
-///   engine's format-neutral convention — `module.rs.tmpl` expands,
+///   `*.tmpl` glob (empty globs are no-ops; the engine matches any
+///   `*.tmpl` suffix — this repo uses `*.md.tmpl` so the output type is
+///   visible, while e.g. `module.rs.tmpl` would expand the same way and
 ///   `snippet.rs` stays verbatim);
-/// - `<dir>/footer.tmpl` present → append an EXPAND stage for it.
+/// - `<dir>/footer.md.tmpl` present → append an EXPAND stage for it.
 ///
 /// Verbatim collection defaults to `*.md`; targets generating other
 /// formats declare explicit `stages` (as the pilots do). Each crate owns
@@ -117,10 +118,10 @@ fn conventional_stages(root: &GuardedPath, dir: &str) -> Vec<StageSpec> {
             .unwrap_or(false)
     };
     let mut stages = Vec::new();
-    if exists(&format!("{dir}/header.tmpl")) {
+    if exists(&format!("{dir}/header.md.tmpl")) {
         stages.push(StageSpec {
             kind: "template".to_string(),
-            path: Some(format!("{dir}/header.tmpl")),
+            path: Some(format!("{dir}/header.md.tmpl")),
             pattern: None,
             text: None,
             expand: false,
@@ -142,10 +143,10 @@ fn conventional_stages(root: &GuardedPath, dir: &str) -> Vec<StageSpec> {
             expand: true,
         });
     }
-    if exists(&format!("{dir}/footer.tmpl")) {
+    if exists(&format!("{dir}/footer.md.tmpl")) {
         stages.push(StageSpec {
             kind: "template".to_string(),
-            path: Some(format!("{dir}/footer.tmpl")),
+            path: Some(format!("{dir}/footer.md.tmpl")),
             pattern: None,
             text: None,
             expand: false,
