@@ -195,7 +195,7 @@ pub fn validate_positionals_against_meta(
 
     if !has_rest && args.len() > specs.len() {
         bail!(
-            "{cmd_name} expects at most {} positional argument(s), got {}",
+            "invalid syntax for command {cmd_name}: expects at most {} positional argument(s), got {}",
             specs.len(),
             args.len()
         );
@@ -207,7 +207,10 @@ pub fn validate_positionals_against_meta(
             // the inner type, not just the first.
             let tail = args.get(spec.index..).unwrap_or(&[]);
             if tail.is_empty() && spec.required {
-                bail!("{cmd_name} requires argument `{}`", spec.name)
+                bail!(
+                    "invalid syntax for command {cmd_name}: requires argument `{}`",
+                    spec.name
+                )
             }
             for arg in tail {
                 check_one(cmd_name, spec, inner, arg)?;
@@ -217,7 +220,10 @@ pub fn validate_positionals_against_meta(
         match args.get(spec.index) {
             Some(arg) => check_one(cmd_name, spec, &spec.arg_type, arg)?,
             None if spec.required => {
-                bail!("{cmd_name} requires argument `{}`", spec.name)
+                bail!(
+                    "invalid syntax for command {cmd_name}: requires argument `{}`",
+                    spec.name
+                )
             }
             None => {}
         }
@@ -229,7 +235,7 @@ fn check_one(cmd_name: &str, spec: &ArgSpec, arg_type: &ArgType, arg: &Arg) -> R
     match arg_type.check_arg(arg) {
         Ok(_) => Ok(()),
         Err(e) => bail!(
-            "{cmd_name}: argument `{}` got {} — {e:#}",
+            "invalid syntax for command {cmd_name}: argument `{}` got {} — {e:#}",
             spec.name,
             arg.render()
         ),

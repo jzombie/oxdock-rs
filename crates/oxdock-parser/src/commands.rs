@@ -169,8 +169,32 @@ fn fmt_io(b: &IoBinding) -> String {    let s = match b.stream {
 
 // Keywords parsed by PEG rules rather than plain-command lowering (`WITH_IO`,
 // `AWAIT`, ...). When a line starts with one of these but fails to parse as
-// such, lowering falls through here — explain the expected syntax instead of
-// only reporting an unknown command.
+// such, lowering falls through here — report a committed syntax error instead
+// of an unknown command.
+fn is_known_command(name: &str) -> bool {
+    if name == "ELSE" {
+        return true;
+    }
+    all_metadata().iter().any(|meta| meta.name == name)
+}
+
+pub(crate) fn invalid_syntax_error(name: &str, raw_args: &[Arg]) -> anyhow::Error {
+    let received = raw_args
+        .iter()
+        .map(Arg::render)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let got = if received.is_empty() {
+        "nothing".to_string()
+    } else {
+        format!("`{received}`")
+    };
+    match structural_hint(name, &received) {
+        Some(hint) => anyhow!("invalid syntax for command {name}: {hint}"),
+        None => anyhow!("invalid syntax for command {name}: got {got}."),
+    }
+}
+
 fn unknown_command_error(name: &str, raw_args: &[Arg]) -> anyhow::Error {
     let received = raw_args
         .iter()
@@ -327,7 +351,13 @@ macro_rules! declare_commands {
                         lower_fn(flags, positional)
                     }
                 )*
-                _ => Err(unknown_command_error(name, &raw_args)),
+                _ => {
+                    if is_known_command(name) {
+                        Err(invalid_syntax_error(name, &raw_args))
+                    } else {
+                        Err(unknown_command_error(name, &raw_args))
+                    }
+                }
             }
         }
 
@@ -1407,7 +1437,8 @@ mod tests {
     #[test]
     fn malformed_with_io_binding_names_the_bad_binding() {
         let err = parse_err("WITH_IO [stdout=discard] ECHO \"test\"\n");
-        assert!(err.contains("unknown command: WITH_IO"), "{err}");
+        assert!(err.contains("invalid syntax for command WITH_IO"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
         assert!(err.contains("stdout=discard"), "{err}");
         assert!(err.contains("pipe:<name>"), "{err}");
     }
@@ -1415,9 +1446,40 @@ mod tests {
     #[test]
     fn await_without_task_variable_points_at_syntax() {
         let err = parse_err("AWAIT ECHO \"test\"\n");
-        assert!(err.contains("unknown command: AWAIT"), "{err}");
+        assert!(err.contains("invalid syntax for command AWAIT"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
         assert!(err.contains("AWAIT $t"), "{err}");
         assert!(err.contains("ECHO"), "{err}");
+    }
+
+    #[test]
+    fn structural_fallthrough_commits_per_keyword() {
+        for (script, cmd) in [
+            ("CANCEL foo\n", "CANCEL"),
+            ("TIMEOUT foo\n", "TIMEOUT"),
+            ("FOR foo\n", "FOR"),
+            ("IF foo\n", "IF"),
+            ("LET foo\n", "LET"),
+            // NOTE: INHERIT_ENV is dual-registered as a leaf command
+            // (`INHERIT_ENV <key>...`), so `INHERIT_ENV foo` lowers
+            // successfully instead of erroring — excluded here.
+            ("ASYNC\n", "ASYNC"),
+            ("ELSE foo\n", "ELSE"),
+        ] {
+            let err = parse_err(script);
+            assert!(
+                err.contains(&format!("invalid syntax for command {cmd}")),
+                "{cmd}: {err}"
+            );
+            assert!(!err.contains("unknown command"), "{cmd}: {err}");
+        }
+    }
+
+    #[test]
+    fn leaf_arity_errors_carry_invalid_syntax_prefix() {
+        let err = parse_err("SLEEP 1s 2s\n");
+        assert!(err.contains("invalid syntax for command SLEEP"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
     }
 
     #[test]
