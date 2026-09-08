@@ -57,10 +57,8 @@ fn main() -> Result<()> {
 
     let cargo_enabled = config.providers.iter().any(|p| p == "cargo-metadata");
     for target in &targets {
-        if let Err(err) = render_target(&repo_root, &workspace_toml, target, &config, cargo_enabled)
-        {
-            eprintln!("  Warning: target `{}` failed: {err:#}", target.name);
-        }
+        render_target(&repo_root, &workspace_toml, target, &config, cargo_enabled)
+            .with_context(|| format!("render target `{}`", target.name))?;
     }
     eprintln!("docs-gen rendered {} target(s)", targets.len());
     Ok(())
