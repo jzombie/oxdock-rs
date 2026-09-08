@@ -1,1 +1,47 @@
-{"name": "oxdock-readme", "out": "oxdock/README.md", "values": "oxdock/.oxdock/template/values.json", "template": "oxdock/.oxdock/template/output.md.tmpl"}
+{
+  "targets": [
+    {
+      "name": "oxdock-readme",
+      "out": "oxdock/README.md",
+      "values": "oxdock/.oxdock/template/values.json",
+      "template": "oxdock/.oxdock/template/README.md.tmpl",
+      "fragments": {
+        "local": [
+          "oxdock/.oxdock/template/fragments/*",
+          "oxdock/.oxdock/template/footer.md.tmpl"
+        ],
+        "shared": [
+          ".oxdock/template/shared/*"
+        ],
+        "generated": [
+          ".oxdock/template/readme/generated/*"
+        ]
+      }
+    },
+    {
+      "name": "oxdock-rustdoc",
+      "out": "oxdock/docs/command_reference.md",
+      "values": "oxdock/.oxdock/template/values.json",
+      "template": "oxdock/.oxdock/template/command_reference.md.tmpl",
+      "fragments": {
+        "generated": [
+          ".oxdock/template/readme/generated/*"
+        ]
+      }
+    },
+    {
+      "name": "oxdock-crate-docs",
+      "out": "oxdock/docs/crate_docs.md",
+      "values": "oxdock/.oxdock/template/values.json",
+      "template": "oxdock/.oxdock/template/crate_docs.md.tmpl",
+      "fragments": {
+        "shared": [
+          ".oxdock/template/shared/intro.md.tmpl"
+        ],
+        "generated": [
+          ".oxdock/template/readme/generated/*"
+        ]
+      }
+    }
+  ]
+}

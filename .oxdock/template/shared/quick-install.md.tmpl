@@ -1,8 +1,7 @@
-Install: `cargo install oxdock@{{ env:CRATE_VERSION }}` or add the library with `cargo add oxdock`.
+Add it to your Rust build with `cargo add oxdock@{{ env:CRATE_VERSION }}`, or install the standalone runner with `cargo install oxdock@{{ env:CRATE_VERSION }}`.
 
-Once installed:
+Run a script:
 
 ```sh
-oxdock --script Oxfile
+oxdock <PATH>
 ```
-

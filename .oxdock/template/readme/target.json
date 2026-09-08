@@ -1,1 +1,22 @@
-{"name": "readme", "out": "README.md", "values": ".oxdock/template/readme/values.json", "template": ".oxdock/template/readme/output.md.tmpl"}
+{
+  "targets": [
+    {
+      "name": "readme",
+      "out": "README.md",
+      "values": ".oxdock/template/readme/values.json",
+      "template": ".oxdock/template/readme/README.md.tmpl",
+      "fragments": {
+        "local": [
+          ".oxdock/template/readme/fragments/*",
+          ".oxdock/template/readme/footer.md.tmpl"
+        ],
+        "shared": [
+          ".oxdock/template/shared/*"
+        ],
+        "generated": [
+          ".oxdock/template/readme/generated/*"
+        ]
+      }
+    }
+  ]
+}

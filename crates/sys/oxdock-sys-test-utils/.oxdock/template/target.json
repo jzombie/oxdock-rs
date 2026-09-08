@@ -1,1 +1,17 @@
-{"name": "oxdock-sys-test-utils-readme", "out": "crates/sys/oxdock-sys-test-utils/README.md"}
+{
+  "targets": [
+    {
+      "name": "oxdock-sys-test-utils-readme",
+      "out": "crates/sys/oxdock-sys-test-utils/README.md",
+      "values": "crates/sys/oxdock-sys-test-utils/.oxdock/template/values.json",
+      "template": "crates/sys/oxdock-sys-test-utils/.oxdock/template/README.md.tmpl",
+      "fragments": {
+        "local": [
+          "crates/sys/oxdock-sys-test-utils/.oxdock/template/header.md.tmpl",
+          "crates/sys/oxdock-sys-test-utils/.oxdock/template/fragments/*",
+          "crates/sys/oxdock-sys-test-utils/.oxdock/template/footer.md.tmpl"
+        ]
+      }
+    }
+  ]
+}

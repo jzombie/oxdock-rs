@@ -1,0 +1,1 @@
+{"name": "oxdock-fixture", "description": "Test-fixture harness that materializes reproducible Cargo workspaces for OxDock's compile-time, Dockerfile-inspired DSL."}

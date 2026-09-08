@@ -1,1 +1,17 @@
-{"name": "oxdock-fixture-readme", "out": "crates/oxdock-fixture/README.md"}
+{
+  "targets": [
+    {
+      "name": "oxdock-fixture-readme",
+      "out": "crates/oxdock-fixture/README.md",
+      "values": "crates/oxdock-fixture/.oxdock/template/values.json",
+      "template": "crates/oxdock-fixture/.oxdock/template/README.md.tmpl",
+      "fragments": {
+        "local": [
+          "crates/oxdock-fixture/.oxdock/template/header.md.tmpl",
+          "crates/oxdock-fixture/.oxdock/template/fragments/*",
+          "crates/oxdock-fixture/.oxdock/template/footer.md.tmpl"
+        ]
+      }
+    }
+  ]
+}

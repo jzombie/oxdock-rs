@@ -1,0 +1,1 @@
+{"name": "oxdock-core", "description": "Core engine for OxDock's Dockerfile-inspired compile-time DSL, orchestrating workspace snapshots and asset embedding."}

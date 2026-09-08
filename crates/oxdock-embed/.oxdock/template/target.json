@@ -1,1 +1,17 @@
-{"name": "oxdock-embed-readme", "out": "crates/oxdock-embed/README.md"}
+{
+  "targets": [
+    {
+      "name": "oxdock-embed-readme",
+      "out": "crates/oxdock-embed/README.md",
+      "values": "crates/oxdock-embed/.oxdock/template/values.json",
+      "template": "crates/oxdock-embed/.oxdock/template/README.md.tmpl",
+      "fragments": {
+        "local": [
+          "crates/oxdock-embed/.oxdock/template/header.md.tmpl",
+          "crates/oxdock-embed/.oxdock/template/fragments/*",
+          "crates/oxdock-embed/.oxdock/template/footer.md.tmpl"
+        ]
+      }
+    }
+  ]
+}

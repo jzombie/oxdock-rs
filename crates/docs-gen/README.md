@@ -1,106 +1,95 @@
 # docs-gen
 
-General-purpose doc generation engine: OxDock-driven templates, plugins, and sandboxed rendering.
+Renders every README in the workspace from shared templates.
 
 > Part of the [OxDock](https://github.com/jzombie/rust-oxdock) workspace.
 
 ## Overview
 
-`docs-gen` renders text files from OxDock templates. Each target
-declares ordered stages (verbatim or expanded file fragments) filled
-with per-target values over global defaults. Targets are discovered
-from every crate's `.oxdock/template` directory: no registry, no
-hardcoded paths, any output format.
+`docs-gen` builds every `README.md` in this workspace from templates,
+so shared sections are written once and reused everywhere. Run it with
+`cargo run -p docs-gen` after changing anything under a
+`.oxdock/template` directory, then commit the regenerated outputs.
 
-Run it with `cargo run -p docs-gen`. It accepts two flags:
+Concretely, each run:
 
-- `--config <path>`: which config file to load. Without it, the runner
-  looks for `./docs-gen.json`, then `./.oxdock/docs-gen.json`, and
-  errors out when neither exists.
+- assembles every README from a master template whose section order
+  is the order you see in that file,
+- fills in sections shared between documents (the project intro,
+  install instructions, embed example) from single canonical files,
+- stamps the workspace version into every version reference from one
+  source (`CRATE_VERSION`, overridable per run),
+- regenerates the command reference from the parser command registry,
+  so the docs can never list a removed command or miss a new one,
+- re-derives each document display name and description from its
+  `Cargo.toml`,
+- and fails the whole run on a misspelled section or unknown value
+  instead of rendering wrong docs.
+
+It accepts one flag:
+
 - `--root <path>`: which workspace root to render. Without it, the
-  runner walks up from the current directory to the enclosing
-  repository.
+  runner discovers the enclosing workspace from the current
+  directory.
+
 ## Pipeline
 
 Each run performs the same steps, in order:
 
-1. Load `docs-gen.json` (global values file, enabled providers,
-   generated-file mapping, explicit targets, extra template roots).
-2. Run enabled plugins. The `command-ref` provider renders the
-   `oxdock-parser` command registry into named fragments
-   (`command_index`, `command_body`); the `generated_files` mapping in
-   config decides which workspace-relative files they are written to.
-   Any target can then consume those files as ordinary stages, so
-   generated content is shareable instead of trapped in one document.
-3. Collect targets: explicit `targets` entries plus every `target.json`
-   discovered under each workspace member's `.oxdock/template` tree
-   (and the configured roots). Directories without `target.json`
-   (`_global/`, fragment-only dirs) are not targets.
-4. Render each target: resolve its owning member's cargo metadata
-   (`name`, `description`, `version` flow into the template context and
-   into `CRATE_*` env entries), merge values (target values beat
-   provider values beat global values), and execute the pure-DSL
-   driver script, which concatenates stages byte-for-byte.
+1. Load `docs-gen.json` (global values file, doc root scopes).
+2. Render the `oxdock-parser` command registry into the committed
+   command reference inputs, so generated content is shareable
+   instead of trapped in one document.
+3. Sync each member's `values.json` from its manifest (see below).
+4. Assemble one `$files` manifest per target: glob every `fragments`
+   pattern, expand each match once, and write the group-to-content map
+   for the pipeline to `LOAD_JSON` (see below).
+5. Render every target: the inline pipeline reads each `target.json`,
+   loads its values and `$files` manifest, and expands the master
+   template once through native `EXPAND` piped to `APPEND`.
 
-All dynamic values enter the DSL as runtime `$var` bindings. There is
-no compile-time interpolation of runtime data and no hand-built AST:
-the driver is plain DSL text parsed with the production dispatcher.
+The pipeline itself is OxDock, embedded in `src/lib.rs` via `oxdock!`
+and parsed by the production dispatcher. No template logic lives in
+Rust; the surrounding helpers only bridge host data the DSL cannot
+reach (process env, manifests, registry, fragment contents).
 
-## Targets and stages
+## Values
 
-A target is declared by a `target.json` file. The common case is two
-lines: discovery fills in the rest from the target directory layout:
+Each target declares a `values` file holding its display `name` and
+`description`. Every run re-derives both from the owning member's
+manifest: `description` always flows from the manifest, while a
+committed `name` wins as a display override (`OxDock` vs the package
+name `oxdock`). Members without a manifest keep static values files.
+Shared strings stay in the global values file and are referenced as
+`{{ $docs_global.* }}`.
 
-```json
-{"name": "oxdock-core-readme", "out": "crates/oxdock-core/README.md"}
-```
+## Targets and assemblies
 
-An empty `stages` list synthesizes: `header.md.tmpl` expanded when
-present, then verbatim `fragments/*.md`, then expanded
-`fragments/*.md.tmpl`, then `footer.md.tmpl` when present. The engine
-matches any `*.tmpl` suffix, so other formats use their own extension
-(e.g. `module.rs.tmpl`); this repo standardizes on `*.md.tmpl` for
-markdown so the output type is visible. Each crate owns
-its wrapper copies; global *strings* (workspace name, URLs) stay
-single-sourced in the global values file and are referenced as
-`{{ $docs_global.workspace }}`.
-
-Targets with bespoke composition skip the stage list entirely and point
-at a master template instead. Order comes from `{{> path }}`
-positions in the document itself:
+A target is declared by a `target.json` file with an output path, a
+values file, a master template, and grouped discovery patterns (never
+per-file lists):
 
 ```json
-{"name": "readme", "out": "README.md", "template": ".oxdock/template/readme/output.md.tmpl"}
+{"name": "readme", "out": "README.md", "values": ".../values.json", "template": ".../README.md.tmpl", "fragments": {"local": [".../fragments/*"], "shared": [".../shared/*"]}}
 ```
 
-```text
-{{> .oxdock/template/readme/fragments/header.md }}
-{{> .oxdock/template/shared/embed-example.md }}
-{{> .oxdock/template/readme/generated/command-reference.md }}
-```
+The master template is an ordinary Markdown file whose section
+order is the output order. Wherever it names a section with a
+`{{ $files.<group>.<stem> }}` placeholder, the matching fragment
+renders there: `{{ $files.shared.intro }}` pulls in
+`shared/intro.md.tmpl`. To add a section, drop the file in a
+discovered directory and name it from the master with one placeholder
+line. To reorder, move the placeholder lines.
 
-A whole-line `{{> path }}` includes that file at its position:
-verbatim, unless it ends in `.tmpl`, which expands with the values
-context in scope. Other lines are literal document content and expand
-the same way. Only `stages`-form targets needing collection (`glob`)
-or inline (`text`) composition keep an explicit list.
+Names are file stems (the name up to the first dot) limited to
+letters, numbers, `_`, and `-`. A misspelled placeholder, two files
+sharing one name, or an unreadable values file fails the run instead
+of rendering wrong docs.
 
-Available stage kinds:
-
-- `template`: `EXPAND` the file at `path`. Strict: `{{ $docs_ctx.key }}`
-  and `{{ $docs_global.key }}` resolve against the values maps,
-  `{{ env:KEY }}` against the environment. Unknown keys fail the run.
-- `read`: `READ` the file at `path` byte-verbatim. Documented DSL
-  snippets such as `{{ env:PROJECT }}` survive untouched.
-- `glob`: collect `pattern` via `GLOB` (sorted, sandbox-relative), then
-  per file `EXPAND` when `expand` is true, else `READ` verbatim.
-- `text`: append the inline `text` string.
-
-Every configured `out`, `template`, `values`, and stage path is
-validated through `GuardedPath` before anything executes: `..`
-segments and absolute paths are rejected, and relative candidates are
-anchored at the workspace root (never the process working directory),
-so a target can never write outside the repository.
+Two formatting rules keep assembly exact: keep fragments
+newline-terminated with placeholders on their own lines, and escape
+literal placeholder examples natively (`{{ ... }}`) so they pass
+through untouched.
 
 ## License
 

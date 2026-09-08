@@ -8,12 +8,12 @@ Supports platform gating, async tasks, and piped workflows for custom pipelines.
 
 [Documentation](https://docs.rs/oxdock/0.10.0-alpha/oxdock/)
 
-Install: `cargo install oxdock@0.10.0-alpha` or add the library with `cargo add oxdock`.
+Add it to your Rust build with `cargo add oxdock@0.10.0-alpha`, or install the standalone runner with `cargo install oxdock@0.10.0-alpha`.
 
-Once installed:
+Run a script:
 
 ```sh
-oxdock --script Oxfile
+oxdock <PATH>
 ```
 
 ## Embed at compile time
@@ -170,6 +170,7 @@ oxdock = { version = "0.10.0-alpha", default-features = false }
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
+
 ### WITH_IO
 
 Reroute standard streams.
@@ -1167,7 +1168,6 @@ Script variable reference. The `$` sigil is mandatory.
 ### Value type: KEY=value
 
 `KEY=value` assignment splitting on the first `=` (`KEY=a=b` stores `a=b`). Values follow the unified string-value rules.
-
 
 ## License
 
