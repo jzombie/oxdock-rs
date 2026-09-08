@@ -71,7 +71,10 @@ fn target(name: &str, out: &str, stages_json: serde_json::Value) -> TargetSpec {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn no_forced_newline_between_stages() {
     let fx = Fixture::new();
     // Deliberately missing trailing newlines everywhere.
@@ -91,7 +94,10 @@ fn no_forced_newline_between_stages() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn newlines_come_from_templates_only() {
     let fx = Fixture::new();
     fx.write("head.tmpl", "A\n");
@@ -114,7 +120,10 @@ fn newlines_come_from_templates_only() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn target_values_override_globals() {
     let fx = Fixture::new();
     fx.write("global.json", r#"{"title":"global","footer":"shared"}"#);
@@ -143,7 +152,10 @@ fn target_values_override_globals() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn provider_values_lose_to_target_values() {
     let fx = Fixture::new();
     fx.write("values.json", r#"{"title":"local"}"#);
@@ -170,7 +182,10 @@ fn provider_values_lose_to_target_values() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn same_engine_emits_toml_and_rust() {
     let fx = Fixture::new();
     fx.write("values.json", r#"{"title":"demo"}"#);
@@ -204,7 +219,10 @@ fn same_engine_emits_toml_and_rust() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn verbatim_fragments_survive_strict_expansion() {
     let fx = Fixture::new();
     // Documented DSL snippets must not trigger strict EXPAND failures.
@@ -225,7 +243,10 @@ fn verbatim_fragments_survive_strict_expansion() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn guard_rejects_traversal() {
     let fx = Fixture::new();
     for candidate in ["../escape.md", "a/../../escape.md", "/abs.md"] {
@@ -238,7 +259,10 @@ fn guard_rejects_traversal() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn render_target_rejects_escape_out() {
     let fx = Fixture::new();
     fx.write("output.tmpl", "x\n");
@@ -298,7 +322,10 @@ fn member_for_dir_prefers_longest_prefix() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn discover_finds_target_json_dirs_only() {
     let fx = Fixture::new();
     fx.write(
@@ -337,7 +364,10 @@ fn discover_finds_target_json_dirs_only() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn sparse_target_synthesizes_local_convention() {
     // A two-line target.json (nothing to get wrong) expands to the local
     // layout: header.tmpl + fragments globs + footer.tmpl, all owned by
@@ -372,7 +402,10 @@ fn sparse_target_synthesizes_local_convention() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn sparse_target_without_wrappers_renders_fragments_only() {
     // No header/footer files: convention yields just the fragment globs.
     // Other formats use explicit `stages` (see the pilots); the sparse
@@ -403,7 +436,10 @@ fn sparse_target_without_wrappers_renders_fragments_only() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn read_stage_orders_files_explicitly() {
     // `read` stages concatenate verbatim in declared order — no
     // filename-prefix ordering hacks, and generated files can live
@@ -426,7 +462,10 @@ fn read_stage_orders_files_explicitly() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation")]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
 fn template_target_derives_order_from_includes() {
     // No stage list managed: order comes from `{{> }}` positions in the
     // master document; literal prose expands with the values context.
