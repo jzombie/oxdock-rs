@@ -547,12 +547,16 @@ declare_commands! {
             ArgSpec { name: "from", arg_type: ArgType::Path, description: "Source", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
             ArgSpec { name: "to", arg_type: ArgType::Path, description: "Dest", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
         ],
-        flags: &[ FlagSpec { name: "from_current_workspace", long: "--from-current-workspace", value_type: FlagValueType::Flag, required: false, description: "From workspace root" } ],
+        flags: &[ FlagSpec { name: "from_current_workspace", long: "--from-current-workspace", value_type: FlagValueType::Flag, required: false, description: "Copy from workspace instead of build context" } ],
         default_output: None,
         examples: &[ Example { name: "copy", fence_meta: Some("roots:unified"), code: indoc! {r#"
             WRITE src.txt content
             COPY src.txt dst.txt
             ASSERT_FILE dst.txt content
+        "#} }, Example { name: "copy from workspace", fence_meta: Some("roots:unified"), code: indoc! {r#"
+            WRITE ws-src.txt ws-content
+            COPY --from-current-workspace ws-src.txt ws-copy.txt
+            ASSERT_FILE ws-copy.txt ws-content
         "#} } ],
         lower: |flags, args| {
             let from_current_workspace = flags.iter().any(|(k, _)| k == "from_current_workspace");

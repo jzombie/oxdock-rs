@@ -20,10 +20,9 @@ LS dist
 ASSERT_STDOUT hello.txt
 ```
 
-Run it with the CLI:
+Run the same file with the CLI (install once, see above):
 
-```bash
-cargo install --path oxdock
+```sh
 oxdock --script Oxfile
 ```
 

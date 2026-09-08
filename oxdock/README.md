@@ -1,6 +1,22 @@
 # OxDock
 
-Run OxDock scripts from the CLI, or embed them in your build.
+Dockerfile inspired build DSL. Native. Embed scripts at compile time in Rust, or run the same scripts as standalone CLI pipelines.
+
+**Dockerfile inspired build DSL for Rust**
+
+OxDock is a Dockerfile inspired build DSL for Rust. Embed scripts at compile time with macros, or run the same scripts as standalone CLI pipelines. Native. No containers. No daemon. No VM. All commands run identically on every OS, except RUN.
+
+Supports platform gating, async tasks, and piped workflows for custom pipelines.
+
+[Documentation](https://docs.rs/oxdock/0.9.0-alpha/oxdock/)
+
+Install: `cargo install oxdock@0.9.0-alpha` or add the library with `cargo add oxdock`.
+
+Once installed:
+
+```sh
+oxdock --script Oxfile
+```
 
 ## Embed at compile time
 
@@ -31,6 +47,49 @@ fn main() {
 
 For each artifact the macro emits a constant backed by `include_bytes!`, which bakes the file bytes into read-only binary data during compilation. At runtime `get()` scans a static table and returns a borrowed slice, so there are no file reads and no heap allocation. The support types only need `alloc::borrow::Cow` and core iterators, which is why it works in `no_std`.
 
+### Prepare during the build
+
+`oxdock_embed!` ships artifacts inside the binary. `oxdock_prepare!` runs the same script but emits no runtime module. Use it when assets only need to exist during the build, for codegen or `include!` workflows.
+
+```rust
+use oxdock_macros::oxdock_prepare;
+
+oxdock_prepare! {
+    name: PreparedAssets,
+    script: {
+        MKDIR gen
+        WRITE gen/out.txt generated
+        ASSERT_FILE gen/out.txt generated
+    },
+    out_dir: "target/prebuilt_prepare",
+}
+
+fn main() {}
+```
+
+### Stream bytes between steps
+
+`WITH_IO` routes stdout into named pipes and back into stdin, so steps form custom pipelines without temp files.
+
+```oxdock
+WITH_IO [stdout=pipe:msg] ECHO piped-bytes
+WITH_IO [stdin=pipe:msg] WRITE piped.txt
+READ piped.txt
+ASSERT_STDOUT piped-bytes
+```
+
+### Workspaces start ephemeral
+
+Scripts start in an ephemeral snapshot workspace, an isolated temp dir that leaves the source tree untouched. Pull inputs with `COPY` or `COPY_GIT`. Switch to the local directory with `WORKSPACE LOCAL` when the script should mutate in place.
+
+```oxdock
+WRITE snap.txt from-snapshot
+ASSERT_FILE snap.txt from-snapshot
+WORKSPACE LOCAL
+WRITE local.txt from-local
+ASSERT_FILE local.txt from-local
+```
+
 OxDock scripts automate build-time work: creating files, snapshotting
 workspaces, verifying artifacts with native assertions. You run them
 two ways off the same core: embedded in your build with macros, or as
@@ -47,7 +106,7 @@ One language for the whole build: farm steps out to npm, bundlers, or code gener
 Install the binary from the registry:
 
 ```sh
-cargo install oxdock
+cargo install oxdock@0.9.0-alpha
 ```
 
 Run a script file:
@@ -563,7 +622,7 @@ Copies from host.
 
 | Flag | Type | Description |
 | --- | --- | --- |
-| `--from-current-workspace` | Flag | From workspace root |
+| `--from-current-workspace` | Flag | Copy from workspace instead of build context |
 
 **Examples:**
 
@@ -573,6 +632,14 @@ Copies from host.
 WRITE src.txt content
 COPY src.txt dst.txt
 ASSERT_FILE dst.txt content
+```
+
+**Example: copy from workspace**
+
+```oxdock roots:unified
+WRITE ws-src.txt ws-content
+COPY --from-current-workspace ws-src.txt ws-copy.txt
+ASSERT_FILE ws-copy.txt ws-content
 ```
 
 

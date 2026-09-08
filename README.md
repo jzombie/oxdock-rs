@@ -26,9 +26,23 @@
   </a>
 </div>
 
-OxDock is a Dockerfile-inspired DSL for build-time work. No containers, no daemon.
+**Dockerfile inspired build DSL for Rust**
+
+OxDock is a Dockerfile inspired build DSL for Rust. Embed scripts at compile time with macros, or run the same scripts as standalone CLI pipelines. Native. No containers. No daemon. No VM. All commands run identically on every OS, except RUN.
+
+Supports platform gating, async tasks, and piped workflows for custom pipelines.
+
+[Documentation](https://docs.rs/oxdock/0.9.0-alpha/oxdock/)
 
 ## Quick start
+
+Install: `cargo install oxdock@0.9.0-alpha` or add the library with `cargo add oxdock`.
+
+Once installed:
+
+```sh
+oxdock --script Oxfile
+```
 
 Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation, `no_std` included:
 
@@ -79,11 +93,53 @@ LS dist
 ASSERT_STDOUT hello.txt
 ```
 
-Run it with the CLI:
+Run the same file with the CLI (install once, see above):
 
-```bash
-cargo install --path oxdock
+```sh
 oxdock --script Oxfile
+```
+
+### Prepare during the build
+
+`oxdock_embed!` ships artifacts inside the binary. `oxdock_prepare!` runs the same script but emits no runtime module. Use it when assets only need to exist during the build, for codegen or `include!` workflows.
+
+```rust
+use oxdock_macros::oxdock_prepare;
+
+oxdock_prepare! {
+    name: PreparedAssets,
+    script: {
+        MKDIR gen
+        WRITE gen/out.txt generated
+        ASSERT_FILE gen/out.txt generated
+    },
+    out_dir: "target/prebuilt_prepare",
+}
+
+fn main() {}
+```
+
+### Stream bytes between steps
+
+`WITH_IO` routes stdout into named pipes and back into stdin, so steps form custom pipelines without temp files.
+
+```oxdock
+WITH_IO [stdout=pipe:msg] ECHO piped-bytes
+WITH_IO [stdin=pipe:msg] WRITE piped.txt
+READ piped.txt
+ASSERT_STDOUT piped-bytes
+```
+
+### Workspaces start ephemeral
+
+Scripts start in an ephemeral snapshot workspace, an isolated temp dir that leaves the source tree untouched. Pull inputs with `COPY` or `COPY_GIT`. Switch to the local directory with `WORKSPACE LOCAL` when the script should mutate in place.
+
+```oxdock
+WRITE snap.txt from-snapshot
+ASSERT_FILE snap.txt from-snapshot
+WORKSPACE LOCAL
+WRITE local.txt from-local
+ASSERT_FILE local.txt from-local
 ```
 
 One language for the whole build: farm steps out to npm, bundlers, or code generators and pull their artifacts back under cargo's control. Pipe bytes between steps without buffering whole outputs, fan work out with `ASYNC`, or skip embedding entirely and run the same scripts as standalone CLI processes.
@@ -843,7 +899,7 @@ Copies from host.
 
 | Flag | Type | Description |
 | --- | --- | --- |
-| `--from-current-workspace` | Flag | From workspace root |
+| `--from-current-workspace` | Flag | Copy from workspace instead of build context |
 
 **Examples:**
 
@@ -853,6 +909,14 @@ Copies from host.
 WRITE src.txt content
 COPY src.txt dst.txt
 ASSERT_FILE dst.txt content
+```
+
+**Example: copy from workspace**
+
+```oxdock roots:unified
+WRITE ws-src.txt ws-content
+COPY --from-current-workspace ws-src.txt ws-copy.txt
+ASSERT_FILE ws-copy.txt ws-content
 ```
 
 
@@ -1413,11 +1477,11 @@ Keeping inheritance selective avoids leaking secrets by default while still allo
 
 - **How workspaces are created:** OxDock materializes a clean workspace as an isolated temporary directory. It does not implicitly populate that directory from Git; scripts can pull files in via `COPY` (from the build context) or `COPY_GIT` (from a specific revision). Treat this workspace as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
 
-- **Typical usage pattern:** the temporary workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
+- **Typical usage pattern:** the temporary workspace is intended for short lived build and test iterations. Run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
 
-- **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate-internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
+- **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
 
-- **What `oxdock-fs` protects you from:** the guardrails are pragmatic — they prevent common mistakes such as accidentally writing outside the materialized workspace or reading files from arbitrary absolute paths. However, they are not a full sandbox: a determined process or script can still create destructive actions (e.g., invoking native `RUN` commands that modify external state). If you require strict isolation, run OxDock inside a container or VM.
+- **What `oxdock-fs` protects you from:** the guardrails are pragmatic. They prevent common mistakes such as accidentally writing outside the materialized workspace or reading files from arbitrary absolute paths. However, they are not a full sandbox. A determined process or script can still create destructive actions (for example, invoking native `RUN` commands that modify external state). If you require strict isolation, run OxDock inside a container or VM.
 
 - **Performance:** routing via `oxdock-fs` adds negligible overhead for typical workloads. The module focuses on correctness and containment with minimal runtime cost so interactive iteration remains fast.
 

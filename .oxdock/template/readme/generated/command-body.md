@@ -448,7 +448,7 @@ Copies from host.
 
 | Flag | Type | Description |
 | --- | --- | --- |
-| `--from-current-workspace` | Flag | From workspace root |
+| `--from-current-workspace` | Flag | Copy from workspace instead of build context |
 
 **Examples:**
 
@@ -458,6 +458,14 @@ Copies from host.
 WRITE src.txt content
 COPY src.txt dst.txt
 ASSERT_FILE dst.txt content
+```
+
+**Example: copy from workspace**
+
+```oxdock roots:unified
+WRITE ws-src.txt ws-content
+COPY --from-current-workspace ws-src.txt ws-copy.txt
+ASSERT_FILE ws-copy.txt ws-content
 ```
 
 

@@ -3,7 +3,10 @@ use docs_gen::{
     DocsGenConfig, TargetSpec,
     discovery::discover_targets,
     guard::validate_rel_path,
-    providers::{CargoMetadataProvider, CommandRefProvider, DataProvider, parse_workspace_members},
+    providers::{
+        CargoMetadataProvider, CommandRefProvider, DataProvider, parse_workspace_members,
+        parse_workspace_version,
+    },
     template_doc,
 };
 use oxdock_core::ExecIo;
@@ -110,15 +113,21 @@ fn render_target(
     // only — no hardcoded paths or keys.
     let mut env = ExecIo::new();
     let mut provider_values = serde_json::Value::Null;
-    if cargo_enabled && let Some(member) = target.member.as_deref() {
-        let member_toml = repo_root.join(member).join("Cargo.toml");
-        if member_toml.exists() {
-            let provider = CargoMetadataProvider::load(&member_toml, workspace_toml)?;
-            let meta = provider.metadata();
-            env.insert_inherit_env("CRATE_NAME", &meta.name);
-            env.insert_inherit_env("CRATE_DESCRIPTION", &meta.description);
-            env.insert_inherit_env("CRATE_VERSION", &meta.version);
-            provider_values = provider.values();
+    if cargo_enabled {
+        if let Some(member) = target.member.as_deref() {
+            let member_toml = repo_root.join(member).join("Cargo.toml");
+            if member_toml.exists() {
+                let provider = CargoMetadataProvider::load(&member_toml, workspace_toml)?;
+                let meta = provider.metadata();
+                env.insert_inherit_env("CRATE_NAME", &meta.name);
+                env.insert_inherit_env("CRATE_DESCRIPTION", &meta.description);
+                env.insert_inherit_env("CRATE_VERSION", &meta.version);
+                provider_values = provider.values();
+            }
+        } else {
+            let version = parse_workspace_version(workspace_toml);
+            env.insert_inherit_env("CRATE_VERSION", &version);
+            provider_values = serde_json::json!({ "version": version });
         }
     }
     template_doc::render_target(
