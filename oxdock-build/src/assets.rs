@@ -678,7 +678,7 @@ mod fingerprint_tests {
                     .ok_or_else(|| anyhow::anyhow!("ECHO requires arg"))?;
                 Ok(StepKind::Echo(msg))
             }
-            "ENV" => oxdock_parser::commands::lower_env_legacy(args),
+            "ENV" => oxdock_parser::commands::lower_env_assignment(args),
             _ => anyhow::bail!("unknown command: {name}"),
         }
     }

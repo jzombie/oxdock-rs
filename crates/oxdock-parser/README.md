@@ -24,7 +24,7 @@ inspect the canonical definition without reaching into the crate filesystem.
 use oxdock_parser::LANGUAGE_SPEC;
 
 fn dump_grammar() {
-    println!("OxDock DSL grammar:\\n{}", LANGUAGE_SPEC);
+    println!("OxDock DSL grammar:\n{}", LANGUAGE_SPEC);
 }
 ```
 

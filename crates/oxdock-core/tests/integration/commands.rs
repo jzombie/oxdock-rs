@@ -441,7 +441,7 @@ fn exit_stops_pipeline_and_reports_code() {
         },
         Step {
             guard: None,
-            kind: StepKind::Exit(9),
+            kind: StepKind::Exit(oxdock_parser::Arg::String("9".to_string(), false)),
             scope_enter: 0,
             scope_exit: 0,
         },
@@ -2318,4 +2318,85 @@ fn sleep_completes_and_is_cancellable() {
     let root = guard_root(&temp);
     run_script(&root, "SLEEP 50ms\nWRITE awake.txt yes\n").expect("short sleep must complete");
     assert_eq!(read_trimmed(&root.join("awake.txt").unwrap()), "yes");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+fn sleep_accepts_variable_duration() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "LET $d = \"50ms\"\nSLEEP $d\nWRITE awake.txt yes\n")
+        .expect("variable sleep must complete");
+    assert_eq!(read_trimmed(&root.join("awake.txt").unwrap()), "yes");
+}
+
+#[test]
+fn sleep_rejects_garbage_duration_at_lower() {
+    let err = oxdock_core::parse_script("SLEEP banana\n").expect_err("garbage must fail");
+    assert!(
+        err.to_string().contains("banana"),
+        "expected duration error, got: {err:#}"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+fn exit_accepts_variable_code() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    let err = run_script(&root, "LET $c = \"3\"\nEXIT $c\n").expect_err("exit must abort");
+    assert!(
+        err.to_string().contains("EXIT requested with code 3"),
+        "expected exit error, got: {err:#}"
+    );
+}
+
+#[test]
+fn exit_rejects_garbage_code_at_lower() {
+    let err = oxdock_core::parse_script("EXIT banana\n").expect_err("garbage must fail");
+    assert!(
+        err.to_string().contains("banana"),
+        "expected int error, got: {err:#}"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+fn timeout_accepts_variable_duration() {
+    let temp = GuardedPath::tempdir().unwrap();
+    let root = guard_root(&temp);
+    run_script(&root, "LET $d = \"50ms\"\nTIMEOUT $d WRITE done.txt yes\n")
+        .expect("variable timeout must complete");
+    assert_eq!(read_trimmed(&root.join("done.txt").unwrap()), "yes");
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+)]
+fn sleep_undefined_variable_errors_at_runtime() {
+    // Lower sees only Expr(Var) and defers; resolution fails on the
+    // interpolated value, not the static form.
+    let err = oxdock_core::parse_script("SLEEP $undefined\n")
+        .map(|steps| {
+            let temp = GuardedPath::tempdir().unwrap();
+            let root = guard_root(&temp);
+            run_steps_with_context_result_with_io(&root, &root, &steps, ExecIo::new()).map(|_| ())
+        })
+        .expect("parse must succeed for dynamics")
+        .expect_err("undefined variable must fail at runtime");
+    assert!(
+        err.to_string().contains("undefined"),
+        "expected undefined-variable error, got: {err:#}"
+    );
 }

@@ -15,11 +15,18 @@
 use std::fmt;
 
 use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
-use crate::command::{ArgSpec, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream};
+use crate::command::{
+    ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream,
+    split_assignment,
+};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// Value-parsing helpers (`strip_surrounding_quotes`,
+// `split_assignment`, `parse_duration`, `format_duration`) live in
+// `crate::command` beside the `ArgType` validators that call them.
 
 /// Join free-text tail arguments into one value. Single args pass through
 /// untouched (preserving `Arg::Expr`); all-`String` tails join exactly like the
@@ -55,41 +62,15 @@ fn join_value(args: Vec<Arg>, cmd_name: &str) -> Result<Arg> {
     Ok(Arg::Parts(parts))
 }
 
-/// Strip one layer of surrounding `"` or `'` quotes (both kinds, everywhere).
-pub(crate) fn strip_surrounding_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-        .unwrap_or(value)
-}
-
-/// Legacy single-token `KEY=value` split for direct `lower_command` callers and
-/// exotic keys the grammar cannot classify (single tokens only — no whitespace
-/// reassembly, so the quoted-space corruption class cannot arise here).
-/// Returns `Ok(None)` when there is no `=`.
-pub(crate) fn split_legacy_assignment(text: &str) -> Result<Option<(String, Arg)>> {
-    let Some((key, raw)) = text.split_once('=') else {
-        return Ok(None);
-    };
-    if key.is_empty() {
-        bail!("assignment requires KEY=value format");
-    }
-    Ok(Some((
-        key.to_string(),
-        Arg::String(strip_surrounding_quotes(raw).to_string(), false),
-    )))
-}
-
 /// Canonical `lower_command` entry for direct callers holding one pre-joined
 /// `KEY=value` token. Script parsing never reaches this — the grammar splits
 /// assignments on raw spans first (see `lower_env_command` in parser.rs).
-pub fn lower_env_legacy(args: Vec<Arg>) -> Result<StepKind> {
+pub fn lower_env_assignment(args: Vec<Arg>) -> Result<StepKind> {
     let arg = args
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("ENV requires KEY=value"))?;
-    let Some((key, value)) = split_legacy_assignment(arg.as_str())? else {
+    let Some((key, value)) = split_assignment(arg.as_str())? else {
         bail!("ENV requires KEY=value format")
     };
     Ok(StepKind::Env { key, value })
@@ -166,6 +147,16 @@ fn quote_run(s: &str) -> String {
         .join(" ")
 }
 
+/// Render an [`Arg`] for `Display`: the quoted flag drives quoting (not
+/// content sniffing — digit-leading values like `10s` or `0` must stay
+/// bare to reparse with the same flag).
+fn fmt_raw_arg(arg: &Arg) -> String {
+    match arg {
+        Arg::String(s, true) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        _ => arg.render(),
+    }
+}
+
 fn fmt_io(b: &IoBinding) -> String {
     let s = match b.stream {
         IoStream::Stdin => "stdin",
@@ -179,54 +170,36 @@ fn fmt_io(b: &IoBinding) -> String {
     }
 }
 
-/// Parse a TIMEOUT duration token (`500ms`, `10s`, `2m`, `1h`; a bare
-/// number means seconds).
-pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
-    let (digits, unit_ms): (&str, u64) = if let Some(v) = s.strip_suffix("ms") {
-        (v, 1)
-    } else if let Some(v) = s.strip_suffix('s') {
-        (v, 1_000)
-    } else if let Some(v) = s.strip_suffix('m') {
-        (v, 60_000)
-    } else if let Some(v) = s.strip_suffix('h') {
-        (v, 3_600_000)
-    } else {
-        (s, 1_000)
-    };
-    let n: u64 = digits
-        .parse()
-        .map_err(|_| anyhow!("invalid TIMEOUT duration: {s}"))?;
-    let millis = n
-        .checked_mul(unit_ms)
-        .ok_or_else(|| anyhow!("TIMEOUT duration out of range: {s}"))?;
-    if millis == 0 {
-        bail!("TIMEOUT duration must be positive, got: {s}");
-    }
-    Ok(std::time::Duration::from_millis(millis))
-}
-
-/// Canonical display for a duration: largest exact unit (`500ms`, `10s`,
-/// `2m`, `1h`), falling back to milliseconds. Round-trips through
-/// [`parse_duration`].
-pub fn format_duration(d: &std::time::Duration) -> String {
-    let millis = d.as_millis();
-    if millis.is_multiple_of(3_600_000) {
-        format!("{}h", millis / 3_600_000)
-    } else if millis.is_multiple_of(60_000) {
-        format!("{}m", millis / 60_000)
-    } else if millis.is_multiple_of(1_000) {
-        format!("{}s", millis / 1_000)
-    } else {
-        format!("{millis}ms")
-    }
-}
-
 // ── declare_commands! ──────────────────────────────────────────────────────
 
 // Keywords parsed by PEG rules rather than plain-command lowering (`WITH_IO`,
 // `AWAIT`, ...). When a line starts with one of these but fails to parse as
-// such, lowering falls through here — explain the expected syntax instead of
-// only reporting an unknown command.
+// such, lowering falls through here — report a committed syntax error instead
+// of an unknown command.
+fn is_known_command(name: &str) -> bool {
+    if name == "ELSE" {
+        return true;
+    }
+    all_metadata().iter().any(|meta| meta.name == name)
+}
+
+pub(crate) fn invalid_syntax_error(name: &str, raw_args: &[Arg]) -> anyhow::Error {
+    let received = raw_args
+        .iter()
+        .map(Arg::render)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let got = if received.is_empty() {
+        "nothing".to_string()
+    } else {
+        format!("`{received}`")
+    };
+    match structural_hint(name, &received) {
+        Some(hint) => anyhow!("invalid syntax for command {name}: {hint}"),
+        None => anyhow!("invalid syntax for command {name}: got {got}."),
+    }
+}
+
 fn unknown_command_error(name: &str, raw_args: &[Arg]) -> anyhow::Error {
     let received = raw_args
         .iter()
@@ -374,11 +347,22 @@ macro_rules! declare_commands {
                             default_output: $out, examples: $examples,
                         };
                         let (flags, positional) = crate::strip_flags(raw_args, &meta)?;
+                        crate::command::validate_positionals_against_meta(
+                            s,
+                            &meta.args,
+                            &positional,
+                        )?;
                         let lower_fn: fn(Vec<(String, Arg)>, Vec<Arg>) -> Result<StepKind> = $lower;
                         lower_fn(flags, positional)
                     }
                 )*
-                _ => Err(unknown_command_error(name, &raw_args)),
+                _ => {
+                    if is_known_command(name) {
+                        Err(invalid_syntax_error(name, &raw_args))
+                    } else {
+                        Err(unknown_command_error(name, &raw_args))
+                    }
+                }
             }
         }
 
@@ -410,7 +394,7 @@ declare_commands! {
         AssignAsync { var: String, body: Vec<Step> },
         Await { var: String },
         Cancel { var: String },
-        Timeout { duration: std::time::Duration, body: Vec<Step> },
+        Timeout { duration: Arg, body: Vec<Step> },
     ]
 
     Workdir => [
@@ -418,8 +402,8 @@ declare_commands! {
         variant: Workdir(Arg),
         syntax: "WORKDIR <path>",
         summary: "Change the working directory.",
-        description: "Sets the current working directory.",
-        args: &[ ArgSpec { name: "path", arg_type: "string", description: "Directory to change to", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        description: "Sets the current working directory. Relative paths resolve against the current directory; `/` resets to the workspace root. Paths cannot escape the workspace.",
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Directory to change to", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "change working directory", fence_meta: None, code: indoc! {r#"
@@ -439,7 +423,7 @@ declare_commands! {
         syntax: "WORKSPACE SNAPSHOT|LOCAL",
         summary: "Switch workspace roots.",
         description: "SNAPSHOT or LOCAL root.",
-        args: &[ ArgSpec { name: "target", arg_type: "SNAPSHOT|LOCAL", description: "Target root", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "target", arg_type: ArgType::OneOf(&["SNAPSHOT", "LOCAL"]), description: "Target root", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "switch roots", fence_meta: None, code: indoc! {r#"WORKSPACE LOCAL"#} } ],
@@ -459,7 +443,7 @@ declare_commands! {
         syntax: "ENV KEY=value",
         summary: "Set an environment variable.",
         description: "Inserts or updates an env var. The value uses the unified string-value rules shared by every command: `\"...\"` or `'...'` quotes keep exact bytes (spaces, tabs), a lone `$var` evaluates that variable, `{{ ... }}` placeholders interpolate, unquoted words join with single spaces, and the first `=` splits key from value (`KEY=a=b` stores `a=b`). A `$var` inside larger text stays literal — write `{{ $var }}` to interpolate there.",
-        args: &[ ArgSpec { name: "assignment", arg_type: "KEY=value", description: "KEY=value pair", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "assignment", arg_type: ArgType::KeyValue, description: "KEY=value pair", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[
@@ -487,8 +471,19 @@ declare_commands! {
                 WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
                 ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
             "#} },
+            Example { name: "scoped env reverts", fence_meta: None, code: indoc! {r#"
+                # ENV inside a braced block reverts when the block exits
+                ENV MODE=production
+                [bool:true] {
+                    ENV MODE=staging
+                    WRITE inner.txt "{{ env:MODE }}"
+                }
+                WRITE outer.txt "{{ env:MODE }}"
+                ASSERT_FILE inner.txt "staging"
+                ASSERT_FILE outer.txt "production"
+            "#} },
         ],
-        lower: |_flags, args| lower_env_legacy(args),
+        lower: |_flags, args| lower_env_assignment(args),
     ],
 
     InheritEnv => [
@@ -497,7 +492,7 @@ declare_commands! {
         syntax: "INHERIT_ENV <key>...",
         summary: "Inherit env vars from host.",
         description: "Declares which host environment variables to inherit into the script. Must appear before any other commands and at most once. Without this directive, the script starts with an empty environment.",
-        args: &[],
+        args: &[ ArgSpec { name: "keys", arg_type: ArgType::Rest(&ArgType::String), description: "Host variables to inherit", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "inherit env", fence_meta: None, code: indoc! {r#"INHERIT_ENV [PATH, HOME]"#} } ],
@@ -513,7 +508,7 @@ declare_commands! {
         syntax: "ECHO <message>",
         summary: "Print to stdout.",
         description: "Outputs message to stdout.",
-        args: &[ ArgSpec { name: "message", arg_type: "string", description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "message", arg_type: ArgType::Rest(&ArgType::String), description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[
@@ -535,7 +530,7 @@ declare_commands! {
         syntax: "RUN <command...>",
         summary: "Execute shell command.",
         description: "Runs command in cwd.",
-        args: &[ ArgSpec { name: "command", arg_type: "string...", description: "Command", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "command", arg_type: ArgType::Rest(&ArgType::String), description: "Command", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "run", fence_meta: None, code: indoc! {r#"RUN echo hello"#} } ],
@@ -549,15 +544,19 @@ declare_commands! {
         summary: "Copy file into workspace.",
         description: "Copies from host.",
         args: &[
-            ArgSpec { name: "from", arg_type: "path", description: "Source", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "to", arg_type: "path", description: "Dest", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "from", arg_type: ArgType::Path, description: "Source", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "to", arg_type: ArgType::Path, description: "Dest", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
         ],
-        flags: &[ FlagSpec { name: "from_current_workspace", long: "--from-current-workspace", value_type: FlagValueType::Flag, required: false, description: "From workspace root" } ],
+        flags: &[ FlagSpec { name: "from_current_workspace", long: "--from-current-workspace", value_type: FlagValueType::Flag, required: false, description: "Copy from workspace instead of build context" } ],
         default_output: None,
         examples: &[ Example { name: "copy", fence_meta: Some("roots:unified"), code: indoc! {r#"
             WRITE src.txt content
             COPY src.txt dst.txt
             ASSERT_FILE dst.txt content
+        "#} }, Example { name: "copy from workspace", fence_meta: Some("roots:unified"), code: indoc! {r#"
+            WRITE ws-src.txt ws-content
+            COPY --from-current-workspace ws-src.txt ws-copy.txt
+            ASSERT_FILE ws-copy.txt ws-content
         "#} } ],
         lower: |flags, args| {
             let from_current_workspace = flags.iter().any(|(k, _)| k == "from_current_workspace");
@@ -575,9 +574,9 @@ declare_commands! {
         summary: "Copy from git revision.",
         description: "Checkout and copy.",
         args: &[
-            ArgSpec { name: "rev", arg_type: "string", description: "Rev", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "src", arg_type: "path", description: "Src", io: IoDirection::Read, index: 1, required: true, fallback_stream: None },
-            ArgSpec { name: "dst", arg_type: "path", description: "Dst", io: IoDirection::Write, index: 2, required: true, fallback_stream: None },
+            ArgSpec { name: "rev", arg_type: ArgType::String, description: "Rev", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "src", arg_type: ArgType::Path, description: "Src", io: IoDirection::Read, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "dst", arg_type: ArgType::Path, description: "Dst", io: IoDirection::Write, index: 2, required: true, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "dirty", long: "--include-dirty", value_type: FlagValueType::Flag, required: false, description: "Include dirty" } ],
         default_output: None,
@@ -599,8 +598,8 @@ declare_commands! {
         summary: "Create symlink.",
         description: "Creates symlink.",
         args: &[
-            ArgSpec { name: "from", arg_type: "path", description: "Target", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "to", arg_type: "path", description: "Link", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "from", arg_type: ArgType::Path, description: "Target", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "to", arg_type: ArgType::Path, description: "Link", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
         ],
         flags: &[],
         default_output: None,
@@ -623,7 +622,7 @@ declare_commands! {
         syntax: "MKDIR <path>",
         summary: "Create directory.",
         description: "Creates dir with parents.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir path", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir path", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "mkdir", fence_meta: None, code: indoc! {r#"MKDIR deeply/nested/tree"#} } ],
@@ -636,7 +635,7 @@ declare_commands! {
         syntax: "LS [<path>]",
         summary: "List directory.",
         description: "Lists entries.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "ls", fence_meta: None, code: indoc! {r#"
@@ -666,7 +665,7 @@ declare_commands! {
         syntax: "READ [<path>]",
         summary: "Read file to stdout.",
         description: "Outputs file contents.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "read", fence_meta: None, code: indoc! {r#"
@@ -682,7 +681,7 @@ declare_commands! {
         syntax: "READ_LINE $var",
         summary: "Read one line from stdin into a variable.",
         description: "Reads bytes until newline without waiting for EOF, leaving the pipe open. Trailing newline is stripped (shell-read parity). On premature EOF assigns accumulated bytes and returns.",
-        args: &[ ArgSpec { name: "var", arg_type: "$var", description: "Variable to store the line", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "var", arg_type: ArgType::Var, description: "Variable to store the line", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "read line", fence_meta: None, code: indoc! {r#"
@@ -710,8 +709,8 @@ declare_commands! {
         summary: "Write to file.",
         description: "Writes contents.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: "string", description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "contents", arg_type: ArgType::Rest(&ArgType::String), description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -732,8 +731,8 @@ declare_commands! {
         summary: "Append to file.",
         description: "Appends contents.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: "string", description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "contents", arg_type: ArgType::Rest(&ArgType::String), description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -758,8 +757,8 @@ declare_commands! {
         summary: "Expand a template file (or stdin) to stdout.",
         description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
-            ArgSpec { name: "overrides", arg_type: "KEY=val", description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
+            ArgSpec { name: "overrides", arg_type: ArgType::Rest(&ArgType::KeyValue), description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[],
         default_output: Some(Stream::Stdout),
@@ -798,13 +797,23 @@ declare_commands! {
                 WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
                 ASSERT_STDOUT "Hello Alice!"
             "#} },
+            Example { name: "override does not leak", fence_meta: None, code: indoc! {r#"
+                # KEY=val overrides shadow env for that EXPAND only —
+                # they never update the environment itself
+                ENV NAME="Alice"
+                WRITE template.md "Hi \{{ env:NAME }}!"
+                EXPAND template.md NAME="Bob"
+                ASSERT_STDOUT "Hi Bob!"
+                EXPAND template.md
+                ASSERT_STDOUT "Hi Alice!"
+            "#} },
         ],
         lower: |_flags, args| {
             let mut path = None;
             let mut overrides = Vec::new();
             for arg in args {
                 let text = arg.as_str();
-                if let Some((key, value)) = split_legacy_assignment(text)? {
+                if let Some((key, value)) = split_assignment(text)? {
                     overrides.push((key, value));
                 } else if path.is_none() { path = Some(arg); }
                 else { bail!("EXPAND accepts at most one path"); }
@@ -818,16 +827,21 @@ declare_commands! {
         variant: AssertFile { hash: Option<String>, path: Arg, contents: Option<Arg> },
         syntax: "ASSERT_FILE [--hash <sha256>] <path> [<expected>]",
         summary: "Assert file exists.",
-        description: "Verifies file.",
+        description: "Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "expected", arg_type: "string", description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "expected", arg_type: ArgType::Rest(&ArgType::String), description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "hash", long: "--hash", value_type: FlagValueType::String, required: false, description: "SHA-256" } ],
         default_output: None,
         examples: &[ Example { name: "assert file", fence_meta: None, code: indoc! {r#"
             WRITE payload.bin stable-content
             ASSERT_FILE payload.bin stable-content
+        "#} },
+        Example { name: "assert file hash", fence_meta: None, code: indoc! {r#"
+            # --hash compares the SHA-256 digest instead of raw bytes
+            WRITE payload.bin stable-content
+            ASSERT_FILE --hash 08135c1b6349b0e4f894c36221952f0de00e6b4d82f80895abf359755e77103c payload.bin
         "#} } ],
         lower: |flags, args| {
             let hash = flags.iter().find(|(k, _)| k == "hash").map(|(_, v)| v.as_str().to_string());
@@ -844,8 +858,8 @@ declare_commands! {
         variant: AssertDir(Arg),
         syntax: "ASSERT_DIR <path>",
         summary: "Assert dir exists.",
-        description: "Verifies dir.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        description: "Checks the path is a directory, aborting the pipeline with a step-numbered error otherwise.",
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert dir", fence_meta: None, code: indoc! {r#"
@@ -860,8 +874,8 @@ declare_commands! {
         variant: AssertAbsent(Arg),
         syntax: "ASSERT_ABSENT <path>",
         summary: "Assert path absent.",
-        description: "Verifies absence.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Path", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        description: "Checks nothing exists at the path, aborting the pipeline with a step-numbered error if it does.",
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Path", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert absent", fence_meta: None, code: indoc! {r#"ASSERT_ABSENT missing.txt"#} } ],
@@ -873,8 +887,8 @@ declare_commands! {
         variant: AssertStdout(Arg),
         syntax: "ASSERT_STDOUT <substring>",
         summary: "Assert stdout contains.",
-        description: "Verifies stdout.",
-        args: &[ ArgSpec { name: "substring", arg_type: "string", description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        description: "Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.",
+        args: &[ ArgSpec { name: "substring", arg_type: ArgType::Rest(&ArgType::String), description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert stdout", fence_meta: None, code: indoc! {r#"
@@ -890,7 +904,7 @@ declare_commands! {
         syntax: "HASH_SHA256 <path>",
         summary: "Print SHA-256.",
         description: "Computes digest.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "hash", fence_meta: None, code: indoc! {r#"
@@ -902,30 +916,46 @@ declare_commands! {
 
     Exit => [
         name: "EXIT",
-        variant: Exit(i32),
+        variant: Exit(Arg),
         syntax: "EXIT <code>",
         summary: "Exit pipeline.",
         description: "Stops the pipeline immediately with an `EXIT requested with code <code>` error; steps after it never run, at any nesting depth. Enclosing blocks still unwind their LET/ENV/WORKDIR/WORKSPACE state, anonymous background tasks are killed synchronously, and files written before the EXIT persist.",
-        args: &[ ArgSpec { name: "code", arg_type: "int", description: "Code", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "code", arg_type: ArgType::Int, description: "Code", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "exit", fence_meta: Some("expect_error:\"EXIT requested with code 0\""), code: indoc! {r#"EXIT 0"#} } ],
         lower: |_flags, args| {
-            let code = args.into_iter().next().and_then(|a| a.as_str().parse::<i32>().ok()).unwrap_or(0);
+            // Static literals were already Int-checked by the central
+            // validator; dynamics resolve (and validate) at runtime.
+            let code = args.into_iter().next().ok_or_else(|| anyhow!("EXIT requires a code"))?;
             Ok(StepKind::Exit(code))
         },
     ],
 
     Sleep => [
         name: "SLEEP",
-        variant: Sleep { duration: std::time::Duration },
+        variant: Sleep { duration: Arg },
         syntax: "SLEEP <duration>",
-        summary: "Sleep without spawning a shell.",
+        summary: "Pause execution for a duration.",
         description: "Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for cancellation so an enclosing TIMEOUT or task teardown interrupts the sleep. Cross-platform alternative to shell sleep for testing time boundaries.",
-        args: &[ ArgSpec { name: "duration", arg_type: "duration", description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "duration", arg_type: ArgType::Duration, description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
-        examples: &[ Example { name: "sleep", fence_meta: None, code: indoc! {r#"SLEEP 100ms"#} } ],
+        examples: &[
+            Example { name: "sleep", fence_meta: None, code: indoc! {r#"SLEEP 100ms"#} },
+            Example {
+                name: "sleep variable duration",
+                fence_meta: None,
+                code: indoc! {r#"
+                # durations resolve at runtime, so variables work too —
+                # quoted or bare, both bind the same string
+                LET $pause = "100ms"
+                SLEEP $pause
+                LET $bare = 100ms
+                SLEEP $bare
+            "#},
+            },
+        ],
         lower: |_flags, args| {
             let mut it = args.into_iter();
             let raw = it
@@ -934,9 +964,9 @@ declare_commands! {
             if it.next().is_some() {
                 bail!("SLEEP takes exactly one duration argument");
             }
-            Ok(StepKind::Sleep {
-                duration: parse_duration(raw.as_str())?,
-            })
+            // Static literals were Duration-checked by the central
+            // validator; dynamics ($var, templates) resolve at runtime.
+            Ok(StepKind::Sleep { duration: raw })
         },
     ],
 }
@@ -1040,7 +1070,7 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
             name: "LET",
             syntax: "LET $var = <expr> | LET $var = ASYNC { <commands> }",
             summary: "Bind script-local variables.",
-            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB(\"*.md\")` — never a `{{ ... }}` template; interpolation happens in string values, not here.",
+            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB(\"*.md\")` — never a `{{ ... }}` template; interpolation happens in string values, not here. Bare words need no quotes: `LET $d = 30s` binds the same string as `LET $d = \"30s\"`.",
             args: &[],
             flags: &[],
             default_output: None,
@@ -1065,6 +1095,21 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
                 LET $files = GLOB("*.txt")
                 FOR $f IN $files { ECHO $f }
                 ASSERT_STDOUT "a.txt"
+            "#},
+                },
+                Example {
+                    name: "scoped variable reverts",
+                    fence_meta: None,
+                    code: indoc! {r#"
+                # LET inside a braced block reverts when the block exits
+                LET $a = "outer"
+                [bool:true] {
+                    LET $a = "inner"
+                    WRITE inner.txt "{{ $a }}"
+                }
+                WRITE outer.txt "{{ $a }}"
+                ASSERT_FILE inner.txt "inner"
+                ASSERT_FILE outer.txt "outer"
             "#},
                 },
             ],
@@ -1158,6 +1203,16 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
                         WRITE a.txt one
                         WRITE b.txt two
                     }
+                "#},
+                },
+                Example {
+                    name: "timeout variable duration",
+                    fence_meta: None,
+                    code: indoc! {r#"
+                    # durations resolve at runtime, so variables work too
+                    LET $budget = "30s"
+                    TIMEOUT $budget WRITE heartbeat.txt alive
+                    ASSERT_FILE heartbeat.txt alive
                 "#},
                 },
             ],
@@ -1299,8 +1354,8 @@ impl fmt::Display for StepKind {
             StepKind::HashSha256 { path } => {
                 write!(f, "HASH_SHA256 {}", fmt_value(path, quote_arg))
             }
-            StepKind::Exit(c) => write!(f, "EXIT {}", c),
-            StepKind::Sleep { duration } => write!(f, "SLEEP {}", format_duration(duration)),
+            StepKind::Exit(code) => write!(f, "EXIT {}", fmt_raw_arg(code)),
+            StepKind::Sleep { duration } => write!(f, "SLEEP {}", fmt_raw_arg(duration)),
             StepKind::For {
                 key_var,
                 var,
@@ -1361,7 +1416,7 @@ impl fmt::Display for StepKind {
             StepKind::Await { var } => write!(f, "AWAIT ${}", var),
             StepKind::Cancel { var } => write!(f, "CANCEL ${}", var),
             StepKind::Timeout { duration, body } => {
-                let budget = format_duration(duration);
+                let budget = fmt_raw_arg(duration);
                 if body.len() == 1 {
                     write!(f, "TIMEOUT {} {}", budget, body[0].kind)
                 } else {
@@ -1379,6 +1434,7 @@ impl fmt::Display for StepKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::{format_duration, parse_duration};
     use crate::parser::parse_script;
 
     fn parse_err(script: &str) -> String {
@@ -1390,7 +1446,8 @@ mod tests {
     #[test]
     fn malformed_with_io_binding_names_the_bad_binding() {
         let err = parse_err("WITH_IO [stdout=discard] ECHO \"test\"\n");
-        assert!(err.contains("unknown command: WITH_IO"), "{err}");
+        assert!(err.contains("invalid syntax for command WITH_IO"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
         assert!(err.contains("stdout=discard"), "{err}");
         assert!(err.contains("pipe:<name>"), "{err}");
     }
@@ -1398,9 +1455,40 @@ mod tests {
     #[test]
     fn await_without_task_variable_points_at_syntax() {
         let err = parse_err("AWAIT ECHO \"test\"\n");
-        assert!(err.contains("unknown command: AWAIT"), "{err}");
+        assert!(err.contains("invalid syntax for command AWAIT"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
         assert!(err.contains("AWAIT $t"), "{err}");
         assert!(err.contains("ECHO"), "{err}");
+    }
+
+    #[test]
+    fn structural_fallthrough_commits_per_keyword() {
+        for (script, cmd) in [
+            ("CANCEL foo\n", "CANCEL"),
+            ("TIMEOUT foo\n", "TIMEOUT"),
+            ("FOR foo\n", "FOR"),
+            ("IF foo\n", "IF"),
+            ("LET foo\n", "LET"),
+            // NOTE: INHERIT_ENV is dual-registered as a leaf command
+            // (`INHERIT_ENV <key>...`), so `INHERIT_ENV foo` lowers
+            // successfully instead of erroring — excluded here.
+            ("ASYNC\n", "ASYNC"),
+            ("ELSE foo\n", "ELSE"),
+        ] {
+            let err = parse_err(script);
+            assert!(
+                err.contains(&format!("invalid syntax for command {cmd}")),
+                "{cmd}: {err}"
+            );
+            assert!(!err.contains("unknown command"), "{cmd}: {err}");
+        }
+    }
+
+    #[test]
+    fn leaf_arity_errors_carry_invalid_syntax_prefix() {
+        let err = parse_err("SLEEP 1s 2s\n");
+        assert!(err.contains("invalid syntax for command SLEEP"), "{err}");
+        assert!(!err.contains("unknown command"), "{err}");
     }
 
     #[test]
@@ -1460,7 +1548,6 @@ mod tests {
     #[test]
     fn structural_metadata_covers_all_structural_kinds() {
         use crate::ast::Value;
-        use std::time::Duration;
 
         // Tripwire: adding a structural StepKind variant without registering
         // documentation fails to compile here (non-exhaustive match). Leaf
@@ -1540,7 +1627,7 @@ mod tests {
                 var: "t".to_string(),
             },
             StepKind::Timeout {
-                duration: Duration::from_secs(1),
+                duration: Arg::String("1s".to_string(), false),
                 body: Vec::new(),
             },
         ];

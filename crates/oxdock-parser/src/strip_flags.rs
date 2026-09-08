@@ -46,13 +46,22 @@ pub fn strip_flags(args: Vec<Arg>, meta: &CommandMeta) -> Result<StrippedArgs> {
                         } else if matches!(flag_meta.value_type, FlagValueType::Flag) {
                             Arg::String("true".into(), false)
                         } else {
-                            iter.next()
-                                .ok_or_else(|| anyhow!("{} requires a value", flag_meta.long))?
+                            iter.next().ok_or_else(|| {
+                                anyhow!(
+                                    "invalid syntax for command {}: {} requires a value",
+                                    meta.name,
+                                    flag_meta.long
+                                )
+                            })?
                         };
                         flags.push((flag_meta.name.to_string(), value));
                     }
                     None => {
-                        return Err(anyhow!("unknown flag {} for command {}", s, meta.name));
+                        return Err(anyhow!(
+                            "invalid syntax for command {}: unknown flag {}",
+                            meta.name,
+                            s
+                        ));
                     }
                 }
             }

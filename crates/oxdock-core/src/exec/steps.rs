@@ -398,7 +398,10 @@ pub(super) fn execute_single_step_with_generation<P: ProcessManager>(
         StepKind::WithIoBlock { .. } => {
             bail!("WITH_IO block should have been expanded during parsing")
         }
-        StepKind::Exit(code) => handlers::exit(&mut cx, *code),
+        StepKind::Exit(code) => {
+            let code = super::args::resolve_arg_as_int(code, &mut cx)?;
+            handlers::exit(&mut cx, code)
+        }
         StepKind::For {
             key_var,
             var,
@@ -415,8 +418,14 @@ pub(super) fn execute_single_step_with_generation<P: ProcessManager>(
         StepKind::AssignAsync { var, body } => handlers::dispatch_assign_async(var, body, &mut cx),
         StepKind::Await { var } => handlers::dispatch_await(var, &mut cx),
         StepKind::Cancel { var } => handlers::dispatch_cancel(var, &mut cx),
-        StepKind::Timeout { duration, body } => handlers::timeout(&mut cx, idx, duration, body),
-        StepKind::Sleep { duration } => handlers::sleep(&mut cx, idx, duration),
+        StepKind::Timeout { duration, body } => {
+            let duration = super::args::resolve_arg_as_duration(duration, &mut cx)?;
+            handlers::timeout(&mut cx, idx, &duration, body)
+        }
+        StepKind::Sleep { duration } => {
+            let duration = super::args::resolve_arg_as_duration(duration, &mut cx)?;
+            handlers::sleep(&mut cx, idx, &duration)
+        }
     }
 }
 
@@ -593,7 +602,10 @@ fn execute_steps_inner<P: ProcessManager>(
                 StepKind::WithIoBlock { .. } => {
                     bail!("WITH_IO block should have been expanded during parsing")
                 }
-                StepKind::Exit(code) => handlers::exit(&mut cx, *code),
+                StepKind::Exit(code) => {
+                    let code = super::args::resolve_arg_as_int(code, &mut cx)?;
+                    handlers::exit(&mut cx, code)
+                }
                 StepKind::For {
                     key_var,
                     var,
@@ -613,9 +625,13 @@ fn execute_steps_inner<P: ProcessManager>(
                 StepKind::Await { var } => handlers::dispatch_await(var, &mut cx),
                 StepKind::Cancel { var } => handlers::dispatch_cancel(var, &mut cx),
                 StepKind::Timeout { duration, body } => {
-                    handlers::timeout(&mut cx, idx, duration, body)
+                    let duration = super::args::resolve_arg_as_duration(duration, &mut cx)?;
+                    handlers::timeout(&mut cx, idx, &duration, body)
                 }
-                StepKind::Sleep { duration } => handlers::sleep(&mut cx, idx, duration),
+                StepKind::Sleep { duration } => {
+                    let duration = super::args::resolve_arg_as_duration(duration, &mut cx)?;
+                    handlers::sleep(&mut cx, idx, &duration)
+                }
             }
         };
 

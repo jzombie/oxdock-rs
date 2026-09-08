@@ -26,9 +26,23 @@
   </a>
 </div>
 
-OxDock is a Dockerfile-inspired DSL for build-time work. No containers, no daemon.
+**Dockerfile inspired build DSL for Rust**
+
+OxDock is a Dockerfile inspired build DSL for Rust. Embed scripts at compile time with macros, or run the same scripts as standalone CLI pipelines. Native. No containers. No daemon. No VM. All commands run identically on every OS, except RUN.
+
+Supports platform gating, async tasks, and piped workflows for custom pipelines.
+
+[Documentation](https://docs.rs/oxdock/0.10.0-alpha/oxdock/)
 
 ## Quick start
+
+Add it to your Rust build with `cargo add oxdock@0.10.0-alpha`, or install the standalone runner with `cargo install oxdock@0.10.0-alpha`.
+
+Run a script:
+
+```sh
+oxdock <PATH>
+```
 
 Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation, `no_std` included:
 
@@ -79,11 +93,53 @@ LS dist
 ASSERT_STDOUT hello.txt
 ```
 
-Run it with the CLI:
+Save the script above as `./build.oxfile` and run it by path (install once, see above):
 
-```bash
-cargo install --path oxdock
-oxdock --script Oxfile
+```sh
+oxdock ./build.oxfile
+```
+
+### Prepare during the build
+
+`oxdock_embed!` ships artifacts inside the binary. `oxdock_prepare!` runs the same script but emits no runtime module. Use it when assets only need to exist during the build, for codegen or `include!` workflows.
+
+```rust
+use oxdock_macros::oxdock_prepare;
+
+oxdock_prepare! {
+    name: PreparedAssets,
+    script: {
+        MKDIR gen
+        WRITE gen/out.txt generated
+        ASSERT_FILE gen/out.txt generated
+    },
+    out_dir: "target/prebuilt_prepare",
+}
+
+fn main() {}
+```
+
+### Stream bytes between steps
+
+`WITH_IO` routes stdout into named pipes and back into stdin, so steps form custom pipelines without temp files.
+
+```oxdock
+WITH_IO [stdout=pipe:msg] ECHO piped-bytes
+WITH_IO [stdin=pipe:msg] WRITE piped.txt
+READ piped.txt
+ASSERT_STDOUT piped-bytes
+```
+
+### Workspaces start ephemeral
+
+Scripts start in an ephemeral snapshot workspace, an isolated temp dir that leaves the source tree untouched. Pull inputs with `COPY` or `COPY_GIT`. Switch to the local directory with `WORKSPACE LOCAL` when the script should mutate in place.
+
+```oxdock
+WRITE snap.txt from-snapshot
+ASSERT_FILE snap.txt from-snapshot
+WORKSPACE LOCAL
+WRITE local.txt from-local
+ASSERT_FILE local.txt from-local
 ```
 
 One language for the whole build: farm steps out to npm, bundlers, or code generators and pull their artifacts back under cargo's control. Pipe bytes between steps without buffering whole outputs, fan work out with `ASYNC`, or skip embedding entirely and run the same scripts as standalone CLI processes.
@@ -393,6 +449,7 @@ CANCEL $worker
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
+
 ### WITH_IO
 
 Reroute standard streams.
@@ -485,7 +542,7 @@ Bind script-local variables.
 
 **Syntax:** `LET $var = <expr> | LET $var = ASYNC { <commands> }`
 
-Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here.
+Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here. Bare words need no quotes: `LET $d = 30s` binds the same string as `LET $d = "30s"`.
 
 **Examples:**
 
@@ -507,6 +564,20 @@ WRITE a.txt "x"
 LET $files = GLOB("*.txt")
 FOR $f IN $files { ECHO $f }
 ASSERT_STDOUT "a.txt"
+```
+
+**Example: scoped variable reverts**
+
+```oxdock
+# LET inside a braced block reverts when the block exits
+LET $a = "outer"
+[bool:true] {
+    LET $a = "inner"
+    WRITE inner.txt "{{ $a }}"
+}
+WRITE outer.txt "{{ $a }}"
+ASSERT_FILE inner.txt "inner"
+ASSERT_FILE outer.txt "outer"
 ```
 
 
@@ -602,6 +673,15 @@ TIMEOUT 30s {
 }
 ```
 
+**Example: timeout variable duration**
+
+```oxdock
+# durations resolve at runtime, so variables work too
+LET $budget = "30s"
+TIMEOUT $budget WRITE heartbeat.txt alive
+ASSERT_FILE heartbeat.txt alive
+```
+
 
 ### WORKDIR
 
@@ -609,13 +689,13 @@ Change the working directory.
 
 **Syntax:** `WORKDIR <path>`
 
-Sets the current working directory.
+Sets the current working directory. Relative paths resolve against the current directory; `/` resets to the workspace root. Paths cannot escape the workspace.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `string` | yes | Directory to change to |
+| `path` | [`path`](#value-type-path) | yes | Directory to change to |
 
 **Examples:**
 
@@ -640,7 +720,7 @@ SNAPSHOT or LOCAL root.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `target` | `SNAPSHOT|LOCAL` | yes | Target root |
+| `target` | `SNAPSHOT\|LOCAL` | yes | Target root |
 
 **Examples:**
 
@@ -663,7 +743,7 @@ Inserts or updates an env var. The value uses the unified string-value rules sha
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `assignment` | `KEY=value` | yes | KEY=value pair |
+| `assignment` | [`KEY=value`](#value-type-keyvalue) | yes | KEY=value pair |
 
 **Examples:**
 
@@ -705,6 +785,20 @@ WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
 ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
 ```
 
+**Example: scoped env reverts**
+
+```oxdock
+# ENV inside a braced block reverts when the block exits
+ENV MODE=production
+[bool:true] {
+    ENV MODE=staging
+    WRITE inner.txt "{{ env:MODE }}"
+}
+WRITE outer.txt "{{ env:MODE }}"
+ASSERT_FILE inner.txt "staging"
+ASSERT_FILE outer.txt "production"
+```
+
 
 ### INHERIT_ENV
 
@@ -713,6 +807,12 @@ Inherit env vars from host.
 **Syntax:** `INHERIT_ENV <key>...`
 
 Declares which host environment variables to inherit into the script. Must appear before any other commands and at most once. Without this directive, the script starts with an empty environment.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `keys` | [`string...`](#value-type-string) | no | Host variables to inherit |
 
 **Examples:**
 
@@ -735,7 +835,7 @@ Outputs message to stdout.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `message` | `string` | yes | Text |
+| `message` | [`string...`](#value-type-string) | yes | Text |
 
 **Output:** Stdout
 
@@ -770,7 +870,7 @@ Runs command in cwd.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `command` | `string...` | yes | Command |
+| `command` | [`string...`](#value-type-string) | yes | Command |
 
 **Examples:**
 
@@ -793,14 +893,14 @@ Copies from host.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `from` | `path` | yes | Source |
-| `to` | `path` | yes | Dest |
+| `from` | [`path`](#value-type-path) | yes | Source |
+| `to` | [`path`](#value-type-path) | yes | Dest |
 
 **Flags:**
 
 | Flag | Type | Description |
 | --- | --- | --- |
-| `--from-current-workspace` | Flag | From workspace root |
+| `--from-current-workspace` | Flag | Copy from workspace instead of build context |
 
 **Examples:**
 
@@ -810,6 +910,14 @@ Copies from host.
 WRITE src.txt content
 COPY src.txt dst.txt
 ASSERT_FILE dst.txt content
+```
+
+**Example: copy from workspace**
+
+```oxdock roots:unified
+WRITE ws-src.txt ws-content
+COPY --from-current-workspace ws-src.txt ws-copy.txt
+ASSERT_FILE ws-copy.txt ws-content
 ```
 
 
@@ -825,9 +933,9 @@ Checkout and copy.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `rev` | `string` | yes | Rev |
-| `src` | `path` | yes | Src |
-| `dst` | `path` | yes | Dst |
+| `rev` | [`string`](#value-type-string) | yes | Rev |
+| `src` | [`path`](#value-type-path) | yes | Src |
+| `dst` | [`path`](#value-type-path) | yes | Dst |
 
 **Flags:**
 
@@ -856,8 +964,8 @@ Creates symlink.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `from` | `path` | yes | Target |
-| `to` | `path` | yes | Link |
+| `from` | [`path`](#value-type-path) | yes | Target |
+| `to` | [`path`](#value-type-path) | yes | Link |
 
 **Examples:**
 
@@ -882,7 +990,7 @@ Creates dir with parents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Dir path |
+| `path` | [`path`](#value-type-path) | yes | Dir path |
 
 **Examples:**
 
@@ -905,7 +1013,7 @@ Lists entries.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Dir |
+| `path` | [`path`](#value-type-path) | no | Dir |
 
 **Output:** Stdout
 
@@ -951,7 +1059,7 @@ Outputs file contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | File |
+| `path` | [`path`](#value-type-path) | no | File |
 
 **Output:** Stdout
 
@@ -977,7 +1085,7 @@ Reads bytes until newline without waiting for EOF, leaving the pipe open. Traili
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `var` | `$var` | yes | Variable to store the line |
+| `var` | [`$var`](#value-type-var) | yes | Variable to store the line |
 
 **Examples:**
 
@@ -1001,8 +1109,8 @@ Writes contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `contents` | `string` | no | Content |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `contents` | [`string...`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -1025,8 +1133,8 @@ Appends contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `contents` | `string` | no | Content |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `contents` | [`string...`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -1051,8 +1159,8 @@ A template is any text file — or piped stdin when no path is given — contain
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Template file to expand; omit to expand stdin |
-| `overrides` | `KEY=val` | no | Template overrides shadowing that key (unified string values) |
+| `path` | [`path`](#value-type-path) | no | Template file to expand; omit to expand stdin |
+| `overrides` | [`KEY=value...`](#value-type-keyvalue) | no | Template overrides shadowing that key (unified string values) |
 
 **Output:** Stdout
 
@@ -1107,6 +1215,19 @@ WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
 ASSERT_STDOUT "Hello Alice!"
 ```
 
+**Example: override does not leak**
+
+```oxdock
+# KEY=val overrides shadow env for that EXPAND only —
+# they never update the environment itself
+ENV NAME="Alice"
+WRITE template.md "Hi \{{ env:NAME }}!"
+EXPAND template.md NAME="Bob"
+ASSERT_STDOUT "Hi Bob!"
+EXPAND template.md
+ASSERT_STDOUT "Hi Alice!"
+```
+
 
 ### ASSERT_FILE
 
@@ -1114,14 +1235,14 @@ Assert file exists.
 
 **Syntax:** `ASSERT_FILE [--hash <sha256>] <path> [<expected>]`
 
-Verifies file.
+Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `expected` | `string` | no | Expected |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `expected` | [`string...`](#value-type-string) | no | Expected |
 
 **Flags:**
 
@@ -1138,6 +1259,14 @@ WRITE payload.bin stable-content
 ASSERT_FILE payload.bin stable-content
 ```
 
+**Example: assert file hash**
+
+```oxdock
+# --hash compares the SHA-256 digest instead of raw bytes
+WRITE payload.bin stable-content
+ASSERT_FILE --hash 08135c1b6349b0e4f894c36221952f0de00e6b4d82f80895abf359755e77103c payload.bin
+```
+
 
 ### ASSERT_DIR
 
@@ -1145,13 +1274,13 @@ Assert dir exists.
 
 **Syntax:** `ASSERT_DIR <path>`
 
-Verifies dir.
+Checks the path is a directory, aborting the pipeline with a step-numbered error otherwise.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Dir |
+| `path` | [`path`](#value-type-path) | yes | Dir |
 
 **Examples:**
 
@@ -1169,13 +1298,13 @@ Assert path absent.
 
 **Syntax:** `ASSERT_ABSENT <path>`
 
-Verifies absence.
+Checks nothing exists at the path, aborting the pipeline with a step-numbered error if it does.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Path |
+| `path` | [`path`](#value-type-path) | yes | Path |
 
 **Examples:**
 
@@ -1192,13 +1321,13 @@ Assert stdout contains.
 
 **Syntax:** `ASSERT_STDOUT <substring>`
 
-Verifies stdout.
+Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `substring` | `string` | yes | Substring |
+| `substring` | [`string...`](#value-type-string) | yes | Substring |
 
 **Examples:**
 
@@ -1222,7 +1351,7 @@ Computes digest.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
+| `path` | [`path`](#value-type-path) | yes | File |
 
 **Output:** Stdout
 
@@ -1248,7 +1377,7 @@ Stops the pipeline immediately with an `EXIT requested with code <code>` error; 
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `code` | `int` | yes | Code |
+| `code` | [`int`](#value-type-int) | yes | Code |
 
 **Examples:**
 
@@ -1261,7 +1390,7 @@ EXIT 0
 
 ### SLEEP
 
-Sleep without spawning a shell.
+Pause execution for a duration.
 
 **Syntax:** `SLEEP <duration>`
 
@@ -1271,7 +1400,7 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `duration` | `duration` | yes | How long to sleep |
+| `duration` | [`duration`](#value-type-duration) | yes | How long to sleep |
 
 **Examples:**
 
@@ -1281,6 +1410,43 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 SLEEP 100ms
 ```
 
+**Example: sleep variable duration**
+
+```oxdock
+# durations resolve at runtime, so variables work too —
+# quoted or bare, both bind the same string
+LET $pause = "100ms"
+SLEEP $pause
+LET $bare = 100ms
+SLEEP $bare
+```
+
+
+## Value types
+
+### Value type: string
+
+Arbitrary text under the unified string-value rules: quotes keep exact bytes, a lone `$var` evaluates, and `{{ ... }}` placeholders interpolate.
+
+### Value type: path
+
+Workspace path, resolved against the current working directory and guarded against escaping the workspace.
+
+### Value type: int
+
+Integer, e.g. an exit code.
+
+### Value type: duration
+
+Positive time span: a number with an `ms`, `s`, `m`, or `h` suffix — a bare number means seconds — e.g. `500ms`, `10s`, `2m`.
+
+### Value type: $var
+
+Script variable reference. The `$` sigil is mandatory.
+
+### Value type: KEY=value
+
+`KEY=value` assignment splitting on the first `=` (`KEY=a=b` stores `a=b`). Values follow the unified string-value rules.
 
 ## Selective environment inheritance
 
@@ -1311,11 +1477,11 @@ Keeping inheritance selective avoids leaking secrets by default while still allo
 
 - **How workspaces are created:** OxDock materializes a clean workspace as an isolated temporary directory. It does not implicitly populate that directory from Git; scripts can pull files in via `COPY` (from the build context) or `COPY_GIT` (from a specific revision). Treat this workspace as a scratchpad surface for experimentation: you can run scripts inside it, create or modify files, and prepare assets for publishing without affecting your main source tree or requiring `--allow-dirty` workflows.
 
-- **Typical usage pattern:** the temporary workspace is intended for short-lived build/test iterations — run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
+- **Typical usage pattern:** the temporary workspace is intended for short lived build and test iterations. Run scripts against it, inspect outputs, and discard when done. Because it is separate from the original repo it is safe to run multiple concurrent experiments without changing the original repo.
 
-- **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate-internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
+- **Filesystem gating via `oxdock-fs`:** all filesystem operations in the runtime are routed through the crate internal `oxdock-fs` abstraction. That module centralizes path resolution, canonicalization and access checks so reads and writes can be validated against the allowed workspace root and build context.
 
-- **What `oxdock-fs` protects you from:** the guardrails are pragmatic — they prevent common mistakes such as accidentally writing outside the materialized workspace or reading files from arbitrary absolute paths. However, they are not a full sandbox: a determined process or script can still create destructive actions (e.g., invoking native `RUN` commands that modify external state). If you require strict isolation, run OxDock inside a container or VM.
+- **What `oxdock-fs` protects you from:** the guardrails are pragmatic. They prevent common mistakes such as accidentally writing outside the materialized workspace or reading files from arbitrary absolute paths. However, they are not a full sandbox. A determined process or script can still create destructive actions (for example, invoking native `RUN` commands that modify external state). If you require strict isolation, run OxDock inside a container or VM.
 
 - **Performance:** routing via `oxdock-fs` adds negligible overhead for typical workloads. The module focuses on correctness and containment with minimal runtime cost so interactive iteration remains fast.
 

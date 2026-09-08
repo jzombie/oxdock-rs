@@ -163,7 +163,8 @@ pub fn collect_env_references(steps: &[Step]) -> BTreeSet<String> {
         }
         match &step.kind {
             StepKind::Workdir(t) => template_keys(&mut keys, t),
-            StepKind::Workspace(_) | StepKind::Cwd | StepKind::Exit(_) => {}
+            StepKind::Workspace(_) | StepKind::Cwd => {}
+            StepKind::Exit(code) => template_keys(&mut keys, code),
             StepKind::Env { key: _, value } => template_keys(&mut keys, value),
             StepKind::InheritEnv { keys: _ } => {}
             StepKind::Run(t) | StepKind::Echo(t) => template_keys(&mut keys, t),
@@ -265,16 +266,16 @@ pub fn collect_env_references(steps: &[Step]) -> BTreeSet<String> {
                     keys.insert(k);
                 }
             }
-            StepKind::Timeout { body, .. } => {
+            StepKind::Timeout { duration, body } => {
+                // Durations resolve dynamically, so they can reference env.
+                template_keys(&mut keys, duration);
                 for k in collect_env_references(body) {
                     keys.insert(k);
                 }
             }
             StepKind::Await { .. } => {}
             StepKind::Cancel { .. } => {}
-            StepKind::Sleep { .. } => {
-                // SLEEP takes a static duration — no template env references.
-            }
+            StepKind::Sleep { duration } => template_keys(&mut keys, duration),
             StepKind::ReadLine { .. } => {}
         }
     }
@@ -328,7 +329,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("SYMLINK requires target"))?;
                 Ok(StepKind::Symlink { from, to })
             }
-            "ENV" => oxdock_parser::commands::lower_env_legacy(args),
+            "ENV" => oxdock_parser::commands::lower_env_assignment(args),
             "WRITE" => {
                 let path = args
                     .first()
