@@ -1,194 +1,185 @@
-mod command_ref;
-mod runner;
-mod template_doc;
-
 use anyhow::{Context, Result};
+use docs_gen::{
+    DocsGenConfig, TargetSpec,
+    discovery::discover_targets,
+    guard::validate_rel_path,
+    providers::{CargoMetadataProvider, CommandRefProvider, DataProvider, parse_workspace_members},
+    template_doc,
+};
 use oxdock_core::ExecIo;
+use oxdock_fs::{GuardedPath, PathResolver};
 #[allow(clippy::disallowed_types)]
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
-    let repo_root = find_repo_root()?;
+    let args: Vec<String> = std::env::args().collect();
+    let config_arg = config_arg(&args);
+    #[allow(clippy::disallowed_types)]
+    let root_arg: Option<PathBuf> = root_arg(&args);
 
-    // Phase 1: command reference from CommandSpec metadata
-    let cmd_ref_out = repo_root.join("docs/sections/07-command-body.md");
-    command_ref::generate(&cmd_ref_out)?;
-    eprintln!("Command reference written to {}", cmd_ref_out.display());
+    let repo_root = match root_arg {
+        Some(root) => root,
+        None => find_repo_root()?,
+    };
+    let config_path = match config_arg {
+        Some(path) => path,
+        None => default_config_path(&repo_root).context(
+            "no docs-gen config found (looked for docs-gen.json, .oxdock/docs-gen.json); pass --config",
+        )?,
+    };
+    let config = DocsGenConfig::load(&config_path)
+        .with_context(|| format!("load docs-gen config {}", config_path.display()))?;
 
-    // Phase 1b: command index table from the same metadata registry, so the
-    // index can never drift from the reference (stale or missing commands).
-    let cmd_index_out = repo_root.join("docs/sections/06-command-reference.md");
-    command_ref::generate_index(&cmd_index_out)?;
-    eprintln!("Command index written to {}", cmd_index_out.display());
+    let workspace_toml = repo_root.join("Cargo.toml");
+    let members = parse_workspace_members(&workspace_toml).unwrap_or_default();
 
-    // Phase 2: root README from docs/sections/*.md
-    let root_manifest = serde_json::json!([
-        { "kind": "glob", "pattern": "docs/sections/*.md" },
-        { "kind": "template", "path": "docs/templates/crate-footer.md" }
-    ]);
-    let root_out = repo_root.join("README.md");
-    let mut root_env = ExecIo::new();
-    root_env.insert_inherit_env("CRATE_NAME", "OxDock");
-    if let Err(err) =
-        template_doc::compile(&repo_root, &root_manifest.to_string(), &root_out, root_env)
-    {
-        eprintln!("  Warning: failed to generate root README.md: {err:#}");
+    // Plugin data first: providers materialize generated files (e.g. the
+    // `command-ref` index/body sections) before any target renders, so
+    // templates can glob them like any other fragment.
+    if config.providers.iter().any(|p| p == "command-ref") {
+        write_plugin_fragments(&repo_root, &CommandRefProvider, &config)?;
     }
 
-    // Phase 3: per-crate docs from template
-    let template_dir = repo_root.join("docs/templates");
-    generate_crate_docs(&repo_root, &template_dir)?;
-    eprintln!("All crate READMEs generated");
+    // Targets: explicit config entries plus algorithmically discovered
+    // `target.json` directories (one system — no parallel legacy tree).
+    let mut targets: Vec<TargetSpec> = config.targets.clone();
+    for discovered in discover_targets(&repo_root, &config, &members)? {
+        eprintln!(
+            "Discovered target `{}` in {}",
+            discovered.spec.name, discovered.dir
+        );
+        targets.push(discovered.spec);
+    }
+    targets.sort_by(|a, b| a.name.cmp(&b.name));
 
+    let cargo_enabled = config.providers.iter().any(|p| p == "cargo-metadata");
+    for target in &targets {
+        if let Err(err) = render_target(&repo_root, &workspace_toml, target, &config, cargo_enabled)
+        {
+            eprintln!("  Warning: target `{}` failed: {err:#}", target.name);
+        }
+    }
+    eprintln!("docs-gen rendered {} target(s)", targets.len());
+    Ok(())
+}
+
+/// Map provider fragments onto configured output paths (config data —
+/// fragment name → workspace-relative file). The only writer of generated
+/// files; templates consume them via ordinary globs.
+#[allow(clippy::disallowed_types)]
+fn write_plugin_fragments(
+    repo_root: &Path,
+    provider: &CommandRefProvider,
+    config: &DocsGenConfig,
+) -> Result<()> {
+    if config.generated_files.is_empty() {
+        return Ok(());
+    }
+    let root = GuardedPath::new_root(repo_root)?;
+    let resolver = PathResolver::new(root.as_path(), root.as_path())?;
+    for fragment in provider.fragments() {
+        let Some(rel) = config.generated_files.get(&fragment.name) else {
+            continue;
+        };
+        let rel = validate_rel_path(repo_root, rel)?;
+        let dest = root.join(&rel)?;
+        if let Some(parent) = dest.as_path().parent() {
+            let parent_guard = GuardedPath::new(repo_root, parent)?;
+            resolver.create_dir_all(&parent_guard)?;
+        }
+        resolver.write_file(&dest, fragment.contents.as_bytes())?;
+        eprintln!(
+            "{} written via `{}` plugin",
+            dest.as_path().display(),
+            provider.name()
+        );
+    }
     Ok(())
 }
 
 #[allow(clippy::disallowed_types)]
-fn generate_crate_docs(repo_root: &Path, template_dir: &Path) -> Result<()> {
-    let workspace_toml = repo_root.join("Cargo.toml");
-    let members =
-        parse_workspace_members(&workspace_toml).context("failed to parse workspace members")?;
-
-    let header = template_dir.join("crate-header.md");
-    let footer = template_dir.join("crate-footer.md");
-
-    if !header.exists() || !footer.exists() {
-        eprintln!(
-            "Skipping crate docs: templates not found at {}",
-            template_dir.display()
-        );
-        return Ok(());
-    }
-
-    let header_str = "docs/templates/crate-header.md";
-    let footer_str = "docs/templates/crate-footer.md";
-
-    for member in &members {
-        let member_cargo_toml = repo_root.join(member).join("Cargo.toml");
-        if !member_cargo_toml.exists() {
-            eprintln!("Skipping {member}: no Cargo.toml found");
-            continue;
-        }
-
-        let meta = parse_cargo_metadata(&member_cargo_toml, &workspace_toml)?;
-        let mut env = ExecIo::new();
-        env.insert_inherit_env("CRATE_NAME", &meta.name);
-        env.insert_inherit_env("CRATE_DESCRIPTION", &meta.description);
-        env.insert_inherit_env("CRATE_VERSION", &meta.version);
-
-        // Workspace-relative glob pattern (not absolute)
-        let glob = format!("docs/crates/{}/*.md", meta.name);
-
-        // Build manifest as JSON array. An optional `dependency.tmpl` beside
-        // the body sources is expanded through OxDock's own EXPAND (with
-        // CRATE_VERSION in scope), so versioned snippets track the workspace
-        // version with nothing hardcoded. Body `*.md` files stay verbatim by
-        // design: EXPAND is strict and would reject DSL examples documented
-        // as `{{ env:PROJECT }}`.
-        let mut nodes = vec![
-            serde_json::json!({ "kind": "template", "path": header_str }),
-            serde_json::json!({ "kind": "glob", "pattern": glob }),
-        ];
-        let snippet_rel = format!("docs/crates/{}/dependency.tmpl", meta.name);
-        if repo_root.join(&snippet_rel).exists() {
-            nodes.push(serde_json::json!({ "kind": "template", "path": snippet_rel }));
-        }
-        nodes.push(serde_json::json!({ "kind": "template", "path": footer_str }));
-        let manifest_json = serde_json::Value::Array(nodes).to_string();
-
-        let out_path = repo_root.join(member).join("README.md");
-        if let Err(err) = template_doc::compile(repo_root, &manifest_json, &out_path, env) {
-            eprintln!("  Warning: failed to generate {member}/README.md: {err:#}");
+fn render_target(
+    repo_root: &Path,
+    workspace_toml: &Path,
+    target: &TargetSpec,
+    config: &DocsGenConfig,
+    cargo_enabled: bool,
+) -> Result<()> {
+    // Per-target provider values: the owning workspace member's cargo
+    // metadata (name/description/version flow into `$docs_ctx`). Wiring
+    // only — no hardcoded paths or keys.
+    let mut env = ExecIo::new();
+    let mut provider_values = serde_json::Value::Null;
+    if cargo_enabled && let Some(member) = target.member.as_deref() {
+        let member_toml = repo_root.join(member).join("Cargo.toml");
+        if member_toml.exists() {
+            let provider = CargoMetadataProvider::load(&member_toml, workspace_toml)?;
+            let meta = provider.metadata();
+            env.insert_inherit_env("CRATE_NAME", &meta.name);
+            env.insert_inherit_env("CRATE_DESCRIPTION", &meta.description);
+            env.insert_inherit_env("CRATE_VERSION", &meta.version);
+            provider_values = provider.values();
         }
     }
-
+    template_doc::render_target(
+        repo_root,
+        target,
+        config.global_values.as_deref(),
+        Some(&provider_values),
+        env,
+    )?;
+    eprintln!("Target `{}` rendered to {}", target.name, target.out);
     Ok(())
 }
 
-#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-fn parse_workspace_members(workspace_toml: &Path) -> Result<Vec<String>> {
-    let contents = std::fs::read_to_string(workspace_toml)?;
-    let doc: toml_edit::DocumentMut = contents.parse()?;
-
-    let members = doc
-        .get("workspace")
-        .and_then(|w| w.get("members"))
-        .and_then(|m| m.as_array())
-        .context("workspace.members not found or not an array")?;
-
-    Ok(members
-        .iter()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect())
+#[allow(clippy::disallowed_types)]
+fn config_arg(args: &[String]) -> Option<PathBuf> {
+    args.windows(2)
+        .find(|w| w[0] == "--config")
+        .map(|w| PathBuf::from(&w[1]))
 }
 
-struct CargoMetadata {
-    name: String,
-    description: String,
-    version: String,
+#[allow(clippy::disallowed_types)]
+fn root_arg(args: &[String]) -> Option<PathBuf> {
+    args.windows(2)
+        .find(|w| w[0] == "--root")
+        .map(|w| PathBuf::from(&w[1]))
 }
 
-#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-fn parse_workspace_version(workspace_toml: &Path) -> String {
-    let contents = std::fs::read_to_string(workspace_toml).unwrap_or_default();
-    let doc: Result<toml_edit::DocumentMut, _> = contents.parse();
-    let Ok(doc) = doc else {
-        return "unknown".to_string();
-    };
-    doc.get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
-fn parse_cargo_metadata(cargo_toml: &Path, workspace_toml: &Path) -> Result<CargoMetadata> {
-    let contents = std::fs::read_to_string(cargo_toml)?;
-    let doc: toml_edit::DocumentMut = contents.parse()?;
-
-    let name = doc
-        .get("package")
-        .and_then(|p| p.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let description = doc
-        .get("package")
-        .and_then(|p| p.get("description"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("No description provided.")
-        .to_string();
-
-    // Member crates use `version.workspace = true`, so a literal
-    // `package.version` string is only present for standalone version pins.
-    // Fall back to `workspace.package.version` otherwise so generated docs
-    // never need a hardcoded copy of the version.
-    let version = doc
-        .get("package")
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| parse_workspace_version(workspace_toml));
-
-    Ok(CargoMetadata {
-        name,
-        description,
-        version,
-    })
+/// Default config discovery: `./docs-gen.json`, then
+/// `./.oxdock/docs-gen.json`.
+#[allow(clippy::disallowed_types)]
+fn default_config_path(repo_root: &Path) -> Option<PathBuf> {
+    for candidate in ["docs-gen.json", ".oxdock/docs-gen.json"] {
+        let path = repo_root.join(candidate);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn find_repo_root() -> Result<PathBuf> {
+    // `--root` is handled by the caller; this only resolves the default.
+    if let Ok(root) = std::env::var("OXDOCK_REPO_ROOT") {
+        let root = PathBuf::from(root);
+        if root.join("Cargo.toml").exists() {
+            return Ok(root);
+        }
+    }
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    let mut current = manifest_dir.canonicalize().unwrap_or(manifest_dir);
+    let mut current = manifest_dir.clone();
+    // `canonicalize` is host introspection for startup path discovery (not
+    // a guarded workspace read); fall back to the raw dir on failure.
+    if let Ok(canonical) = current.canonicalize() {
+        current = canonical;
+    }
     loop {
-        if current.join("Cargo.toml").exists() && current.join("docs").exists() {
+        if current.join("Cargo.toml").exists() && current.join("docs-gen.json").exists() {
             return Ok(current);
         }
         if !current.pop() {

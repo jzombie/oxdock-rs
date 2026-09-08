@@ -1,0 +1,8 @@
+OxDock scripts automate build-time work: creating files, snapshotting
+workspaces, verifying artifacts with native assertions. You run them
+two ways off the same core — embedded in your build with macros, or as
+standalone processes with the CLI.
+
+This crate is the front door. It re-exports the CLI runner (enabled by
+default) and the build macros (always available), so most users only
+ever depend on `oxdock`.

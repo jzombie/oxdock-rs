@@ -1,0 +1,28 @@
+The same script also runs standalone through the CLI — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
+
+```oxdock
+// Script-local variable: usable by templates and guards below.
+ENV PROJECT=OxDock
+
+// Creates the directory and any missing parents.
+MKDIR dist
+
+// Interpolate the variable into the file body via a template.
+WRITE dist/hello.txt Built with {{ env:PROJECT }}
+
+// Fail the script unless the artifact exists with exactly these bytes.
+ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
+
+// LS prints "<dir>:" then the entry names, sorted.
+LS dist
+
+// Assert stdout buffer of previous LS command is "hello.txt"
+ASSERT_STDOUT hello.txt
+```
+
+Run it with the CLI:
+
+```bash
+cargo install --path oxdock
+oxdock --script Oxfile
+```

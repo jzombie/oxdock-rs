@@ -26,7 +26,6 @@
   </a>
 </div>
 
-
 > **OxDock is an experimental DSL used for building embeddable artifacts and orchestrating pipelines.**
 >
 > **It is currently in alpha and is subject to rapid API changes.**
@@ -37,24 +36,34 @@ OxDock is a Dockerfile-inspired DSL that runs **natively on your host** — no c
 
 Unlike Docker, commands execute directly on the host: they can be guarded by platform/env conditions, run inside scoped blocks so changes to `ENV` or `WORKDIR` don’t leak, and interoperate with containers whenever you want them — you can invoke Docker from an OxDock script, or even install Docker, while the DSL itself stays portable.
 
-## Variants
-
-OxDock comes in two variants, each of which are independent of the other, but share the same core:
-
-- [oxdock-macros](./oxdock-macros/): Provides a Rust build-time dependency which runs OxDock scripts during the compilation of a Rust program.
-- [oxdock-cli](./oxdock-cli/): Command-line interface for running OxDock scripts from the command line.
-
-## Goals
-
-OxDock has a simple goal to provide a simple DSL that works the same across Mac, Linux, and Windows, including support for background processes, symlinks, and boolean conditionals (such as env and platform-based command filtering), which runs the same whether it's used as a preprocessing step in a build-time Rust macro, or as a CLI program, regardless of platform it is building on.
-
-Every internal command is engineered to run the same way across platforms, except for the `RUN` command, which calls native programs.
-
-**OxDock adds no additional runtime dependencies if used as a macro preprocessor.**
-
 ## Quick start
 
-The following script is a complete OxDock script — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
+The gist is compile-time embedding — the macro runs the script during `rustc` and generates a pure-Rust struct whose assets live in the binary's data section, readable at runtime with zero heap allocation:
+
+```rust
+use oxdock_macros::oxdock_embed;
+
+oxdock_embed! {
+    // Embedded resources are mapped to `HelloAssets::get(resource)`
+    name: HelloAssets,
+    script: {
+        ENV PROJECT=OxDock
+        MKDIR dist
+        WRITE dist/hello.txt Built with {{ env:PROJECT }}
+        ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
+    },
+    // Generated assets land under target/, keeping the source tree clean
+    out_dir: "target/prebuilt",
+}
+
+fn main() {
+    // Verify we can read the resource we just created
+    let file = HelloAssets::get("dist/hello.txt").expect("dist/hello.txt must be embedded");
+    assert_eq!(file.data.as_ref(), b"Built with OxDock");
+}
+```
+
+The same script also runs standalone through the CLI — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
 
 ```oxdock
 // Script-local variable: usable by templates and guards below.
@@ -82,31 +91,20 @@ Run it with the CLI:
 cargo install --path oxdock
 oxdock --script Oxfile
 ```
+## Variants
 
-Or embed the same script at compile time — the macro runs the script during `rustc` and generates a pure-Rust struct whose assets live in the binary's data section, readable at runtime with zero heap allocation:
+OxDock comes in two variants, each of which are independent of the other, but share the same core:
 
-```rust
-use oxdock_macros::oxdock_embed;
+- [oxdock-macros](./oxdock-macros/): Provides a Rust build-time dependency which runs OxDock scripts during the compilation of a Rust program.
+- [oxdock-cli](./oxdock-cli/): Command-line interface for running OxDock scripts from the command line.
 
-oxdock_embed! {
-    // Embedded resources are mapped to `HelloAssets::get(resource)`
-    name: HelloAssets,
-    script: {
-        ENV PROJECT=OxDock
-        MKDIR dist
-        WRITE dist/hello.txt Built with {{ env:PROJECT }}
-        ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
-    },
-    // Generated assets land under target/, keeping the source tree clean
-    out_dir: "target/prebuilt",
-}
+## Goals
 
-fn main() {
-    // Verify we can read the resource we just created
-    let file = HelloAssets::get("dist/hello.txt").expect("dist/hello.txt must be embedded");
-    assert_eq!(file.data.as_ref(), b"Built with OxDock");
-}
-```
+OxDock has a simple goal to provide a simple DSL that works the same across Mac, Linux, and Windows, including support for background processes, symlinks, and boolean conditionals (such as env and platform-based command filtering), which runs the same whether it's used as a preprocessing step in a build-time Rust macro, or as a CLI program, regardless of platform it is building on.
+
+Every internal command is engineered to run the same way across platforms, except for the `RUN` command, which calls native programs.
+
+**OxDock adds no additional runtime dependencies if used as a macro preprocessor.**
 
 # DSL Reference
 
@@ -398,7 +396,6 @@ CANCEL $worker
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
-
 ### WITH_IO
 
 Reroute standard streams.
@@ -1286,7 +1283,6 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 ```oxdock
 SLEEP 100ms
 ```
-
 
 
 ## Selective environment inheritance
