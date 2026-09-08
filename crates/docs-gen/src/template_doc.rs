@@ -56,9 +56,9 @@ FOR $docs_idx, $docs_node IN $docs_stages {
 }
 "#;
 
-/// A master template (`output.tmpl`) declares document order the way the
-/// requester asked: by the location of `{{> }}` directives in a document,
-/// not by a sidecar JSON list.
+/// A master template (e.g. `output.md.tmpl`) declares document order the way
+/// the requester asked: by the location of `{{> }}` directives in a
+/// document, not by a sidecar JSON list.
 ///
 /// A whole-line directive `{{> some/file.md }}` includes that file at its
 /// position (verbatim, unless it ends in `.tmpl`, which `EXPAND`s with the

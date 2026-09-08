@@ -370,19 +370,19 @@ fn discover_finds_target_json_dirs_only() {
 )]
 fn sparse_target_synthesizes_local_convention() {
     // A two-line target.json (nothing to get wrong) expands to the local
-    // layout: header.tmpl + fragments globs + footer.tmpl, all owned by
-    // the target directory. No document vocabulary in the engine.
+    // layout: header.md.tmpl + fragments globs + footer.md.tmpl, all owned
+    // by the target directory. No document vocabulary in the engine.
     let fx = Fixture::new();
     fx.write(
         "crates/beta/.oxdock/template/target.json",
         r#"{"name":"beta","out":"crates/beta/README.md"}"#,
     );
     fx.write(
-        "crates/beta/.oxdock/template/header.tmpl",
+        "crates/beta/.oxdock/template/header.md.tmpl",
         "# {{ $docs_ctx.name }}\n",
     );
     fx.write("crates/beta/.oxdock/template/fragments/a.md", "A\n");
-    fx.write("crates/beta/.oxdock/template/footer.tmpl", "F\n");
+    fx.write("crates/beta/.oxdock/template/footer.md.tmpl", "F\n");
     let config = DocsGenConfig::default();
     let found =
         discover_targets(fx.repo_root(), &config, &["crates/beta".to_string()]).expect("discover");
@@ -396,7 +396,7 @@ fn sparse_target_synthesizes_local_convention() {
     assert_eq!(kinds, ["template", "glob", "glob", "template"]);
     assert_eq!(
         found[0].spec.stages[0].path.as_deref(),
-        Some("crates/beta/.oxdock/template/header.tmpl")
+        Some("crates/beta/.oxdock/template/header.md.tmpl")
     );
     assert_eq!(found[0].spec.member.as_deref(), Some("crates/beta"));
 }
@@ -489,6 +489,40 @@ fn template_target_derives_order_from_includes() {
     assert_eq!(
         fx.read("out.md"),
         "Hello world!\nverbatim `{{ env:KEPT }}`\nsigned world\n"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
+fn missing_include_fails_the_target() {
+    // Strict guarantee: a master template referencing a path that does not
+    // exist must fail rendering (never silently skip or emit partial
+    // output), so a typo'd include breaks the build instead of shipping a
+    // truncated document.
+    let fx = Fixture::new();
+    fx.write(
+        "output.md.tmpl",
+        "Hello\n{{> fragments/does-not-exist.md }}\n",
+    );
+    let out = TargetSpec {
+        name: "broken".to_string(),
+        out: "out.md".to_string(),
+        values: None,
+        stages: Vec::new(),
+        member: None,
+        template: Some("output.md.tmpl".to_string()),
+    };
+    // The driver writes incrementally, so a failed run can leave bytes
+    // behind; the guarantee is the Err itself, which main.rs propagates
+    // into a non-zero exit before anything is committed.
+    let err = template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new())
+        .expect_err("missing include must fail");
+    assert!(
+        err.to_string().contains("does-not-exist"),
+        "error must name the missing path, got: {err:#}"
     );
 }
 

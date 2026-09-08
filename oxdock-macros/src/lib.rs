@@ -930,7 +930,10 @@ fn emit_stepkind(
             let p = emit_arg(path, interp);
             quote! { StepKind::HashSha256 { path: #p } }
         }
-        StepKind::Exit(code) => quote! { StepKind::Exit(#code) },
+        StepKind::Exit(code) => {
+            let c = emit_arg(code, interp);
+            quote! { StepKind::Exit(#c) }
+        }
         StepKind::For {
             key_var,
             var,
@@ -993,12 +996,12 @@ fn emit_stepkind(
         }
         StepKind::Timeout { duration, body } => {
             let steps: Vec<_> = body.iter().map(|s| emit_step(s, interp)).collect();
-            let millis = duration.as_millis() as u64;
-            quote! { StepKind::Timeout { duration: ::std::time::Duration::from_millis(#millis), body: vec![#(#steps),*] } }
+            let d = emit_arg(duration, interp);
+            quote! { StepKind::Timeout { duration: #d, body: vec![#(#steps),*] } }
         }
         StepKind::Sleep { duration } => {
-            let millis = duration.as_millis() as u64;
-            quote! { StepKind::Sleep { duration: ::std::time::Duration::from_millis(#millis) } }
+            let d = emit_arg(duration, interp);
+            quote! { StepKind::Sleep { duration: #d } }
         }
         StepKind::ReadLine { var } => {
             quote! { StepKind::ReadLine { var: #var.to_string() } }
@@ -1271,9 +1274,9 @@ mod tests {
     // expansion shapes in-process in milliseconds, without spawning Cargo.
     // The `buildtime_macros` fixtures keep covering the cargo-integration
     // boundary (dylib loading, build-script env relay, `OUT_DIR` flows).
-    fn timeout_kind(millis: u64) -> StepKind {
+    fn timeout_kind(millis: &str) -> StepKind {
         StepKind::Timeout {
-            duration: std::time::Duration::from_millis(millis),
+            duration: Arg::String(millis.to_string(), false),
             body: vec![Step {
                 guard: None,
                 kind: StepKind::Run(Arg::String("echo hi".to_string(), false)),
@@ -1285,15 +1288,15 @@ mod tests {
 
     #[test]
     fn emit_timeout_preserves_duration_and_body() {
-        let tokens = emit_stepkind(&timeout_kind(10_000), &[]);
+        let tokens = emit_stepkind(&timeout_kind("10000"), &[]);
         let rendered = tokens.to_string();
         assert!(
             rendered.contains("Timeout"),
             "must emit Timeout variant: {rendered}"
         );
         assert!(
-            rendered.contains("from_millis") && rendered.contains("10000"),
-            "must embed duration millis: {rendered}"
+            rendered.contains("10000"),
+            "must embed duration arg: {rendered}"
         );
         assert!(
             rendered.contains("echo hi"),
@@ -1304,13 +1307,13 @@ mod tests {
     #[test]
     fn emit_sleep_preserves_duration() {
         let kind = StepKind::Sleep {
-            duration: std::time::Duration::from_millis(500),
+            duration: Arg::String("500".to_string(), false),
         };
         let rendered = emit_stepkind(&kind, &[]).to_string();
         assert!(rendered.contains("Sleep"), "must emit Sleep: {rendered}");
         assert!(
             rendered.contains("500"),
-            "must embed duration millis: {rendered}"
+            "must embed duration arg: {rendered}"
         );
     }
 
@@ -1340,7 +1343,7 @@ mod tests {
     fn emit_step_wraps_kind_with_scope() {
         let step = Step {
             guard: None,
-            kind: timeout_kind(2_000),
+            kind: timeout_kind("2s"),
             scope_enter: 1,
             scope_exit: 1,
         };

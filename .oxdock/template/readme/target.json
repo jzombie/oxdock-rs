@@ -1,1 +1,1 @@
-{"name": "readme", "out": "README.md", "values": ".oxdock/template/readme/values.json", "template": ".oxdock/template/readme/output.tmpl"}
+{"name": "readme", "out": "README.md", "values": ".oxdock/template/readme/values.json", "template": ".oxdock/template/readme/output.md.tmpl"}

@@ -84,6 +84,29 @@ pub(crate) fn resolve_overrides<P: ProcessManager>(
         .collect()
 }
 
+/// Resolve an [`Arg`] to an integer, enforcing the declared `int` type
+/// on the interpolated value. Dynamics (`$var`, templates) validate
+/// here — lower time only sees their unevaluated form.
+pub(crate) fn resolve_arg_as_int<P: ProcessManager>(
+    arg: &Arg,
+    cx: &mut StepCtx<'_, P>,
+) -> Result<i32> {
+    let resolved = resolve_arg(arg, cx)?;
+    resolved
+        .parse::<i32>()
+        .map_err(|_| anyhow::anyhow!("expected int, got {resolved:?}"))
+}
+
+/// Resolve an [`Arg`] to a duration, enforcing the declared `duration`
+/// type on the interpolated value. Same lower/runtime split as ints.
+pub(crate) fn resolve_arg_as_duration<P: ProcessManager>(
+    arg: &Arg,
+    cx: &mut StepCtx<'_, P>,
+) -> Result<std::time::Duration> {
+    let resolved = resolve_arg(arg, cx)?;
+    oxdock_parser::command::parse_duration(&resolved)
+}
+
 /// Evaluate an [`Expr`] to a [`Value`].
 pub(crate) fn evaluate_expr<P: ProcessManager>(
     expr: &Expr,

@@ -36,6 +36,24 @@
           "path": ".oxdock/template/readme/generated/command-body.md"
         }
       ]
+    },
+    {
+      "name": "oxdock-crate-docs",
+      "out": "oxdock/docs/crate_docs.md",
+      "stages": [
+        {
+          "kind": "template",
+          "path": ".oxdock/template/shared/intro.md.tmpl"
+        },
+        {
+          "kind": "read",
+          "path": ".oxdock/template/readme/generated/command-reference.md"
+        },
+        {
+          "kind": "read",
+          "path": ".oxdock/template/readme/generated/command-body.md"
+        }
+      ]
     }
   ],
   "template_roots": [

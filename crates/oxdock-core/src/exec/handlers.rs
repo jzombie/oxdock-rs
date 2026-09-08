@@ -195,7 +195,8 @@ pub(crate) fn dispatch_sleep_step<P: ProcessManager>(
     let StepKind::Sleep { duration } = step else {
         unreachable!()
     };
-    sleep(cx, 0, duration)
+    let duration = super::args::resolve_arg_as_duration(duration, cx)?;
+    sleep(cx, 0, &duration)
 }
 
 /// Dispatch `SLEEP <duration>` — park the step without spawning a shell.
@@ -1379,7 +1380,8 @@ pub(crate) fn dispatch_exit<P: ProcessManager>(
     let StepKind::Exit(code) = step else {
         unreachable!()
     };
-    exit(cx, *code)
+    let code = super::args::resolve_arg_as_int(code, cx)?;
+    exit(cx, code)
 }
 
 pub(crate) fn dispatch_inherit_env<P: ProcessManager>(
@@ -1760,7 +1762,8 @@ pub(crate) fn dispatch_timeout_step<P: ProcessManager>(
     let StepKind::Timeout { duration, body } = step else {
         unreachable!()
     };
-    timeout(cx, 0, duration, body)
+    let duration = super::args::resolve_arg_as_duration(duration, cx)?;
+    timeout(cx, 0, &duration, body)
 }
 
 /// Dispatch `TIMEOUT <duration> <body>` — run `body` on the current thread
@@ -1837,7 +1840,7 @@ pub(crate) fn timeout<P: ProcessManager>(
             .store(initial_cancel, Ordering::SeqCst);
     }
 
-    let budget = oxdock_parser::commands::format_duration(duration);
+    let budget = oxdock_parser::command::format_duration(duration);
     match result {
         Ok(()) => {
             if fired.load(Ordering::SeqCst) {
