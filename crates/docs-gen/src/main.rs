@@ -179,7 +179,11 @@ fn find_repo_root() -> Result<PathBuf> {
         current = canonical;
     }
     loop {
-        if current.join("Cargo.toml").exists() && current.join("docs-gen.json").exists() {
+        // A docs-gen root is any directory holding its config — no
+        // Cargo.toml required, so non-Cargo projects work unchanged.
+        if current.join("docs-gen.json").exists()
+            || current.join(".oxdock/docs-gen.json").exists()
+        {
             return Ok(current);
         }
         if !current.pop() {

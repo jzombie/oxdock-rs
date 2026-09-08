@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [UNRELEASED]
 
+### Added
+
+- `docs-gen` rebuilt as a general-purpose doc engine: ordered `template` / `read` / `glob` / `text` stages executed as pure OxDock DSL (`$var` bindings only, no hand-built AST), config-driven targets discovered from each crate's `.oxdock/template` directory, and plugin data providers (`command-ref`, `cargo-metadata`) with per-target value overrides
+- Sparse `target.json` files (just `name`/`out`) synthesize stages from the target directory layout (`header.tmpl`, verbatim `fragments/*.md`, expanded `fragments/*.tmpl`, `footer.tmpl`); bespoke targets declare full stages
+- Generated command reference shared three ways from one provider: root README, `oxdock` README, and rustdoc includes (`oxdock/docs/command_reference.md`, `crates/oxdock-parser/docs/command_reference.md`)
+- Shared embed example consumed by both the root and `oxdock` READMEs from a single canonical file
+
 ### Fixed
 
 - Quoted values with spaces parse identically in every command: `ENV SET_FORTH="outer scope"` stores `outer scope` instead of truncating, and `EXPAND tmpl KEY="a b"` no longer fails with "accepts at most one path"
