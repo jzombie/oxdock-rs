@@ -30,7 +30,7 @@ OxDock is a Dockerfile-inspired DSL for build-time work. No containers, no daemo
 
 ## Quick start
 
-Scripts run during `rustc`, and their artifacts ship inside the binary:
+Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation:
 
 ```rust
 use oxdock_macros::oxdock_embed;

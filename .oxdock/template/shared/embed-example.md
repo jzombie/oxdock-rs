@@ -1,4 +1,4 @@
-Scripts run during `rustc`, and their artifacts ship inside the binary:
+Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation:
 
 ```rust
 use oxdock_macros::oxdock_embed;

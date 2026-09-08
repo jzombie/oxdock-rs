@@ -4,7 +4,7 @@ Run OxDock scripts from the CLI, or embed them in your build.
 
 ## Embed at compile time
 
-Scripts run during `rustc`, and their artifacts ship inside the binary:
+Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation:
 
 ```rust
 use oxdock_macros::oxdock_embed;
