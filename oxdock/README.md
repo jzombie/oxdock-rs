@@ -875,7 +875,7 @@ Assert file exists.
 
 **Syntax:** `ASSERT_FILE [--hash <sha256>] <path> [<expected>]`
 
-Verifies file.
+Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.
 
 **Arguments:**
 
@@ -899,6 +899,14 @@ WRITE payload.bin stable-content
 ASSERT_FILE payload.bin stable-content
 ```
 
+**Example: assert file hash**
+
+```oxdock
+# --hash compares the SHA-256 digest instead of raw bytes
+WRITE payload.bin stable-content
+ASSERT_FILE --hash 08135c1b6349b0e4f894c36221952f0de00e6b4d82f80895abf359755e77103c payload.bin
+```
+
 
 ### ASSERT_DIR
 
@@ -906,7 +914,7 @@ Assert dir exists.
 
 **Syntax:** `ASSERT_DIR <path>`
 
-Verifies dir.
+Checks the path is a directory, aborting the pipeline with a step-numbered error otherwise.
 
 **Arguments:**
 
@@ -930,7 +938,7 @@ Assert path absent.
 
 **Syntax:** `ASSERT_ABSENT <path>`
 
-Verifies absence.
+Checks nothing exists at the path, aborting the pipeline with a step-numbered error if it does.
 
 **Arguments:**
 
@@ -953,7 +961,7 @@ Assert stdout contains.
 
 **Syntax:** `ASSERT_STDOUT <substring>`
 
-Verifies stdout.
+Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.
 
 **Arguments:**
 

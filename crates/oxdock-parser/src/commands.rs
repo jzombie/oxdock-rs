@@ -839,7 +839,7 @@ declare_commands! {
         variant: AssertFile { hash: Option<String>, path: Arg, contents: Option<Arg> },
         syntax: "ASSERT_FILE [--hash <sha256>] <path> [<expected>]",
         summary: "Assert file exists.",
-        description: "Verifies file.",
+        description: "Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.",
         args: &[
             ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
             ArgSpec { name: "expected", arg_type: "string", description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
@@ -849,6 +849,11 @@ declare_commands! {
         examples: &[ Example { name: "assert file", fence_meta: None, code: indoc! {r#"
             WRITE payload.bin stable-content
             ASSERT_FILE payload.bin stable-content
+        "#} },
+        Example { name: "assert file hash", fence_meta: None, code: indoc! {r#"
+            # --hash compares the SHA-256 digest instead of raw bytes
+            WRITE payload.bin stable-content
+            ASSERT_FILE --hash 08135c1b6349b0e4f894c36221952f0de00e6b4d82f80895abf359755e77103c payload.bin
         "#} } ],
         lower: |flags, args| {
             let hash = flags.iter().find(|(k, _)| k == "hash").map(|(_, v)| v.as_str().to_string());
@@ -865,7 +870,7 @@ declare_commands! {
         variant: AssertDir(Arg),
         syntax: "ASSERT_DIR <path>",
         summary: "Assert dir exists.",
-        description: "Verifies dir.",
+        description: "Checks the path is a directory, aborting the pipeline with a step-numbered error otherwise.",
         args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
@@ -881,7 +886,7 @@ declare_commands! {
         variant: AssertAbsent(Arg),
         syntax: "ASSERT_ABSENT <path>",
         summary: "Assert path absent.",
-        description: "Verifies absence.",
+        description: "Checks nothing exists at the path, aborting the pipeline with a step-numbered error if it does.",
         args: &[ ArgSpec { name: "path", arg_type: "path", description: "Path", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
@@ -894,7 +899,7 @@ declare_commands! {
         variant: AssertStdout(Arg),
         syntax: "ASSERT_STDOUT <substring>",
         summary: "Assert stdout contains.",
-        description: "Verifies stdout.",
+        description: "Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.",
         args: &[ ArgSpec { name: "substring", arg_type: "string", description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
