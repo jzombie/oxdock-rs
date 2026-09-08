@@ -2,7 +2,19 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
-(or is loosely based on) Semantic Versioning.
+ (or is loosely based on) Semantic Versioning.
+
+## [UNRELEASED]
+
+### Added
+
+- Command reference examples demonstrating variable scoping: `ENV` and `LET` assignments inside a braced block revert when the block exits, and `EXPAND` `KEY=val` overrides shadow the environment for that call only
+- `WORKDIR` description now documents relative-to-current-directory resolution, `/` reset to the workspace root, and the sandbox guarantee
+
+### Fixed
+
+- Command reference argument/flag tables escape `|` in type strings (e.g. `SNAPSHOT|LOCAL`), which previously split the WORKSPACE row into extra columns on strict Markdown renderers
+- `SLEEP` summary reworded from "Sleep without spawning a shell" to "Pause execution for a duration"
 
 ## [0.9.0-alpha] - 2026-09-07
 
