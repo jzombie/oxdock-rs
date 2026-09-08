@@ -3,9 +3,14 @@ name = "docs-gen"
 version = "0.0.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "General-purpose doc generation engine: OxDock-driven templates, plugins, and sandboxed rendering."
 
 # Prototype crate; don't publish with this name
 publish = false
+
+[lib]
+name = "docs_gen"
+path = "src/lib.rs"
 
 [[bin]]
 name = "docs-gen"
@@ -13,12 +18,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-indoc.workspace = true
-line-ending.workspace = true
 oxdock-core.workspace = true
 oxdock-fs.workspace = true
-oxdock-macros.workspace = true
 oxdock-parser.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 toml_edit.workspace = true
 

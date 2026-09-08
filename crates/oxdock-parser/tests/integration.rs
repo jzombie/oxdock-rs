@@ -23,5 +23,7 @@ mod macro_input_parens;
 mod platform_display;
 #[path = "integration/timeout_block.rs"]
 mod timeout_block;
+#[path = "integration/unified_values.rs"]
+mod unified_values;
 #[path = "integration/with_io_block.rs"]
 mod with_io_block;

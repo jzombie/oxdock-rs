@@ -194,6 +194,9 @@ impl GuardedPath {
 
     /// Evaluate a glob pattern against the sandbox root.
     /// Normalizes backslashes, escapes the root path, and returns workspace-relative paths.
+    /// Patterns are sandbox-root-relative; any `..` component is rejected
+    /// up front (empty result, no filesystem traversal) so iteration can
+    /// never start outside the root.
     #[allow(
         clippy::disallowed_types,
         clippy::disallowed_methods,
@@ -206,18 +209,29 @@ impl GuardedPath {
             pattern
         };
         let posix = clean.replace('\\', "/");
+        if posix.split('/').any(|segment| segment == "..") {
+            return Ok(Vec::new());
+        }
         let path_pattern = Path::new(&posix);
+
+        // Windows verbatim roots (`\\?\C:\...`, from canonicalization): the
+        // glob engine returns nothing for verbatim patterns, and yielded
+        // paths would never match the verbatim root either. Compare in plain
+        // drive form (same location) and rebase results onto the guarded
+        // root, which keeps `strip_prefix` callers working unchanged.
+        let root_str =
+            strip_verbatim_prefix(&self.root.to_string_lossy().replace('\\', "/")).to_string();
+        let search_root = Path::new(&root_str);
 
         let rel_pattern = if path_pattern.is_absolute() {
             path_pattern
-                .strip_prefix(&self.root)
+                .strip_prefix(search_root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| posix.trim_start_matches('/').to_string())
         } else {
             posix.trim_start_matches('/').to_string()
         };
 
-        let root_str = self.root.to_string_lossy().replace('\\', "/");
         let escaped_root = glob::Pattern::escape(&root_str);
         let search = format!("{}/{}", escaped_root, rel_pattern);
 
@@ -226,12 +240,40 @@ impl GuardedPath {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
         {
             let path = entry?;
-            if path.starts_with(&self.root) {
-                results.push(path);
+            // Defense in depth: only root-bounded results without `..`
+            // escapes, rebased onto the guarded root.
+            let rel = match path.strip_prefix(search_root) {
+                Ok(rel) => rel,
+                Err(_) => continue,
+            };
+            if rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                continue;
             }
+            results.push(self.root.join(rel));
         }
         Ok(results)
     }
+}
+
+/// Strip a Windows verbatim-disk prefix (`\\?\C:\...`, already
+/// forward-slashed to `//?/C:/...`) to the plain drive form the glob engine
+/// and path comparisons understand. Returns the input unchanged otherwise —
+/// notably UNC/device forms (`//?/UNC/...`), which keep their prefix.
+fn strip_verbatim_prefix(path: &str) -> &str {
+    if let Some(rest) = path.strip_prefix("//?/") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'/'
+        {
+            return rest;
+        }
+    }
+    path
 }
 
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -671,7 +713,9 @@ fn is_pid_alive(pid: u32) -> bool {
 #[cfg_attr(miri, allow(dead_code))]
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, STILL_ACTIVE,
+    };
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
@@ -679,9 +723,11 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe {
         let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            // If the process cannot be opened, assume it is gone so we can
-            // reclaim stale tempdirs rather than leaking them.
-            return false;
+            // A NULL handle usually means the PID is gone — except
+            // ERROR_ACCESS_DENIED, where a live (elevated/foreign-session)
+            // process simply refused us. Like the Unix EPERM arm, default to
+            // keep-alive so the tempdir GC never deletes a live owner's dirs.
+            return GetLastError() == ERROR_ACCESS_DENIED;
         }
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code as *mut u32);
@@ -1049,5 +1095,66 @@ mod tests {
 
         drop(inner);
         assert!(!path.exists(), "dropping the TempDir removes it");
+    }
+
+    /// Parent-dir patterns never reach traversal: `..` in any component
+    /// returns empty before any directory iteration begins.    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    #[cfg_attr(
+        miri,
+        ignore = "GuardedPath::tempdir relies on OS tempdirs; blocked under Miri isolation"
+    )]
+    #[test]
+    fn glob_parent_patterns_return_empty_without_traversal() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        for pattern in ["../", "../*", "a/../../*", "..\\*"] {
+            let hits = root.glob_paths(pattern).expect("glob");
+            assert!(
+                hits.is_empty(),
+                "pattern {pattern} must return empty, got {hits:?}"
+            );
+        }
+    }
+
+    /// Normal patterns still list sandbox contents, including names that
+    /// merely contain dots (only exact `..` components are rejected).
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    #[cfg_attr(
+        miri,
+        ignore = "glob traversal needs host filesystem iteration; blocked under Miri isolation"
+    )]
+    #[test]
+    fn glob_lists_sandbox_contents() {
+        let temp = GuardedPath::tempdir().expect("tempdir");
+        let root = temp.as_guarded_path().clone();
+        let resolver =
+            crate::PathResolver::new_guarded(root.clone(), root.clone()).expect("resolver");
+        for name in ["a.txt", "a..b.txt"] {
+            let file = root.join(name).expect("join");
+            resolver.write_file(&file, b"data").expect("write");
+        }
+        let mut hits: Vec<String> = root
+            .glob_paths("*.txt")
+            .expect("glob")
+            .iter()
+            .map(|p| p.file_name().expect("name").to_string_lossy().into_owned())
+            .collect();
+        hits.sort();
+        assert_eq!(hits, vec!["a..b.txt".to_string(), "a.txt".to_string()]);
+    }
+
+    /// Pure string transform: safe everywhere, including Miri.
+    #[test]
+    fn strip_verbatim_prefix_keeps_plain_paths() {
+        assert_eq!(strip_verbatim_prefix("C:/a/b"), "C:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/C:/a/b"), "C:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/c:/a/b"), "c:/a/b");
+        assert_eq!(strip_verbatim_prefix("//?/UNC/srv/sh"), "//?/UNC/srv/sh");
+        assert_eq!(strip_verbatim_prefix("/tmp/x"), "/tmp/x");
+        assert_eq!(strip_verbatim_prefix("a/../b"), "a/../b");
+        // Non-drive prefixes must not strip: only `[A-Za-z]:/` qualifies.
+        assert_eq!(strip_verbatim_prefix("//?/_:/a"), "//?/_:/a");
+        assert_eq!(strip_verbatim_prefix("//?/1:/a"), "//?/1:/a");
+        assert_eq!(strip_verbatim_prefix("//?/:/a"), "//?/:/a");
     }
 }

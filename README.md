@@ -26,35 +26,38 @@
   </a>
 </div>
 
-
-> **OxDock is an experimental DSL used for building embeddable artifacts and orchestrating pipelines.**
->
-> **It is currently in alpha and is subject to rapid API changes.**
-
-# OxDock
-
-OxDock is a Dockerfile-inspired DSL that runs **natively on your host** — no containers, no daemon, no VM. It comes in two flavors sharing one core: a [Rust build-time macro](./oxdock-macros/) whose scripts run during compilation, embedding resources directly into the binary's data section (no heap allocation when the program starts; the generated asset structs are pure Rust and work in `no_std` targets), and a [standalone CLI](./oxdock-cli/) that orchestrates cross-platform workflows as ordinary local processes.
-
-Unlike Docker, commands execute directly on the host: they can be guarded by platform/env conditions, run inside scoped blocks so changes to `ENV` or `WORKDIR` don’t leak, and interoperate with containers whenever you want them — you can invoke Docker from an OxDock script, or even install Docker, while the DSL itself stays portable.
-
-## Variants
-
-OxDock comes in two variants, each of which are independent of the other, but share the same core:
-
-- [oxdock-macros](./oxdock-macros/): Provides a Rust build-time dependency which runs OxDock scripts during the compilation of a Rust program.
-- [oxdock-cli](./oxdock-cli/): Command-line interface for running OxDock scripts from the command line.
-
-## Goals
-
-OxDock has a simple goal to provide a simple DSL that works the same across Mac, Linux, and Windows, including support for background processes, symlinks, and boolean conditionals (such as env and platform-based command filtering), which runs the same whether it's used as a preprocessing step in a build-time Rust macro, or as a CLI program, regardless of platform it is building on.
-
-Every internal command is engineered to run the same way across platforms, except for the `RUN` command, which calls native programs.
-
-**OxDock adds no additional runtime dependencies if used as a macro preprocessor.**
+OxDock is a Dockerfile-inspired DSL for build-time work. No containers, no daemon.
 
 ## Quick start
 
-The following script is a complete OxDock script — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
+Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation, `no_std` included:
+
+```rust
+use oxdock_macros::oxdock_embed;
+
+oxdock_embed! {
+    // Embedded resources are mapped to `HelloAssets::get(resource)`
+    name: HelloAssets,
+    script: {
+        ENV PROJECT=OxDock
+        MKDIR dist
+        WRITE dist/hello.txt Built with {{ env:PROJECT }}
+        ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
+    },
+    // Generated assets land under target/, keeping the source tree clean
+    out_dir: "target/prebuilt",
+}
+
+fn main() {
+    // Verify we can read the resource we just created
+    let file = HelloAssets::get("dist/hello.txt").expect("dist/hello.txt must be embedded");
+    assert_eq!(file.data.as_ref(), b"Built with OxDock");
+}
+```
+
+For each artifact the macro emits a constant backed by `include_bytes!`, which bakes the file bytes into read-only binary data during compilation. At runtime `get()` scans a static table and returns a borrowed slice, so there are no file reads and no heap allocation. The support types only need `alloc::borrow::Cow` and core iterators, which is why it works in `no_std`.
+
+The same script also runs standalone through the CLI. It builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
 
 ```oxdock
 // Script-local variable: usable by templates and guards below.
@@ -83,30 +86,22 @@ cargo install --path oxdock
 oxdock --script Oxfile
 ```
 
-Or embed the same script at compile time — the macro runs the script during `rustc` and generates a pure-Rust struct whose assets live in the binary's data section, readable at runtime with zero heap allocation:
+One language for the whole build: farm steps out to npm, bundlers, or code generators and pull their artifacts back under cargo's control. Pipe bytes between steps without buffering whole outputs, fan work out with `ASYNC`, or skip embedding entirely and run the same scripts as standalone CLI processes.
 
-```rust
-use oxdock_macros::oxdock_embed;
+## Variants
 
-oxdock_embed! {
-    // Embedded resources are mapped to `HelloAssets::get(resource)`
-    name: HelloAssets,
-    script: {
-        ENV PROJECT=OxDock
-        MKDIR dist
-        WRITE dist/hello.txt Built with {{ env:PROJECT }}
-        ASSERT_FILE dist/hello.txt Built with {{ env:PROJECT }}
-    },
-    // Generated assets land under target/, keeping the source tree clean
-    out_dir: "target/prebuilt",
-}
+OxDock comes in two variants, each of which are independent of the other, but share the same core:
 
-fn main() {
-    // Verify we can read the resource we just created
-    let file = HelloAssets::get("dist/hello.txt").expect("dist/hello.txt must be embedded");
-    assert_eq!(file.data.as_ref(), b"Built with OxDock");
-}
-```
+- [oxdock-macros](./oxdock-macros/): Provides a Rust build-time dependency which runs OxDock scripts during the compilation of a Rust program.
+- [oxdock-cli](./oxdock-cli/): Command-line interface for running OxDock scripts from the command line.
+
+## Goals
+
+OxDock has a simple goal to provide a simple DSL that works the same across Mac, Linux, and Windows, including support for background processes, symlinks, and boolean conditionals (such as env and platform-based command filtering), which runs the same whether it's used as a preprocessing step in a build-time Rust macro, or as a CLI program, regardless of platform it is building on.
+
+Every internal command is engineered to run the same way across platforms, except for the `RUN` command, which calls native programs.
+
+**OxDock adds no additional runtime dependencies if used as a macro preprocessor.**
 
 # DSL Reference
 
@@ -398,7 +393,6 @@ CANCEL $worker
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
-
 ### WITH_IO
 
 Reroute standard streams.
@@ -426,7 +420,7 @@ Iterate over a list or map.
 
 **Syntax:** `FOR $item IN <expr> { <commands> } | FOR $key, $value IN <expr> { <commands> }`
 
-The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key.
+The loop variable receives each element (lists) or value (maps); with two variables, the first receives the key. Loop variables are scoped to the loop body and do not leak outward. The body may be a braced block or a single-line `{ ... }` command. `GLOB("...")` patterns must be quoted (`*` is not a bare word, so `GLOB(*)` is a parse error); GLOB returns a root-relative sorted list, empty when nothing matches, and rejects `..` escapes.
 
 **Examples:**
 
@@ -442,6 +436,15 @@ LET $map = {"x": 1}
 FOR $k, $v IN $map {
   ECHO "$k=$v"
 }
+```
+
+**Example: expand every match**
+
+```oxdock
+# single-line body; $x is a template path, WHO an override
+WRITE a.txt "hi \{{ env:WHO }}!"
+FOR $x IN GLOB("*.txt") { EXPAND $x WHO=World }
+ASSERT_STDOUT "hi World!"
 ```
 
 
@@ -482,7 +485,7 @@ Bind script-local variables.
 
 **Syntax:** `LET $var = <expr> | LET $var = ASYNC { <commands> }`
 
-Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC).
+Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here.
 
 **Examples:**
 
@@ -494,6 +497,16 @@ ECHO "hello, {{ $name }}"
 
 LET $items = ["a", "b"]
 LET $count = 42
+```
+
+**Example: glob binding**
+
+```oxdock
+# the RHS is an expression: GLOB(...) runs and binds a list
+WRITE a.txt "x"
+LET $files = GLOB("*.txt")
+FOR $f IN $files { ECHO $f }
+ASSERT_STDOUT "a.txt"
 ```
 
 
@@ -644,7 +657,7 @@ Set an environment variable.
 
 **Syntax:** `ENV KEY=value`
 
-Inserts or updates an env var.
+Inserts or updates an env var. The value uses the unified string-value rules shared by every command: `"..."` or `'...'` quotes keep exact bytes (spaces, tabs), a lone `$var` evaluates that variable, `{{ ... }}` placeholders interpolate, unquoted words join with single spaces, and the first `=` splits key from value (`KEY=a=b` stores `a=b`). A `$var` inside larger text stays literal — write `{{ $var }}` to interpolate there.
 
 **Arguments:**
 
@@ -658,6 +671,38 @@ Inserts or updates an env var.
 
 ```oxdock
 ENV APP_MODE=production
+```
+
+**Example: quoted value with spaces**
+
+```oxdock
+# quotes keep the space: SET_FORTH stores `outer scope`
+ENV SET_FORTH="outer scope"
+WRITE out.txt "{{ env:SET_FORTH }}"
+ASSERT_FILE out.txt "outer scope"
+```
+
+**Example: variable value**
+
+```oxdock
+# a lone $var evaluates, like ECHO $var
+LET $who = "Alice"
+ENV GREETING=$who
+WRITE out.txt "{{ env:GREETING }}"
+ASSERT_FILE out.txt "Alice"
+```
+
+**Example: all value forms agree**
+
+```oxdock
+# a bare variable, a quoted literal, and a template all
+# store plain strings through the same value rules
+LET $x = "Ada"
+ENV A=$x
+ENV B="hello world"
+ENV C="{{ $x }} concatenated"
+WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
+ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
 ```
 
 
@@ -700,6 +745,16 @@ Outputs message to stdout.
 
 ```oxdock
 ECHO build-complete
+```
+
+**Example: variables**
+
+```oxdock
+# a lone $x evaluates; {{ }} interpolates inside text
+LET $x = "World"
+ECHO {{ $x }}
+ECHO $x
+ASSERT_STDOUT "World"
 ```
 
 
@@ -986,17 +1041,18 @@ ASSERT_FILE log.txt line1line2
 
 ### EXPAND
 
-Expand templates.
+Expand a template file (or stdin) to stdout.
 
 **Syntax:** `EXPAND [<path>] [<KEY=val> ...]`
 
-Expands placeholders.
+A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.
 
 **Arguments:**
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Template |
+| `path` | `path` | no | Template file to expand; omit to expand stdin |
+| `overrides` | `KEY=val` | no | Template overrides shadowing that key (unified string values) |
 
 **Output:** Stdout
 
@@ -1008,6 +1064,46 @@ Expands placeholders.
 ENV NAME="Alice"
 WRITE template.md "Hello {{ env:NAME }}!"
 EXPAND template.md
+ASSERT_STDOUT "Hello Alice!"
+```
+
+**Example: override with spaces**
+
+```oxdock
+# WRITE would interpolate {{ }} right away, so escape it:
+# the file must literally contain {{ env:NAME }} for EXPAND
+WRITE template.md "Hello \{{ env:NAME }}!"
+EXPAND template.md NAME="Alice Smith"
+ASSERT_STDOUT "Hello Alice Smith!"
+```
+
+**Example: variable override**
+
+```oxdock
+# same escaping: keep the placeholder literal until EXPAND;
+# a lone $who evaluates, like ECHO $who
+LET $who = "Bob"
+WRITE template.md "Hi \{{ env:WHO }}!"
+EXPAND template.md WHO=$who
+ASSERT_STDOUT "Hi Bob!"
+```
+
+**Example: override forms agree**
+
+```oxdock
+# a bare variable and a template-with-tail expand identically
+LET $x = "Ada"
+WRITE template.md "Hi \{{ env:NAME }} and \{{ env:NAME2 }}!"
+EXPAND template.md NAME=$x NAME2="{{ $x }} concatenated"
+ASSERT_STDOUT "Hi Ada and Ada concatenated!"
+```
+
+**Example: expand stdin**
+
+```oxdock
+# no path: the template arrives on stdin through a pipe
+WITH_IO [stdout=pipe:tpl] ECHO "Hello \{{ env:NAME }}!"
+WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
 ASSERT_STDOUT "Hello Alice!"
 ```
 
@@ -1184,7 +1280,6 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 ```oxdock
 SLEEP 100ms
 ```
-
 
 
 ## Selective environment inheritance

@@ -3,6 +3,7 @@
 Parser and AST definitions for the OxDock DSL.
 
 > Part of the [OxDock](https://github.com/jzombie/rust-oxdock) workspace.
+
 1. The lexer (powered by [`pest`](https://pest.rs/)) tokenizes scripts
    according to `dsl.pest`, handling comments and semicolons along the way.
 2. Tokens are fed into the existing `ScriptParser`, which performs guard stack

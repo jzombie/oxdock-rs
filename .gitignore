@@ -2,3 +2,4 @@
 vendor/*
 .codegraph
 *.patch
+.oxdock-staging/

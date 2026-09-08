@@ -1,6 +1,8 @@
 [package]
 name = "oxdock"
-description = "Facade crate for OxDock: CLI runner and build macros."
+description = "Run OxDock scripts from the CLI, or embed them in your build."
+categories = ["command-line-utilities", "development-tools"]
+keywords = ["oxdock", "embed", "dsl", "build", "compile-time"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

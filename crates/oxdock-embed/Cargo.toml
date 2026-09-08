@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-embed"
 description = "OxDock binary embedding layer."
+categories = ["embedded"]
+keywords = ["embed", "oxdock", "assets", "compile-time"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

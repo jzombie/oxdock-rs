@@ -328,20 +328,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("SYMLINK requires target"))?;
                 Ok(StepKind::Symlink { from, to })
             }
-            "ENV" => {
-                let arg = args
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("ENV requires key=val"))?;
-                let (k, v) = arg
-                    .as_str()
-                    .split_once('=')
-                    .ok_or_else(|| anyhow::anyhow!("ENV requires key=val"))?;
-                Ok(StepKind::Env {
-                    key: k.to_string(),
-                    value: Arg::String(v.to_string(), false),
-                })
-            }
+            "ENV" => oxdock_parser::commands::lower_env_legacy(args),
             "WRITE" => {
                 let path = args
                     .first()

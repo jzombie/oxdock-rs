@@ -1,12 +1,13 @@
 use anyhow::{Result, bail};
-use oxdock_parser::{Arg, CompareOp, Expr, LogicalOp, Value};
+use oxdock_parser::{Arg, ArgPart, CompareOp, Expr, LogicalOp, Value};
 use oxdock_process::ProcessManager;
 
 use super::state::ExecState;
 use super::steps::StepCtx;
 
 /// Resolve an [`Arg`] using an [`ExecState`] directly (no [`StepCtx`] needed).
-/// Only handles `Arg::String` — `Arg::Expr` requires a `StepCtx` and must go through `resolve_arg`.
+/// Handles `Arg::String` and all-`Text` `Arg::Parts` — `Arg::Expr` requires a
+/// `StepCtx` and must go through `resolve_arg`.
 pub(crate) fn resolve_arg_state<P: ProcessManager>(
     arg: &Arg,
     state: &ExecState<P>,
@@ -17,6 +18,21 @@ pub(crate) fn resolve_arg_state<P: ProcessManager>(
             Ok(expand_string(s, ctx.envs(), state)?)
         }
         Arg::Expr(e) => bail!("Arg::Expr cannot be resolved without StepCtx: {:?}", e),
+        Arg::Parts(parts) => {
+            let ctx = state.command_ctx()?;
+            let mut out = String::new();
+            for part in parts {
+                match part {
+                    ArgPart::Text(s, _) => {
+                        out.push_str(&expand_string(s, ctx.envs(), state)?);
+                    }
+                    ArgPart::Expr(e) => {
+                        bail!("Arg::Expr cannot be resolved without StepCtx: {:?}", e)
+                    }
+                }
+            }
+            Ok(out)
+        }
     }
 }
 
@@ -27,6 +43,21 @@ pub(crate) fn resolve_arg<P: ProcessManager>(arg: &Arg, cx: &mut StepCtx<'_, P>)
         Arg::Expr(e) => {
             let val = evaluate_expr(e, cx)?;
             Ok(format_value_for_string(&val))
+        }
+        Arg::Parts(parts) => {
+            let mut out = String::new();
+            for part in parts {
+                match part {
+                    ArgPart::Text(s, _) => {
+                        out.push_str(&expand_string(s, &cx.state.envs, cx.state)?);
+                    }
+                    ArgPart::Expr(e) => {
+                        let val = evaluate_expr(e, cx)?;
+                        out.push_str(&format_value_for_string(&val));
+                    }
+                }
+            }
+            Ok(out)
         }
     }
 }
@@ -174,6 +205,17 @@ fn evaluate_glob<P: ProcessManager>(args: &[Expr], cx: &mut StepCtx<'_, P>) -> R
         Value::String(s) => s,
         _ => bail!("GLOB pattern argument must evaluate to a string"),
     };
+
+    // Up-front sandbox gate (mirrors `GuardedPath::glob_paths`): patterns are
+    // sandbox-root-relative, so any `..` component escapes. Return empty
+    // without traversing — the same empty-on-no-match GLOB semantics.
+    if raw_pattern
+        .replace('\\', "/")
+        .split('/')
+        .any(|seg| seg == "..")
+    {
+        return Ok(Value::List(Vec::new()));
+    }
 
     let root = cx.state.fs.root().clone();
     let root_path = root.as_path().to_path_buf();

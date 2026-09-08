@@ -257,18 +257,54 @@ pub enum Arg {
     String(String, bool),
     /// Expression — resolved at runtime via evaluate_expr.
     Expr(Expr),
+    /// Mixed literal/expression value (e.g. `KEY={{ $x }} tail`). Fragments
+    /// resolve independently at runtime and concatenate with no added
+    /// separator — inter-fragment gaps are already materialized as `Text`.
+    Parts(Vec<ArgPart>),
+}
+
+/// One fragment of a mixed [`Arg::Parts`] value.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ArgPart {
+    /// Literal text. The `bool` marks source-quoted regions (exact bytes);
+    /// unquoted text carries single-space-normalized gaps.
+    Text(String, bool),
+    /// Typed expression — resolved via evaluate_expr, never stringified.
+    Expr(Expr),
 }
 
 impl Arg {
     pub fn as_str(&self) -> &str {
         match self {
             Arg::String(s, _) => s,
-            Arg::Expr(_) => "",
+            // Expressions and mixed values have no single borrowed string;
+            // use `render()` for an owned display form.
+            Arg::Expr(_) | Arg::Parts(_) => "",
+        }
+    }
+
+    /// Owned display form: `String` verbatim, `Expr` as source (`$x`),
+    /// `Parts` as fragment concatenation. Used for diagnostics and Display;
+    /// runtime resolution must match on variants instead (see resolve_arg).
+    pub fn render(&self) -> String {
+        match self {
+            Arg::String(s, _) => s.clone(),
+            Arg::Expr(e) => e.to_string(),
+            Arg::Parts(parts) => parts.iter().map(ArgPart::render).collect(),
         }
     }
 
     pub fn is_quoted(&self) -> bool {
         matches!(self, Arg::String(_, true))
+    }
+}
+
+impl ArgPart {
+    pub fn render(&self) -> String {
+        match self {
+            ArgPart::Text(s, _) => s.clone(),
+            ArgPart::Expr(e) => e.to_string(),
+        }
     }
 }
 
@@ -289,6 +325,15 @@ impl std::fmt::Display for Arg {
         match self {
             Arg::String(s, _) => write!(f, "{}", s),
             Arg::Expr(e) => write!(f, "{}", e),
+            Arg::Parts(parts) => {
+                for part in parts {
+                    match part {
+                        ArgPart::Text(s, _) => write!(f, "{}", s)?,
+                        ArgPart::Expr(e) => write!(f, "{}", e)?,
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

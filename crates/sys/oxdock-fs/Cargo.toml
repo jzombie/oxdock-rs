@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-fs"
 description = "Guarded filesystem and workspace utilities for OxDock environments."
+categories = ["filesystem"]
+keywords = ["filesystem", "workspace", "oxdock"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
