@@ -493,6 +493,40 @@ fn template_target_derives_order_from_includes() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "fixture needs host tempdir and file IO, blocked by Miri isolation"
+)]
+fn missing_include_fails_the_target() {
+    // Strict guarantee: a master template referencing a path that does not
+    // exist must fail rendering (never silently skip or emit partial
+    // output), so a typo'd include breaks the build instead of shipping a
+    // truncated document.
+    let fx = Fixture::new();
+    fx.write(
+        "output.md.tmpl",
+        "Hello\n{{> fragments/does-not-exist.md }}\n",
+    );
+    let out = TargetSpec {
+        name: "broken".to_string(),
+        out: "out.md".to_string(),
+        values: None,
+        stages: Vec::new(),
+        member: None,
+        template: Some("output.md.tmpl".to_string()),
+    };
+    // The driver writes incrementally, so a failed run can leave bytes
+    // behind; the guarantee is the Err itself, which main.rs propagates
+    // into a non-zero exit before anything is committed.
+    let err = template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new())
+        .expect_err("missing include must fail");
+    assert!(
+        err.to_string().contains("does-not-exist"),
+        "error must name the missing path, got: {err:#}"
+    );
+}
+
+#[test]
 fn config_rejects_unknown_stage_kind() {
     let err = DocsGenConfig::from_json(
         r#"{"targets": [{"name": "bad", "out": "x.md",
