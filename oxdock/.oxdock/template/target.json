@@ -38,6 +38,9 @@
         "shared": [
           ".oxdock/template/shared/intro.md.tmpl"
         ],
+        "guide": [
+          ".oxdock/template/readme/fragments/dsl-reference.md.tmpl"
+        ],
         "generated": [
           ".oxdock/template/readme/generated/*"
         ]
