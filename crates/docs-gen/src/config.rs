@@ -72,6 +72,11 @@ pub struct TargetSpec {
     /// (cargo metadata) and `CRATE_*` env entries.
     #[serde(default)]
     pub member: Option<String>,
+    /// Master template document: order comes from `{{> path }}`
+    /// positions in the file itself, so no stage list is managed.
+    /// Mutually exclusive with `stages`.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 impl TargetSpec {
@@ -82,8 +87,14 @@ impl TargetSpec {
         if self.out.is_empty() {
             anyhow::bail!("target `{}` requires an `out` path", self.name);
         }
-        if self.stages.is_empty() {
-            anyhow::bail!("target `{}` requires at least one stage", self.name);
+        if self.template.is_some() && !self.stages.is_empty() {
+            anyhow::bail!(
+                "target `{}` declares both `template` and `stages`; use one",
+                self.name
+            );
+        }
+        if self.stages.is_empty() && self.template.is_none() {
+            anyhow::bail!("target `{}` requires stages or a template", self.name);
         }
         for stage in &self.stages {
             stage.validate()?;

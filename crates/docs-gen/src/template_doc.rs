@@ -56,6 +56,69 @@ FOR $docs_idx, $docs_node IN $docs_stages {
 }
 "#;
 
+/// A master template (`output.tmpl`) declares document order the way the
+/// requester asked: by the location of `{{> }}` directives in a document,
+/// not by a sidecar JSON list.
+///
+/// A whole-line directive `{{> some/file.md }}` includes that file at its
+/// position (verbatim, unless it ends in `.tmpl`, which `EXPAND`s with the
+/// values context in scope). Every other line is literal document content
+/// and expands with the values context in scope. No JSON to hand-manage;
+/// no engine changes: docs-gen scans the directives out in Rust and feeds
+/// its existing pure-DSL driver. A future OxDock `{{> }}` include operator
+/// would move this scan into the engine (plan §5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateNode {
+    Literal(String),
+    Include(String),
+}
+
+/// Split master template text into literal runs and include directives.
+/// Pure string processing; every error names its line number.
+pub(crate) fn parse_template_includes(text: &str) -> Result<Vec<TemplateNode>> {
+    let mut nodes = Vec::new();
+    let mut literal = String::new();
+    for (idx, line) in text.split_inclusive('\n').enumerate() {
+        let lineno = idx + 1;
+        // Match whole-line directives; anything else (including mid-line
+        // `{{> }}`) stays literal document content.
+        let stripped = line.trim();
+        let is_empty = stripped.is_empty();
+        if let Some(path) = parse_include_directive(stripped, lineno)? {
+            if !literal.is_empty() {
+                nodes.push(TemplateNode::Literal(std::mem::take(&mut literal)));
+            }
+            nodes.push(TemplateNode::Include(path));
+        } else if !is_empty || !literal.is_empty() {
+            // Preserve blank lines inside the document, but never start
+            // the node list with one (leading blanks belong to no one).
+            literal.push_str(line);
+        }
+    }
+    if !literal.is_empty() {
+        nodes.push(TemplateNode::Literal(literal));
+    }
+    Ok(nodes)
+}
+
+/// Parse one trimmed line as a whole-line `{{> path }}` directive.
+/// Returns `Ok(None)` for non-directive lines.
+fn parse_include_directive(stripped: &str, lineno: usize) -> Result<Option<String>> {
+    if !(stripped.starts_with("{{>") && stripped.ends_with("}}")) {
+        return Ok(None);
+    }
+    let inner = stripped["{{>".len()..stripped.len() - "}}".len()].trim();
+    if inner.is_empty() {
+        anyhow::bail!("target template line {lineno}: empty `{{> }}` include");
+    }
+    if inner.split_whitespace().count() != 1 {
+        anyhow::bail!("target template line {lineno}: include path must be a single token");
+    }
+    if inner.replace('\\', "/").split('/').any(|seg| seg == "..") {
+        anyhow::bail!("target template line {lineno}: include path must not contain `..`");
+    }
+    Ok(Some(inner.to_string()))
+}
 /// Staging helper: write ephemeral JSON under `.oxdock-staging` via the
 /// guarded filesystem abstraction. Returns the root-relative path.
 #[allow(clippy::disallowed_types)]
@@ -163,13 +226,74 @@ pub fn render_target(
     let root = GuardedPath::new_root(repo_root)?;
     let resolver = PathResolver::new(root.as_path(), root.as_path())?;
 
+    // Three target forms, one driver: explicit `stages` win, else a
+    // `template` master document derives them from `{{> }}` positions,
+    // else discovery already synthesized the local-convention stages.
+    // Literal master runs are staged as expandable templates so the
+    // values context applies to document prose too.
+    let mut staged_lits: Vec<String> = Vec::new();
+    let stages: Vec<crate::config::StageSpec> = match (&target.template, target.stages.is_empty()) {
+        (Some(_), false) => {
+            anyhow::bail!(
+                "target `{}` declares both `template` and `stages`; use one",
+                target.name
+            );
+        }
+        (Some(tmpl), true) => {
+            let rel = validate_rel_path(repo_root, tmpl)?;
+            let abs = root.join(&rel)?;
+            let text = resolver
+                .read_to_string(&abs)
+                .with_context(|| format!("read target template {rel}"))?;
+            let nodes = parse_template_includes(&text)?;
+            let mut built = Vec::new();
+            for (idx, node) in nodes.iter().enumerate() {
+                match node {
+                    TemplateNode::Literal(body) => {
+                        let lit_rel = stage_text(
+                            &resolver,
+                            &root,
+                            &format!("docs_literal_{idx}.tmpl"),
+                            body,
+                        )?;
+                        staged_lits.push(lit_rel.clone());
+                        built.push(crate::config::StageSpec {
+                            kind: "template".to_string(),
+                            path: Some(lit_rel),
+                            pattern: None,
+                            text: None,
+                            expand: false,
+                        });
+                    }
+                    TemplateNode::Include(path) => {
+                        let path = validate_rel_path(repo_root, path)?;
+                        let expand = path.ends_with(".tmpl");
+                        built.push(crate::config::StageSpec {
+                            kind: if expand { "template" } else { "read" }.to_string(),
+                            path: Some(path),
+                            pattern: None,
+                            text: None,
+                            expand,
+                        });
+                    }
+                }
+            }
+            built
+        }
+        (None, _) => target.stages.clone(),
+    };
+
     // Validate every referenced input up front (sandbox containment).
-    for stage in &target.stages {
+    for stage in &stages {
         stage.validate()?;
         match stage.kind.as_str() {
             "template" | "read" => {
                 let path = stage.path.as_deref().unwrap_or("");
-                validate_rel_path(repo_root, path)?;
+                // Staged literals live under `.oxdock-staging` and are
+                // already guarded; anything else goes through the guard.
+                if !path.starts_with(".oxdock-staging/") {
+                    validate_rel_path(repo_root, path)?;
+                }
             }
             "glob" => {
                 reject_traversal_pattern(&stage.pattern.clone().unwrap_or_default())?;
@@ -179,7 +303,7 @@ pub fn render_target(
     }
 
     // Materialize the stage manifest + values context for the DSL.
-    let stages_json = serde_json::to_string(&target.stages)?;
+    let stages_json = serde_json::to_string(&stages)?;
     let stages_rel = stage_text(&resolver, &root, "docs_stages.json", &stages_json)?;
 
     let global_map = match global_values {
@@ -234,6 +358,7 @@ pub fn render_target(
     // has a loadable path (staged files are cleaned up; real inputs are
     // never deleted).
     let mut staged = vec![stages_rel.clone(), ctx_rel.clone()];
+    staged.extend(staged_lits);
     let global_rel = match global_values {
         Some(path) => validate_rel_path(repo_root, path)?,
         None => {
@@ -313,4 +438,70 @@ fn reject_traversal_pattern(pattern: &str) -> Result<()> {
         anyhow::bail!("fragment pattern must not contain `..`: {pattern}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn includes(text: &str) -> Vec<TemplateNode> {
+        parse_template_includes(text).expect("parse")
+    }
+
+    #[test]
+    fn directives_only_in_order() {
+        assert_eq!(
+            includes("{{> a.md }}\n{{>b.tmpl}}\n"),
+            vec![
+                TemplateNode::Include("a.md".to_string()),
+                TemplateNode::Include("b.tmpl".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn literal_runs_preserved_byte_exact() {
+        assert_eq!(
+            includes("# Title\n\n{{> body.md }}\nTrailers {{ $docs_ctx.x }} stay.\n"),
+            vec![
+                TemplateNode::Literal("# Title\n\n".to_string()),
+                TemplateNode::Include("body.md".to_string()),
+                TemplateNode::Literal("Trailers {{ $docs_ctx.x }} stay.\n".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn mid_line_directives_stay_literal() {
+        // Only whole-line directives include; anything else is document
+        // prose (and would fail strict expansion as an unknown key, which
+        // is the honest signal for a misplaced directive).
+        assert_eq!(
+            includes("see {{> a.md }} here\n"),
+            vec![TemplateNode::Literal("see {{> a.md }} here\n".to_string())]
+        );
+    }
+
+    #[test]
+    fn directive_errors_name_the_line() {
+        for (bad, what) in [
+            ("{{> }}\n", "empty"),
+            ("{{> a.md b.md }}\n", "single token"),
+            ("{{> ../escape.md }}\n", "`..`"),
+        ] {
+            let err = parse_template_includes(bad).expect_err("must fail");
+            assert!(
+                err.to_string().contains("line 1") && err.to_string().contains(what),
+                "unexpected error for {bad:?}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_blanks_ignored_trailing_literal_kept() {
+        assert_eq!(
+            includes("\n\n{{> a.md }}\n"),
+            vec![TemplateNode::Include("a.md".to_string())]
+        );
+    }
 }

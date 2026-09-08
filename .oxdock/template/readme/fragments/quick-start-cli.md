@@ -1,4 +1,4 @@
-The same script also runs standalone through the CLI — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
+The same script also runs standalone through the CLI. It builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
 
 ```oxdock
 // Script-local variable: usable by templates and guards below.
@@ -26,3 +26,4 @@ Run it with the CLI:
 cargo install --path oxdock
 oxdock --script Oxfile
 ```
+

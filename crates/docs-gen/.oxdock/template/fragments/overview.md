@@ -1,7 +1,7 @@
 ## Overview
 
 `docs-gen` renders text files from OxDock templates. Each target
-declares ordered stages — verbatim or expanded file fragments — filled
+declares ordered stages (verbatim or expanded file fragments) filled
 with per-target values over global defaults. Targets are discovered
 from every crate's `.oxdock/template` directory: no registry, no
 hardcoded paths, any output format.

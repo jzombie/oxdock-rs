@@ -4,9 +4,7 @@ Run OxDock scripts from the CLI, or embed them in your build.
 
 ## Embed at compile time
 
-The whole idea in one example: write a script, run it during `rustc`,
-and read its artifacts from the binary at runtime — no containers, no
-codegen step, no heap allocation:
+Scripts run during `rustc`, and their artifacts ship inside the binary:
 
 ```rust
 use oxdock_macros::oxdock_embed;
@@ -31,14 +29,19 @@ fn main() {
 }
 ```
 
+For each artifact the macro emits a constant backed by `include_bytes!`, which bakes the file bytes into read-only binary data during compilation. At runtime `get()` scans a static table and returns a borrowed slice, so there are no file reads and no heap allocation. The support types only need `alloc::borrow::Cow` and core iterators, which is why it works in `no_std`.
+
 OxDock scripts automate build-time work: creating files, snapshotting
 workspaces, verifying artifacts with native assertions. You run them
-two ways off the same core — embedded in your build with macros, or as
+two ways off the same core: embedded in your build with macros, or as
 standalone processes with the CLI.
 
 This crate is the front door. It re-exports the CLI runner (enabled by
 default) and the build macros (always available), so most users only
 ever depend on `oxdock`.
+
+One language for the whole build: farm steps out to npm, bundlers, or code generators and pull their artifacts back under cargo's control. Pipe bytes between steps without buffering whole outputs, fan work out with `ASYNC`, or skip embedding entirely and run the same scripts as standalone CLI processes.
+
 ## Common usage
 
 Install the binary from the registry:

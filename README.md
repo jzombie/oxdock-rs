@@ -26,19 +26,11 @@
   </a>
 </div>
 
-> **OxDock is an experimental DSL used for building embeddable artifacts and orchestrating pipelines.**
->
-> **It is currently in alpha and is subject to rapid API changes.**
-
-# OxDock
-
-OxDock is a Dockerfile-inspired DSL that runs **natively on your host** — no containers, no daemon, no VM. It comes in two flavors sharing one core: a [Rust build-time macro](./oxdock-macros/) whose scripts run during compilation, embedding resources directly into the binary's data section (no heap allocation when the program starts; the generated asset structs are pure Rust and work in `no_std` targets), and a [standalone CLI](./oxdock-cli/) that orchestrates cross-platform workflows as ordinary local processes.
-
-Unlike Docker, commands execute directly on the host: they can be guarded by platform/env conditions, run inside scoped blocks so changes to `ENV` or `WORKDIR` don’t leak, and interoperate with containers whenever you want them — you can invoke Docker from an OxDock script, or even install Docker, while the DSL itself stays portable.
+OxDock is a Dockerfile-inspired DSL for build-time work. No containers, no daemon.
 
 ## Quick start
 
-The gist is compile-time embedding — the macro runs the script during `rustc` and generates a pure-Rust struct whose assets live in the binary's data section, readable at runtime with zero heap allocation:
+Scripts run during `rustc`, and their artifacts ship inside the binary:
 
 ```rust
 use oxdock_macros::oxdock_embed;
@@ -63,7 +55,9 @@ fn main() {
 }
 ```
 
-The same script also runs standalone through the CLI — it builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
+For each artifact the macro emits a constant backed by `include_bytes!`, which bakes the file bytes into read-only binary data during compilation. At runtime `get()` scans a static table and returns a borrowed slice, so there are no file reads and no heap allocation. The support types only need `alloc::borrow::Cow` and core iterators, which is why it works in `no_std`.
+
+The same script also runs standalone through the CLI. It builds artifacts **and verifies them** with native assertions. Every fenced `oxdock` example in this README is executed against the implementation by [`crates/oxdock-logic-tests/tests/docs_conformance.rs`](./crates/oxdock-logic-tests/tests/docs_conformance.rs), so what you read here is guaranteed to match what the DSL actually does:
 
 ```oxdock
 // Script-local variable: usable by templates and guards below.
@@ -91,6 +85,9 @@ Run it with the CLI:
 cargo install --path oxdock
 oxdock --script Oxfile
 ```
+
+One language for the whole build: farm steps out to npm, bundlers, or code generators and pull their artifacts back under cargo's control. Pipe bytes between steps without buffering whole outputs, fan work out with `ASYNC`, or skip embedding entirely and run the same scripts as standalone CLI processes.
+
 ## Variants
 
 OxDock comes in two variants, each of which are independent of the other, but share the same core:

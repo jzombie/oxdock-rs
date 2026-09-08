@@ -80,7 +80,9 @@ pub fn discover_targets(
     };
     for target in &mut out {
         target.spec.member = member_for_dir(&norm_members, &target.dir);
-        if target.spec.stages.is_empty() {
+        // Sparse targets (no stages, no template) get the local-directory
+        // convention; template targets derive stages at render time.
+        if target.spec.stages.is_empty() && target.spec.template.is_none() {
             target.spec.stages = conventional_stages(&root, &target.dir);
         }
         target

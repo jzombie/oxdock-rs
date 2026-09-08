@@ -1,8 +1,7 @@
 ## Targets and stages
 
 A target is declared by a `target.json` file. The common case is two
-lines — discovery fills in the rest from the target directory's own
-layout:
+lines: discovery fills in the rest from the target directory layout:
 
 ```json
 {"name": "oxdock-core-readme", "out": "crates/oxdock-core/README.md"}
@@ -13,8 +12,27 @@ present, then verbatim `fragments/*.md`, then expanded
 `fragments/*.tmpl`, then `footer.tmpl` when present. Each crate owns
 its wrapper copies; global *strings* (workspace name, URLs) stay
 single-sourced in the global values file and are referenced as
-`{{ $docs_global.workspace }}`. Targets needing bespoke composition
-declare full `stages` and discovery leaves them untouched.
+`{{ $docs_global.workspace }}`.
+
+Targets with bespoke composition skip the stage list entirely and point
+at a master template instead. Order comes from `{{> path }}`
+positions in the document itself:
+
+```json
+{"name": "readme", "out": "README.md", "template": ".oxdock/template/readme/output.tmpl"}
+```
+
+```text
+{{> .oxdock/template/readme/fragments/header.md }}
+{{> .oxdock/template/shared/embed-example.md }}
+{{> .oxdock/template/readme/generated/command-reference.md }}
+```
+
+A whole-line `{{> path }}` includes that file at its position:
+verbatim, unless it ends in `.tmpl`, which expands with the values
+context in scope. Other lines are literal document content and expand
+the same way. Only `stages`-form targets needing collection (`glob`)
+or inline (`text`) composition keep an explicit list.
 
 Available stage kinds:
 

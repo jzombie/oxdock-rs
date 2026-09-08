@@ -62,6 +62,7 @@ fn target(name: &str, out: &str, stages_json: serde_json::Value) -> TargetSpec {
         values: None,
         stages,
         member: None,
+        template: None,
     }
 }
 
@@ -410,6 +411,34 @@ fn read_stage_orders_files_explicitly() {
     );
     template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new()).expect("render");
     assert_eq!(fx.read("out.md"), "B\nS\nA\n");
+}
+
+#[test]
+fn template_target_derives_order_from_includes() {
+    // No stage list managed: order comes from `{{> }}` positions in the
+    // master document; literal prose expands with the values context.
+    let fx = Fixture::new();
+    fx.write("values.json", r#"{"who":"world"}"#);
+    fx.write("body.md", "verbatim `{{ env:KEPT }}`\n");
+    fx.write("sig.tmpl", "signed {{ $docs_ctx.who }}\n");
+    fx.write(
+        "output.tmpl",
+        "Hello {{ $docs_ctx.who }}!\n{{> body.md }}\n{{> sig.tmpl }}\n",
+    );
+    let out = TargetSpec {
+        name: "master".to_string(),
+        out: "out.md".to_string(),
+        values: Some("values.json".to_string()),
+        stages: Vec::new(),
+        member: None,
+        template: Some("output.tmpl".to_string()),
+    };
+    template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new())
+        .expect("render");
+    assert_eq!(
+        fx.read("out.md"),
+        "Hello world!\nverbatim `{{ env:KEPT }}`\nsigned world\n"
+    );
 }
 
 #[test]

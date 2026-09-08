@@ -7,7 +7,7 @@ General-purpose doc generation engine: OxDock-driven templates, plugins, and san
 ## Overview
 
 `docs-gen` renders text files from OxDock templates. Each target
-declares ordered stages — verbatim or expanded file fragments — filled
+declares ordered stages (verbatim or expanded file fragments) filled
 with per-target values over global defaults. Targets are discovered
 from every crate's `.oxdock/template` directory: no registry, no
 hardcoded paths, any output format.
@@ -34,8 +34,8 @@ Each run performs the same steps, in order:
    generated content is shareable instead of trapped in one document.
 3. Collect targets: explicit `targets` entries plus every `target.json`
    discovered under each workspace member's `.oxdock/template` tree
-   (and the configured roots). Directories without `target.json` —
-   `_global/`, fragment-only dirs — are not targets.
+   (and the configured roots). Directories without `target.json`
+   (`_global/`, fragment-only dirs) are not targets.
 4. Render each target: resolve its owning member's cargo metadata
    (`name`, `description`, `version` flow into the template context and
    into `CRATE_*` env entries), merge values (target values beat
@@ -49,8 +49,7 @@ the driver is plain DSL text parsed with the production dispatcher.
 ## Targets and stages
 
 A target is declared by a `target.json` file. The common case is two
-lines — discovery fills in the rest from the target directory's own
-layout:
+lines: discovery fills in the rest from the target directory layout:
 
 ```json
 {"name": "oxdock-core-readme", "out": "crates/oxdock-core/README.md"}
@@ -61,8 +60,27 @@ present, then verbatim `fragments/*.md`, then expanded
 `fragments/*.tmpl`, then `footer.tmpl` when present. Each crate owns
 its wrapper copies; global *strings* (workspace name, URLs) stay
 single-sourced in the global values file and are referenced as
-`{{ $docs_global.workspace }}`. Targets needing bespoke composition
-declare full `stages` and discovery leaves them untouched.
+`{{ $docs_global.workspace }}`.
+
+Targets with bespoke composition skip the stage list entirely and point
+at a master template instead. Order comes from `{{> path }}`
+positions in the document itself:
+
+```json
+{"name": "readme", "out": "README.md", "template": ".oxdock/template/readme/output.tmpl"}
+```
+
+```text
+{{> .oxdock/template/readme/fragments/header.md }}
+{{> .oxdock/template/shared/embed-example.md }}
+{{> .oxdock/template/readme/generated/command-reference.md }}
+```
+
+A whole-line `{{> path }}` includes that file at its position:
+verbatim, unless it ends in `.tmpl`, which expands with the values
+context in scope. Other lines are literal document content and expand
+the same way. Only `stages`-form targets needing collection (`glob`)
+or inline (`text`) composition keep an explicit list.
 
 Available stage kinds:
 
