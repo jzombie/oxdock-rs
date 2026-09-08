@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-build"
 description = "Build script helpers for OxDock."
+categories = ["development-tools::build-utils"]
+keywords = ["build", "oxdock", "embed"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

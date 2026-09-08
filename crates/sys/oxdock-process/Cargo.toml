@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-process"
 description = "Process orchestration for OxDock environments."
+categories = ["development-tools"]
+keywords = ["process", "oxdock", "orchestration"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

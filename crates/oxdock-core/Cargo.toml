@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-core"
 description = "Core engine for OxDock's Dockerfile-inspired compile-time DSL, orchestrating workspace snapshots and asset embedding."
+categories = ["development-tools"]
+keywords = ["oxdock", "dsl", "orchestration"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

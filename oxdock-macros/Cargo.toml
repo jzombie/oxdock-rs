@@ -1,6 +1,8 @@
 [package]
 name = "oxdock-macros"
 description = "Proc macros for OxDock: compile-time embedding, runtime AST construction, and DSL processing."
+categories = ["development-tools::procedural-macro-helpers"]
+keywords = ["macros", "embed", "oxdock", "compile-time"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
