@@ -21,7 +21,8 @@ pub mod strip_flags;
 
 pub use ast::*;
 pub use command::{
-    ArgSpec, CommandMeta, CommandSpec, Example, FlagSpec, FlagValueType, IoDirection, Stream,
+    ArgSpec, ArgType, CommandMeta, CommandSpec, Example, FlagSpec, FlagValueType, IoDirection,
+    Stream,
 };
 pub use commands::{all_metadata, all_structural_metadata, lower_command};
 pub use lexer::LANGUAGE_SPEC;

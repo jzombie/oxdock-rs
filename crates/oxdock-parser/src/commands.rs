@@ -15,7 +15,7 @@
 use std::fmt;
 
 use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
-use crate::command::{ArgSpec, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream};
+use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
@@ -419,7 +419,7 @@ declare_commands! {
         syntax: "WORKDIR <path>",
         summary: "Change the working directory.",
         description: "Sets the current working directory. Relative paths resolve against the current directory; `/` resets to the workspace root. Paths cannot escape the workspace.",
-        args: &[ ArgSpec { name: "path", arg_type: "string", description: "Directory to change to", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Directory to change to", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "change working directory", fence_meta: None, code: indoc! {r#"
@@ -439,7 +439,7 @@ declare_commands! {
         syntax: "WORKSPACE SNAPSHOT|LOCAL",
         summary: "Switch workspace roots.",
         description: "SNAPSHOT or LOCAL root.",
-        args: &[ ArgSpec { name: "target", arg_type: "SNAPSHOT|LOCAL", description: "Target root", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "target", arg_type: ArgType::OneOf(&["SNAPSHOT", "LOCAL"]), description: "Target root", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "switch roots", fence_meta: None, code: indoc! {r#"WORKSPACE LOCAL"#} } ],
@@ -459,7 +459,7 @@ declare_commands! {
         syntax: "ENV KEY=value",
         summary: "Set an environment variable.",
         description: "Inserts or updates an env var. The value uses the unified string-value rules shared by every command: `\"...\"` or `'...'` quotes keep exact bytes (spaces, tabs), a lone `$var` evaluates that variable, `{{ ... }}` placeholders interpolate, unquoted words join with single spaces, and the first `=` splits key from value (`KEY=a=b` stores `a=b`). A `$var` inside larger text stays literal — write `{{ $var }}` to interpolate there.",
-        args: &[ ArgSpec { name: "assignment", arg_type: "KEY=value", description: "KEY=value pair", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "assignment", arg_type: ArgType::KeyValue, description: "KEY=value pair", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[
@@ -524,7 +524,7 @@ declare_commands! {
         syntax: "ECHO <message>",
         summary: "Print to stdout.",
         description: "Outputs message to stdout.",
-        args: &[ ArgSpec { name: "message", arg_type: "string", description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "message", arg_type: ArgType::String, description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[
@@ -546,7 +546,7 @@ declare_commands! {
         syntax: "RUN <command...>",
         summary: "Execute shell command.",
         description: "Runs command in cwd.",
-        args: &[ ArgSpec { name: "command", arg_type: "string...", description: "Command", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "command", arg_type: ArgType::Rest(&ArgType::String), description: "Command", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "run", fence_meta: None, code: indoc! {r#"RUN echo hello"#} } ],
@@ -560,8 +560,8 @@ declare_commands! {
         summary: "Copy file into workspace.",
         description: "Copies from host.",
         args: &[
-            ArgSpec { name: "from", arg_type: "path", description: "Source", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "to", arg_type: "path", description: "Dest", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "from", arg_type: ArgType::Path, description: "Source", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "to", arg_type: ArgType::Path, description: "Dest", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "from_current_workspace", long: "--from-current-workspace", value_type: FlagValueType::Flag, required: false, description: "From workspace root" } ],
         default_output: None,
@@ -586,9 +586,9 @@ declare_commands! {
         summary: "Copy from git revision.",
         description: "Checkout and copy.",
         args: &[
-            ArgSpec { name: "rev", arg_type: "string", description: "Rev", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "src", arg_type: "path", description: "Src", io: IoDirection::Read, index: 1, required: true, fallback_stream: None },
-            ArgSpec { name: "dst", arg_type: "path", description: "Dst", io: IoDirection::Write, index: 2, required: true, fallback_stream: None },
+            ArgSpec { name: "rev", arg_type: ArgType::String, description: "Rev", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "src", arg_type: ArgType::Path, description: "Src", io: IoDirection::Read, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "dst", arg_type: ArgType::Path, description: "Dst", io: IoDirection::Write, index: 2, required: true, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "dirty", long: "--include-dirty", value_type: FlagValueType::Flag, required: false, description: "Include dirty" } ],
         default_output: None,
@@ -610,8 +610,8 @@ declare_commands! {
         summary: "Create symlink.",
         description: "Creates symlink.",
         args: &[
-            ArgSpec { name: "from", arg_type: "path", description: "Target", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "to", arg_type: "path", description: "Link", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
+            ArgSpec { name: "from", arg_type: ArgType::Path, description: "Target", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "to", arg_type: ArgType::Path, description: "Link", io: IoDirection::Write, index: 1, required: true, fallback_stream: None },
         ],
         flags: &[],
         default_output: None,
@@ -634,7 +634,7 @@ declare_commands! {
         syntax: "MKDIR <path>",
         summary: "Create directory.",
         description: "Creates dir with parents.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir path", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir path", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "mkdir", fence_meta: None, code: indoc! {r#"MKDIR deeply/nested/tree"#} } ],
@@ -647,7 +647,7 @@ declare_commands! {
         syntax: "LS [<path>]",
         summary: "List directory.",
         description: "Lists entries.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "ls", fence_meta: None, code: indoc! {r#"
@@ -677,7 +677,7 @@ declare_commands! {
         syntax: "READ [<path>]",
         summary: "Read file to stdout.",
         description: "Outputs file contents.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "read", fence_meta: None, code: indoc! {r#"
@@ -693,7 +693,7 @@ declare_commands! {
         syntax: "READ_LINE $var",
         summary: "Read one line from stdin into a variable.",
         description: "Reads bytes until newline without waiting for EOF, leaving the pipe open. Trailing newline is stripped (shell-read parity). On premature EOF assigns accumulated bytes and returns.",
-        args: &[ ArgSpec { name: "var", arg_type: "$var", description: "Variable to store the line", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "var", arg_type: ArgType::Var, description: "Variable to store the line", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "read line", fence_meta: None, code: indoc! {r#"
@@ -721,8 +721,8 @@ declare_commands! {
         summary: "Write to file.",
         description: "Writes contents.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: "string", description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "contents", arg_type: ArgType::String, description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -743,8 +743,8 @@ declare_commands! {
         summary: "Append to file.",
         description: "Appends contents.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: "string", description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "contents", arg_type: ArgType::String, description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -769,8 +769,8 @@ declare_commands! {
         summary: "Expand a template file (or stdin) to stdout.",
         description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
-            ArgSpec { name: "overrides", arg_type: "KEY=val", description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
+            ArgSpec { name: "overrides", arg_type: ArgType::KeyValue, description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[],
         default_output: Some(Stream::Stdout),
@@ -841,8 +841,8 @@ declare_commands! {
         summary: "Assert file exists.",
         description: "Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.",
         args: &[
-            ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "expected", arg_type: "string", description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
+            ArgSpec { name: "expected", arg_type: ArgType::String, description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "hash", long: "--hash", value_type: FlagValueType::String, required: false, description: "SHA-256" } ],
         default_output: None,
@@ -871,7 +871,7 @@ declare_commands! {
         syntax: "ASSERT_DIR <path>",
         summary: "Assert dir exists.",
         description: "Checks the path is a directory, aborting the pipeline with a step-numbered error otherwise.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Dir", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Dir", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert dir", fence_meta: None, code: indoc! {r#"
@@ -887,7 +887,7 @@ declare_commands! {
         syntax: "ASSERT_ABSENT <path>",
         summary: "Assert path absent.",
         description: "Checks nothing exists at the path, aborting the pipeline with a step-numbered error if it does.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "Path", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "Path", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert absent", fence_meta: None, code: indoc! {r#"ASSERT_ABSENT missing.txt"#} } ],
@@ -900,7 +900,7 @@ declare_commands! {
         syntax: "ASSERT_STDOUT <substring>",
         summary: "Assert stdout contains.",
         description: "Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.",
-        args: &[ ArgSpec { name: "substring", arg_type: "string", description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "substring", arg_type: ArgType::String, description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert stdout", fence_meta: None, code: indoc! {r#"
@@ -916,7 +916,7 @@ declare_commands! {
         syntax: "HASH_SHA256 <path>",
         summary: "Print SHA-256.",
         description: "Computes digest.",
-        args: &[ ArgSpec { name: "path", arg_type: "path", description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[ Example { name: "hash", fence_meta: None, code: indoc! {r#"
@@ -932,7 +932,7 @@ declare_commands! {
         syntax: "EXIT <code>",
         summary: "Exit pipeline.",
         description: "Stops the pipeline immediately with an `EXIT requested with code <code>` error; steps after it never run, at any nesting depth. Enclosing blocks still unwind their LET/ENV/WORKDIR/WORKSPACE state, anonymous background tasks are killed synchronously, and files written before the EXIT persist.",
-        args: &[ ArgSpec { name: "code", arg_type: "int", description: "Code", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "code", arg_type: ArgType::Int, description: "Code", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "exit", fence_meta: Some("expect_error:\"EXIT requested with code 0\""), code: indoc! {r#"EXIT 0"#} } ],
@@ -948,7 +948,7 @@ declare_commands! {
         syntax: "SLEEP <duration>",
         summary: "Pause execution for a duration.",
         description: "Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for cancellation so an enclosing TIMEOUT or task teardown interrupts the sleep. Cross-platform alternative to shell sleep for testing time boundaries.",
-        args: &[ ArgSpec { name: "duration", arg_type: "duration", description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "duration", arg_type: ArgType::Duration, description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "sleep", fence_meta: None, code: indoc! {r#"SLEEP 100ms"#} } ],

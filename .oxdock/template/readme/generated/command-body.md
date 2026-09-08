@@ -234,7 +234,7 @@ Sets the current working directory. Relative paths resolve against the current d
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `string` | yes | Directory to change to |
+| `path` | [`path`](#value-type-path) | yes | Directory to change to |
 
 **Examples:**
 
@@ -282,7 +282,7 @@ Inserts or updates an env var. The value uses the unified string-value rules sha
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `assignment` | `KEY=value` | yes | KEY=value pair |
+| `assignment` | [`KEY=value`](#value-type-keyvalue) | yes | KEY=value pair |
 
 **Examples:**
 
@@ -368,7 +368,7 @@ Outputs message to stdout.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `message` | `string` | yes | Text |
+| `message` | [`string`](#value-type-string) | yes | Text |
 
 **Output:** Stdout
 
@@ -403,7 +403,7 @@ Runs command in cwd.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `command` | `string...` | yes | Command |
+| `command` | [`string...`](#value-type-string) | yes | Command |
 
 **Examples:**
 
@@ -426,8 +426,8 @@ Copies from host.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `from` | `path` | yes | Source |
-| `to` | `path` | yes | Dest |
+| `from` | [`path`](#value-type-path) | yes | Source |
+| `to` | [`path`](#value-type-path) | yes | Dest |
 
 **Flags:**
 
@@ -458,9 +458,9 @@ Checkout and copy.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `rev` | `string` | yes | Rev |
-| `src` | `path` | yes | Src |
-| `dst` | `path` | yes | Dst |
+| `rev` | [`string`](#value-type-string) | yes | Rev |
+| `src` | [`path`](#value-type-path) | yes | Src |
+| `dst` | [`path`](#value-type-path) | yes | Dst |
 
 **Flags:**
 
@@ -489,8 +489,8 @@ Creates symlink.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `from` | `path` | yes | Target |
-| `to` | `path` | yes | Link |
+| `from` | [`path`](#value-type-path) | yes | Target |
+| `to` | [`path`](#value-type-path) | yes | Link |
 
 **Examples:**
 
@@ -515,7 +515,7 @@ Creates dir with parents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Dir path |
+| `path` | [`path`](#value-type-path) | yes | Dir path |
 
 **Examples:**
 
@@ -538,7 +538,7 @@ Lists entries.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Dir |
+| `path` | [`path`](#value-type-path) | no | Dir |
 
 **Output:** Stdout
 
@@ -584,7 +584,7 @@ Outputs file contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | File |
+| `path` | [`path`](#value-type-path) | no | File |
 
 **Output:** Stdout
 
@@ -610,7 +610,7 @@ Reads bytes until newline without waiting for EOF, leaving the pipe open. Traili
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `var` | `$var` | yes | Variable to store the line |
+| `var` | [`$var`](#value-type-var) | yes | Variable to store the line |
 
 **Examples:**
 
@@ -634,8 +634,8 @@ Writes contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `contents` | `string` | no | Content |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `contents` | [`string`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -658,8 +658,8 @@ Appends contents.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `contents` | `string` | no | Content |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `contents` | [`string`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -684,8 +684,8 @@ A template is any text file — or piped stdin when no path is given — contain
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | no | Template file to expand; omit to expand stdin |
-| `overrides` | `KEY=val` | no | Template overrides shadowing that key (unified string values) |
+| `path` | [`path`](#value-type-path) | no | Template file to expand; omit to expand stdin |
+| `overrides` | [`KEY=value`](#value-type-keyvalue) | no | Template overrides shadowing that key (unified string values) |
 
 **Output:** Stdout
 
@@ -766,8 +766,8 @@ Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-2
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
-| `expected` | `string` | no | Expected |
+| `path` | [`path`](#value-type-path) | yes | File |
+| `expected` | [`string`](#value-type-string) | no | Expected |
 
 **Flags:**
 
@@ -805,7 +805,7 @@ Checks the path is a directory, aborting the pipeline with a step-numbered error
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Dir |
+| `path` | [`path`](#value-type-path) | yes | Dir |
 
 **Examples:**
 
@@ -829,7 +829,7 @@ Checks nothing exists at the path, aborting the pipeline with a step-numbered er
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | Path |
+| `path` | [`path`](#value-type-path) | yes | Path |
 
 **Examples:**
 
@@ -852,7 +852,7 @@ Checks the preceding step's stdout contains the substring, aborting the pipeline
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `substring` | `string` | yes | Substring |
+| `substring` | [`string`](#value-type-string) | yes | Substring |
 
 **Examples:**
 
@@ -876,7 +876,7 @@ Computes digest.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `path` | yes | File |
+| `path` | [`path`](#value-type-path) | yes | File |
 
 **Output:** Stdout
 
@@ -902,7 +902,7 @@ Stops the pipeline immediately with an `EXIT requested with code <code>` error; 
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `code` | `int` | yes | Code |
+| `code` | [`int`](#value-type-int) | yes | Code |
 
 **Examples:**
 
@@ -925,7 +925,7 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `duration` | `duration` | yes | How long to sleep |
+| `duration` | [`duration`](#value-type-duration) | yes | How long to sleep |
 
 **Examples:**
 
@@ -934,5 +934,32 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 ```oxdock
 SLEEP 100ms
 ```
+
+
+## Value types
+
+### Value type: string
+
+Arbitrary text under the unified string-value rules: quotes keep exact bytes, a lone `$var` evaluates, and `{{ ... }}` placeholders interpolate.
+
+### Value type: path
+
+Workspace path, resolved against the current working directory and guarded against escaping the workspace.
+
+### Value type: int
+
+Integer, e.g. an exit code.
+
+### Value type: duration
+
+Positive time span: a number with an `ms`, `s`, `m`, or `h` suffix — a bare number means seconds — e.g. `500ms`, `10s`, `2m`.
+
+### Value type: $var
+
+Script variable reference. The `$` sigil is mandatory.
+
+### Value type: KEY=value
+
+`KEY=value` assignment splitting on the first `=` (`KEY=a=b` stores `a=b`). Values follow the unified string-value rules.
 
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use oxdock_core::{CommandMeta, all_metadata, all_structural_metadata};
+use oxdock_core::{ArgType, CommandMeta, all_metadata, all_structural_metadata};
 use std::collections::HashSet;
 #[allow(clippy::disallowed_types)]
 use std::path::Path;
@@ -78,6 +78,35 @@ pub(crate) fn generate_body() -> String {
         }
         out.push_str(&render_meta(&meta));
     }
+
+    out.push_str(&render_value_types());
+    out
+}
+
+/// Render one argument type cell: canonical types link to the Value types
+/// reference; inline alternations stay plain (they are self-describing).
+/// Pipes are escaped so `|` alternations cannot split table rows.
+fn render_arg_type(arg_type: &ArgType) -> String {
+    let label = escape_table_cell(&arg_type.label());
+    match arg_type.anchor() {
+        Some(anchor) => format!("[`{label}`](#{anchor})"),
+        None => format!("`{label}`"),
+    }
+}
+
+/// Value type reference, generated from the same `ArgType` enum the
+/// registry is declared with, so the vocabulary cannot drift from its
+/// documentation.
+fn render_value_types() -> String {
+    let mut out = String::new();
+    out.push_str("## Value types\n\n");
+    for arg_type in ArgType::CANONICAL {
+        let Some((title, body)) = arg_type.doc() else {
+            continue;
+        };
+        out.push_str(&format!("### {title}\n\n{body}\n\n"));
+    }
+    out.push('\n');
     out
 }
 
@@ -100,10 +129,11 @@ fn render_meta(meta: &CommandMeta) -> String {
             // Escape pipes so `|` alternations in type strings (e.g.
             // `SNAPSHOT|LOCAL`) cannot split the row into extra columns
             // on renderers without GitHub's code-span table handling.
+            // Canonical types link to the Value types reference below.
             out.push_str(&format!(
-                "| `{}` | `{}` | {} | {} |\n",
+                "| `{}` | {} | {} | {} |\n",
                 escape_table_cell(arg.name),
-                escape_table_cell(arg.arg_type),
+                render_arg_type(&arg.arg_type),
                 req,
                 escape_table_cell(arg.description)
             ));
