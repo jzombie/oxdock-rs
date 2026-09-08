@@ -15,7 +15,10 @@
 use std::fmt;
 
 use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
-use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream, split_assignment};
+use crate::command::{
+    ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream,
+    split_assignment,
+};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
@@ -115,7 +118,8 @@ fn quote_arg(s: &str) -> String {
     }
 }
 
-fn quote_msg(s: &str) -> String {    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+fn quote_msg(s: &str) -> String {
+    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.starts_with(|c: char| c.is_ascii_digit())
         && crate::Command::parse(s).is_none();
     if safe && !s.is_empty() {
@@ -153,7 +157,8 @@ fn fmt_raw_arg(arg: &Arg) -> String {
     }
 }
 
-fn fmt_io(b: &IoBinding) -> String {    let s = match b.stream {
+fn fmt_io(b: &IoBinding) -> String {
+    let s = match b.stream {
         IoStream::Stdin => "stdin",
         IoStream::Stdout => "stdout",
         IoStream::Stderr => "stderr",

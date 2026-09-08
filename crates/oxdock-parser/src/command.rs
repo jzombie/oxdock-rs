@@ -469,16 +469,10 @@ mod tests {
             ..spec(0, true, ArgType::Int)
         }];
         assert!(
-            validate_positionals_against_meta(
-                "T",
-                &specs,
-                &[lit("1"), lit("2"), lit("banana")]
-            )
-            .is_err()
+            validate_positionals_against_meta("T", &specs, &[lit("1"), lit("2"), lit("banana")])
+                .is_err()
         );
-        assert!(
-            validate_positionals_against_meta("T", &specs, &[lit("1"), lit("2")]).is_ok()
-        );
+        assert!(validate_positionals_against_meta("T", &specs, &[lit("1"), lit("2")]).is_ok());
         // Extras beyond fixed-arity specs fail (no silent truncation).
         let specs = [spec(0, true, ArgType::Int)];
         let err = validate_positionals_against_meta("T", &specs, &[lit("1"), lit("extra")])

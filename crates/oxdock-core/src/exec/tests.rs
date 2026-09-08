@@ -821,7 +821,10 @@ fn exit_kills_all_background_children() {
     let steps = vec![
         async_step("bg-a"),
         async_step("bg-b"),
-        step(StepKind::Exit(oxdock_parser::Arg::String("3".to_string(), false))),
+        step(StepKind::Exit(oxdock_parser::Arg::String(
+            "3".to_string(),
+            false,
+        ))),
     ];
     let mock = MockProcessManager::default();
     mock.push_bg_plan(100, success_status());
@@ -1304,7 +1307,10 @@ fn timeout_body_error_passes_through_without_firing() {
     // TIMEOUT prefix when the deadline never elapsed.
     let steps = vec![timeout_step(
         "30s",
-        vec![step(StepKind::Exit(oxdock_parser::Arg::String("3".to_string(), false)))],
+        vec![step(StepKind::Exit(oxdock_parser::Arg::String(
+            "3".to_string(),
+            false,
+        )))],
     )];
     let fs = MockFs::new();
     let fs = Box::new(fs) as Box<dyn WorkspaceFs>;

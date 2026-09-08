@@ -92,9 +92,9 @@ pub(crate) fn resolve_arg_as_int<P: ProcessManager>(
     cx: &mut StepCtx<'_, P>,
 ) -> Result<i32> {
     let resolved = resolve_arg(arg, cx)?;
-    resolved.parse::<i32>().map_err(|_| {
-        anyhow::anyhow!("expected int, got {resolved:?}")
-    })
+    resolved
+        .parse::<i32>()
+        .map_err(|_| anyhow::anyhow!("expected int, got {resolved:?}"))
 }
 
 /// Resolve an [`Arg`] to a duration, enforcing the declared `duration`

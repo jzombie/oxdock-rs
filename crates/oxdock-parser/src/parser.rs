@@ -711,21 +711,17 @@ fn lower_env_command(tokens: Vec<InsToken>) -> Result<StepKind> {
         [InsToken::Assign(key, value)] => {
             // Same KeyValue check the central validator applies on the
             // `lower_command` path, over the joined assignment form.
-            ArgType::KeyValue.check_arg(&Arg::String(
-                format!("{key}={}", value.render()),
-                false,
-            ))?;
+            ArgType::KeyValue
+                .check_arg(&Arg::String(format!("{key}={}", value.render()), false))?;
             Ok(StepKind::Env {
                 key: key.clone(),
                 value: value.clone(),
             })
         }
-        [InsToken::Pos(Arg::String(text, _))] => {
-            match crate::command::split_assignment(text)? {
-                Some((key, value)) => Ok(StepKind::Env { key, value }),
-                None => bail!("ENV requires KEY=value format"),
-            }
-        }
+        [InsToken::Pos(Arg::String(text, _))] => match crate::command::split_assignment(text)? {
+            Some((key, value)) => Ok(StepKind::Env { key, value }),
+            None => bail!("ENV requires KEY=value format"),
+        },
         _ => bail!("ENV requires KEY=value format"),
     }
 }

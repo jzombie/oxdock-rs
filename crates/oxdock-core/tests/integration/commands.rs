@@ -2391,8 +2391,7 @@ fn sleep_undefined_variable_errors_at_runtime() {
         .map(|steps| {
             let temp = GuardedPath::tempdir().unwrap();
             let root = guard_root(&temp);
-            run_steps_with_context_result_with_io(&root, &root, &steps, ExecIo::new())
-                .map(|_| ())
+            run_steps_with_context_result_with_io(&root, &root, &steps, ExecIo::new()).map(|_| ())
         })
         .expect("parse must succeed for dynamics")
         .expect_err("undefined variable must fail at runtime");
