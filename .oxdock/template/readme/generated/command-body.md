@@ -114,6 +114,20 @@ FOR $f IN $files { ECHO $f }
 ASSERT_STDOUT "a.txt"
 ```
 
+**Example: scoped variable reverts**
+
+```oxdock
+# LET inside a braced block reverts when the block exits
+LET $a = "outer"
+[bool:true] {
+    LET $a = "inner"
+    WRITE inner.txt "{{ $a }}"
+}
+WRITE outer.txt "{{ $a }}"
+ASSERT_FILE inner.txt "inner"
+ASSERT_FILE outer.txt "outer"
+```
+
 
 ### ASYNC
 
@@ -308,6 +322,20 @@ ENV B="hello world"
 ENV C="{{ $x }} concatenated"
 WRITE check.txt "{{ env:A }}|{{ env:B }}|{{ env:C }}"
 ASSERT_FILE check.txt "Ada|hello world|Ada concatenated"
+```
+
+**Example: scoped env reverts**
+
+```oxdock
+# ENV inside a braced block reverts when the block exits
+ENV MODE=production
+[bool:true] {
+    ENV MODE=staging
+    WRITE inner.txt "{{ env:MODE }}"
+}
+WRITE outer.txt "{{ env:MODE }}"
+ASSERT_FILE inner.txt "staging"
+ASSERT_FILE outer.txt "production"
 ```
 
 
@@ -710,6 +738,19 @@ ASSERT_STDOUT "Hi Ada and Ada concatenated!"
 WITH_IO [stdout=pipe:tpl] ECHO "Hello \{{ env:NAME }}!"
 WITH_IO [stdin=pipe:tpl] EXPAND NAME=Alice
 ASSERT_STDOUT "Hello Alice!"
+```
+
+**Example: override does not leak**
+
+```oxdock
+# KEY=val overrides shadow env for that EXPAND only —
+# they never update the environment itself
+ENV NAME="Alice"
+WRITE template.md "Hi \{{ env:NAME }}!"
+EXPAND template.md NAME="Bob"
+ASSERT_STDOUT "Hi Bob!"
+EXPAND template.md
+ASSERT_STDOUT "Hi Alice!"
 ```
 
 
