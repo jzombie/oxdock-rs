@@ -15,14 +15,14 @@
 use std::fmt;
 
 use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
-use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream, split_legacy_assignment};
+use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream, split_assignment};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 // Value-parsing helpers (`strip_surrounding_quotes`,
-// `split_legacy_assignment`, `parse_duration`, `format_duration`) live in
+// `split_assignment`, `parse_duration`, `format_duration`) live in
 // `crate::command` beside the `ArgType` validators that call them.
 
 /// Join free-text tail arguments into one value. Single args pass through
@@ -62,12 +62,12 @@ fn join_value(args: Vec<Arg>, cmd_name: &str) -> Result<Arg> {
 /// Canonical `lower_command` entry for direct callers holding one pre-joined
 /// `KEY=value` token. Script parsing never reaches this — the grammar splits
 /// assignments on raw spans first (see `lower_env_command` in parser.rs).
-pub fn lower_env_legacy(args: Vec<Arg>) -> Result<StepKind> {
+pub fn lower_env_assignment(args: Vec<Arg>) -> Result<StepKind> {
     let arg = args
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("ENV requires KEY=value"))?;
-    let Some((key, value)) = split_legacy_assignment(arg.as_str())? else {
+    let Some((key, value)) = split_assignment(arg.as_str())? else {
         bail!("ENV requires KEY=value format")
     };
     Ok(StepKind::Env { key, value })
@@ -448,7 +448,7 @@ declare_commands! {
                 ASSERT_FILE outer.txt "production"
             "#} },
         ],
-        lower: |_flags, args| lower_env_legacy(args),
+        lower: |_flags, args| lower_env_assignment(args),
     ],
 
     InheritEnv => [
@@ -457,7 +457,7 @@ declare_commands! {
         syntax: "INHERIT_ENV <key>...",
         summary: "Inherit env vars from host.",
         description: "Declares which host environment variables to inherit into the script. Must appear before any other commands and at most once. Without this directive, the script starts with an empty environment.",
-        args: &[],
+        args: &[ ArgSpec { name: "keys", arg_type: ArgType::Rest(&ArgType::String), description: "Host variables to inherit", io: IoDirection::Read, index: 0, required: false, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "inherit env", fence_meta: None, code: indoc! {r#"INHERIT_ENV [PATH, HOME]"#} } ],
@@ -473,7 +473,7 @@ declare_commands! {
         syntax: "ECHO <message>",
         summary: "Print to stdout.",
         description: "Outputs message to stdout.",
-        args: &[ ArgSpec { name: "message", arg_type: ArgType::String, description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "message", arg_type: ArgType::Rest(&ArgType::String), description: "Text", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: Some(Stream::Stdout),
         examples: &[
@@ -671,7 +671,7 @@ declare_commands! {
         description: "Writes contents.",
         args: &[
             ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: ArgType::String, description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "contents", arg_type: ArgType::Rest(&ArgType::String), description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -693,7 +693,7 @@ declare_commands! {
         description: "Appends contents.",
         args: &[
             ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Write, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "contents", arg_type: ArgType::String, description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
+            ArgSpec { name: "contents", arg_type: ArgType::Rest(&ArgType::String), description: "Content", io: IoDirection::Write, index: 1, required: false, fallback_stream: Some(Stream::Stdin) },
         ],
         flags: &[],
         default_output: None,
@@ -719,7 +719,7 @@ declare_commands! {
         description: "A template is any text file — or piped stdin when no path is given — containing `{{ ... }}` placeholders. EXPAND replaces each placeholder and prints the result to stdout. Placeholders: `{{ NAME }}` reads a `KEY=val` override passed on this command; `{{ env:NAME }}` reads an override, falling back to the environment; `{{ $var }}` reads a script variable (dotted paths allowed). A missing key is an error, never a silent empty. A bare `$var` argument is a template path; `KEY=val` arguments are overrides whose values follow the unified string-value rules (same as `ENV`: quotes keep exact bytes, a lone `$var` evaluates, `{{ ... }}` interpolates). NOTE: `WRITE` interpolates `{{ ... }}` while writing, so escape it (`\\{{ ... }}`) when writing a template file for a later `EXPAND`. With no path, the template arrives on stdin through a pipe. When piping from a shell, single-quote the template (`echo '{{ $x }}'`): double quotes let the shell swallow `$x`, so oxdock receives an empty `{{ }}` placeholder and errors.",
         args: &[
             ArgSpec { name: "path", arg_type: ArgType::Path, description: "Template file to expand; omit to expand stdin", io: IoDirection::Read, index: 0, required: false, fallback_stream: None },
-            ArgSpec { name: "overrides", arg_type: ArgType::KeyValue, description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "overrides", arg_type: ArgType::Rest(&ArgType::KeyValue), description: "Template overrides shadowing that key (unified string values)", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[],
         default_output: Some(Stream::Stdout),
@@ -774,7 +774,7 @@ declare_commands! {
             let mut overrides = Vec::new();
             for arg in args {
                 let text = arg.as_str();
-                if let Some((key, value)) = split_legacy_assignment(text)? {
+                if let Some((key, value)) = split_assignment(text)? {
                     overrides.push((key, value));
                 } else if path.is_none() { path = Some(arg); }
                 else { bail!("EXPAND accepts at most one path"); }
@@ -791,7 +791,7 @@ declare_commands! {
         description: "Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-256 digest) against the expectation. Any mismatch aborts the pipeline with a step-numbered error showing expected vs actual.",
         args: &[
             ArgSpec { name: "path", arg_type: ArgType::Path, description: "File", io: IoDirection::Read, index: 0, required: true, fallback_stream: None },
-            ArgSpec { name: "expected", arg_type: ArgType::String, description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
+            ArgSpec { name: "expected", arg_type: ArgType::Rest(&ArgType::String), description: "Expected", io: IoDirection::Read, index: 1, required: false, fallback_stream: None },
         ],
         flags: &[ FlagSpec { name: "hash", long: "--hash", value_type: FlagValueType::String, required: false, description: "SHA-256" } ],
         default_output: None,
@@ -849,7 +849,7 @@ declare_commands! {
         syntax: "ASSERT_STDOUT <substring>",
         summary: "Assert stdout contains.",
         description: "Checks the preceding step's stdout contains the substring, aborting the pipeline with a step-numbered error otherwise.",
-        args: &[ ArgSpec { name: "substring", arg_type: ArgType::String, description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
+        args: &[ ArgSpec { name: "substring", arg_type: ArgType::Rest(&ArgType::String), description: "Substring", io: IoDirection::Read, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
         examples: &[ Example { name: "assert stdout", fence_meta: None, code: indoc! {r#"

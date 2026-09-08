@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 ### Fixed
 
 - `EXIT` with a non-integer code is now an error instead of silently exiting 0
+- Trailing positionals beyond a command's declared arity fail lowering instead of being silently discarded; tail-joining commands (`ECHO`, `WRITE`/`APPEND` contents, `ASSERT_FILE` expected text, `ASSERT_STDOUT`, `EXPAND` overrides, `INHERIT_ENV` keys) declare variadic `Rest` args so legitimate multi-word use keeps working
 
 ### Fixed
 

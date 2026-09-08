@@ -721,7 +721,7 @@ fn lower_env_command(tokens: Vec<InsToken>) -> Result<StepKind> {
             })
         }
         [InsToken::Pos(Arg::String(text, _))] => {
-            match crate::command::split_legacy_assignment(text)? {
+            match crate::command::split_assignment(text)? {
                 Some((key, value)) => Ok(StepKind::Env { key, value }),
                 None => bail!("ENV requires KEY=value format"),
             }
@@ -746,7 +746,7 @@ fn lower_expand_command(tokens: Vec<InsToken>) -> Result<StepKind> {
             }
             InsToken::Pos(arg) => match &arg {
                 Arg::String(text, quoted) if !quoted && text.contains('=') => {
-                    let Some((key, value)) = crate::command::split_legacy_assignment(text)? else {
+                    let Some((key, value)) = crate::command::split_assignment(text)? else {
                         bail!("EXPAND requires KEY=value format for overrides")
                     };
                     overrides.push((key, value));

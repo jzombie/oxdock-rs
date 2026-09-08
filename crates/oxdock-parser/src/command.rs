@@ -119,7 +119,7 @@ impl ArgType {
                     bail!("expected $var, got {literal:?}")
                 }
             }
-            ArgType::KeyValue => match split_legacy_assignment(literal)? {
+            ArgType::KeyValue => match split_assignment(literal)? {
                 Some(_) => Ok(()),
                 None => bail!("expected KEY=value, got {literal:?}"),
             },
@@ -180,15 +180,27 @@ pub enum CheckOutcome {
 }
 
 /// Validate positional args against a command's declared specs.
-/// Missing required positionals and statically-known type violations
-/// fail here; templates, variables, and fragments defer to the runtime
-/// resolvers. Trailing positionals beyond the specs are ignored
-/// (documented leniency — e.g. `COPY` with extras).
+/// Missing required positionals, statically-known type violations, and
+/// trailing positionals beyond a fixed-arity spec all fail here;
+/// templates, variables, and fragments defer to the runtime resolvers.
+/// A trailing `Rest` spec absorbs any number of positionals.
 pub fn validate_positionals_against_meta(
     cmd_name: &str,
     specs: &[ArgSpec],
     args: &[Arg],
 ) -> Result<()> {
+    let has_rest = specs
+        .last()
+        .is_some_and(|s| matches!(s.arg_type, ArgType::Rest(_)));
+
+    if !has_rest && args.len() > specs.len() {
+        bail!(
+            "{cmd_name} expects at most {} positional argument(s), got {}",
+            specs.len(),
+            args.len()
+        );
+    }
+
     for spec in specs {
         if let ArgType::Rest(inner) = spec.arg_type {
             // Variadic tail: every trailing positional checks against
@@ -233,12 +245,11 @@ pub fn strip_surrounding_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-// TODO: Remove? This is alpha, prereleased software; why use "legacy" at all
-/// Legacy single-token `KEY=value` split for direct `lower_command` callers and
+/// Single-token `KEY=value` split for direct `lower_command` callers and
 /// exotic keys the grammar cannot classify (single tokens only — no whitespace
 /// reassembly, so the quoted-space corruption class cannot arise here).
 /// Returns `Ok(None)` when there is no `=`.
-pub fn split_legacy_assignment(text: &str) -> Result<Option<(String, Arg)>> {
+pub fn split_assignment(text: &str) -> Result<Option<(String, Arg)>> {
     let Some((key, raw)) = text.split_once('=') else {
         return Ok(None);
     };
@@ -462,10 +473,13 @@ mod tests {
         assert!(
             validate_positionals_against_meta("T", &specs, &[lit("1"), lit("2")]).is_ok()
         );
-        // Extras beyond declared specs stay ignored (documented leniency).
+        // Extras beyond fixed-arity specs fail (no silent truncation).
         let specs = [spec(0, true, ArgType::Int)];
+        let err = validate_positionals_against_meta("T", &specs, &[lit("1"), lit("extra")])
+            .expect_err("extras must fail");
         assert!(
-            validate_positionals_against_meta("T", &specs, &[lit("1"), lit("extra")]).is_ok()
+            err.to_string().contains("at most 1"),
+            "unexpected error: {err:#}"
         );
     }
 }

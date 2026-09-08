@@ -329,7 +329,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("SYMLINK requires target"))?;
                 Ok(StepKind::Symlink { from, to })
             }
-            "ENV" => oxdock_parser::commands::lower_env_legacy(args),
+            "ENV" => oxdock_parser::commands::lower_env_assignment(args),
             "WRITE" => {
                 let path = args
                     .first()

@@ -92,7 +92,7 @@ pub mod test_lower_mock {
                     })
                 }
             }
-            "ENV" => crate::commands::lower_env_legacy(args),
+            "ENV" => crate::commands::lower_env_assignment(args),
             "WORKSPACE" => {
                 let target = args
                     .into_iter()

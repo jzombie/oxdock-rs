@@ -751,6 +751,12 @@ Inherit env vars from host.
 
 Declares which host environment variables to inherit into the script. Must appear before any other commands and at most once. Without this directive, the script starts with an empty environment.
 
+**Arguments:**
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `keys` | [`string...`](#value-type-string) | no | Host variables to inherit |
+
 **Examples:**
 
 **Example: inherit env**
@@ -772,7 +778,7 @@ Outputs message to stdout.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `message` | [`string`](#value-type-string) | yes | Text |
+| `message` | [`string...`](#value-type-string) | yes | Text |
 
 **Output:** Stdout
 
@@ -1039,7 +1045,7 @@ Writes contents.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | [`path`](#value-type-path) | yes | File |
-| `contents` | [`string`](#value-type-string) | no | Content |
+| `contents` | [`string...`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -1063,7 +1069,7 @@ Appends contents.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | [`path`](#value-type-path) | yes | File |
-| `contents` | [`string`](#value-type-string) | no | Content |
+| `contents` | [`string...`](#value-type-string) | no | Content |
 
 **Examples:**
 
@@ -1089,7 +1095,7 @@ A template is any text file — or piped stdin when no path is given — contain
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | [`path`](#value-type-path) | no | Template file to expand; omit to expand stdin |
-| `overrides` | [`KEY=value`](#value-type-keyvalue) | no | Template overrides shadowing that key (unified string values) |
+| `overrides` | [`KEY=value...`](#value-type-keyvalue) | no | Template overrides shadowing that key (unified string values) |
 
 **Output:** Stdout
 
@@ -1171,7 +1177,7 @@ Checks the path is a file, then optionally compares its bytes (or `--hash` SHA-2
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | [`path`](#value-type-path) | yes | File |
-| `expected` | [`string`](#value-type-string) | no | Expected |
+| `expected` | [`string...`](#value-type-string) | no | Expected |
 
 **Flags:**
 
@@ -1256,7 +1262,7 @@ Checks the preceding step's stdout contains the substring, aborting the pipeline
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `substring` | [`string`](#value-type-string) | yes | Substring |
+| `substring` | [`string...`](#value-type-string) | yes | Substring |
 
 **Examples:**
 
