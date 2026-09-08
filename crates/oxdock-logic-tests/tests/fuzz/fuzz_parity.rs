@@ -198,7 +198,7 @@ fn arb_step_kind() -> impl Strategy<Value = StepKind> {
         safe_string().prop_map(|s| StepKind::AssertDir(s.into())),
         safe_string().prop_map(|s| StepKind::AssertAbsent(s.into())),
         safe_msg().prop_map(|s| StepKind::AssertStdout(s.into())),
-        (0i32..255).prop_map(StepKind::Exit),
+        (0i32..255).prop_map(|i| StepKind::Exit(Arg::String(i.to_string(), false))),
     ]
 }
 

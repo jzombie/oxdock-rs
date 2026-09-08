@@ -1,24 +1,27 @@
 use crate::common::mock_lower;
 
 use indoc::indoc;
-use oxdock_parser::ast::StepKind;
+use oxdock_parser::ast::{Arg, Expr, StepKind};
 use oxdock_parser::commands::lower_command;
 use oxdock_parser::parse_script;
-use std::time::Duration;
 
-fn timeout_case(script: &str) -> (Duration, Vec<oxdock_parser::ast::Step>) {
+fn timeout_case(script: &str) -> (Arg, Vec<oxdock_parser::ast::Step>) {
     let steps = parse_script(script, mock_lower).expect("parse TIMEOUT");
     assert_eq!(steps.len(), 1, "expected a single TIMEOUT step");
     match &steps[0].kind {
-        StepKind::Timeout { duration, body } => (*duration, body.clone()),
+        StepKind::Timeout { duration, body } => (duration.clone(), body.clone()),
         other => panic!("expected Timeout, got {other:?}"),
     }
+}
+
+fn lit(text: &str) -> Arg {
+    Arg::String(text.to_string(), false)
 }
 
 #[test]
 fn timeout_inline_single_command() {
     let (duration, body) = timeout_case(r#"TIMEOUT 10s RUN "echo hi""#);
-    assert_eq!(duration, Duration::from_secs(10));
+    assert_eq!(duration, lit("10s"));
     assert_eq!(body.len(), 1);
     assert!(matches!(body[0].kind, StepKind::Run(_)));
 }
@@ -26,16 +29,28 @@ fn timeout_inline_single_command() {
 #[test]
 fn timeout_duration_units() {
     let cases = [
-        ("TIMEOUT 500ms ECHO x", Duration::from_millis(500)),
-        ("TIMEOUT 10s ECHO x", Duration::from_secs(10)),
-        ("TIMEOUT 2m ECHO x", Duration::from_secs(120)),
-        ("TIMEOUT 1h ECHO x", Duration::from_secs(3600)),
-        ("TIMEOUT 30 ECHO x", Duration::from_secs(30)),
+        ("TIMEOUT 500ms ECHO x", lit("500ms")),
+        ("TIMEOUT 10s ECHO x", lit("10s")),
+        ("TIMEOUT 2m ECHO x", lit("2m")),
+        ("TIMEOUT 1h ECHO x", lit("1h")),
+        ("TIMEOUT 30 ECHO x", lit("30")),
     ];
     for (script, expected) in cases {
         let (duration, _) = timeout_case(script);
         assert_eq!(duration, expected, "wrong duration for {script}");
     }
+}
+
+#[test]
+fn timeout_dynamic_forms() {
+    // Variables, quoted literals, and templates resolve at runtime
+    // instead of freezing at parse.
+    let (duration, _) = timeout_case("TIMEOUT $d ECHO x");
+    assert_eq!(duration, Arg::Expr(Expr::Var("d".to_string())));
+    let (duration, _) = timeout_case("TIMEOUT \"10s\" ECHO x");
+    assert_eq!(duration, Arg::String("10s".to_string(), true));
+    let (duration, _) = timeout_case("TIMEOUT {{ $d }} ECHO x");
+    assert_eq!(duration, lit("{{ $d }}"));
 }
 
 #[test]
@@ -47,14 +62,14 @@ fn timeout_block_multi_step() {
         }
     "#};
     let (duration, body) = timeout_case(script);
-    assert_eq!(duration, Duration::from_secs(120));
+    assert_eq!(duration, lit("2m"));
     assert_eq!(body.len(), 2);
 }
 
 #[test]
 fn timeout_wraps_await() {
     let (duration, body) = timeout_case("TIMEOUT 30s AWAIT $task");
-    assert_eq!(duration, Duration::from_secs(30));
+    assert_eq!(duration, lit("30s"));
     assert_eq!(body.len(), 1);
     assert!(matches!(body[0].kind, StepKind::Await { .. }));
 }
@@ -121,7 +136,7 @@ fn sleep_lowers_duration() {
     let steps = parse_script("SLEEP 500ms", lower_command).expect("parse SLEEP");
     assert_eq!(steps.len(), 1);
     match &steps[0].kind {
-        StepKind::Sleep { duration } => assert_eq!(*duration, Duration::from_millis(500)),
+        StepKind::Sleep { duration } => assert_eq!(*duration, lit("500ms")),
         other => panic!("expected Sleep, got {other:?}"),
     }
 }
@@ -148,7 +163,7 @@ fn timeout_wraps_sleep() {
     assert_eq!(steps.len(), 1);
     match &steps[0].kind {
         StepKind::Timeout { duration, body } => {
-            assert_eq!(*duration, Duration::from_secs(1));
+            assert_eq!(*duration, lit("1s"));
             assert_eq!(body.len(), 1);
             assert!(matches!(body[0].kind, StepKind::Sleep { .. }));
         }

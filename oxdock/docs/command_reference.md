@@ -127,7 +127,7 @@ Bind script-local variables.
 
 **Syntax:** `LET $var = <expr> | LET $var = ASYNC { <commands> }`
 
-Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here.
+Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB("*.md")` — never a `{{ ... }}` template; interpolation happens in string values, not here. Bare words need no quotes: `LET $d = 30s` binds the same string as `LET $d = "30s"`.
 
 **Examples:**
 
@@ -256,6 +256,15 @@ TIMEOUT 30s {
     WRITE a.txt one
     WRITE b.txt two
 }
+```
+
+**Example: timeout variable duration**
+
+```oxdock
+# durations resolve at runtime, so variables work too
+LET $budget = "30s"
+TIMEOUT $budget WRITE heartbeat.txt alive
+ASSERT_FILE heartbeat.txt alive
 ```
 
 
@@ -970,6 +979,17 @@ Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for c
 
 ```oxdock
 SLEEP 100ms
+```
+
+**Example: sleep variable duration**
+
+```oxdock
+# durations resolve at runtime, so variables work too —
+# quoted or bare, both bind the same string
+LET $pause = "100ms"
+SLEEP $pause
+LET $bare = 100ms
+SLEEP $bare
 ```
 
 

@@ -115,7 +115,7 @@ fn exit_kills_background_processes() {
         async_step("bg-task"),
         Step {
             guard: None,
-            kind: StepKind::Exit(5),
+            kind: StepKind::Exit(oxdock_parser::Arg::String("5".to_string(), false)),
             scope_enter: 0,
             scope_exit: 0,
         },
@@ -821,7 +821,7 @@ fn exit_kills_all_background_children() {
     let steps = vec![
         async_step("bg-a"),
         async_step("bg-b"),
-        step(StepKind::Exit(3)),
+        step(StepKind::Exit(oxdock_parser::Arg::String("3".to_string(), false))),
     ];
     let mock = MockProcessManager::default();
     mock.push_bg_plan(100, success_status());
@@ -1264,10 +1264,13 @@ fn naturally_completed_bg_not_logged_as_killed() {
 // TIMEOUT tests
 // ---------------------------------------------------------------------------
 
-fn timeout_step(duration: std::time::Duration, body: Vec<Step>) -> Step {
+fn timeout_step(duration: &str, body: Vec<Step>) -> Step {
     Step {
         guard: None,
-        kind: StepKind::Timeout { duration, body },
+        kind: StepKind::Timeout {
+            duration: oxdock_parser::Arg::String(duration.to_string(), false),
+            body,
+        },
         scope_enter: 0,
         scope_exit: 0,
     }
@@ -1276,7 +1279,7 @@ fn timeout_step(duration: std::time::Duration, body: Vec<Step>) -> Step {
 #[test]
 fn timeout_body_completes_within_deadline() {
     let steps = vec![timeout_step(
-        std::time::Duration::from_secs(30),
+        "30s",
         vec![Step {
             guard: None,
             kind: StepKind::Write {
@@ -1300,8 +1303,8 @@ fn timeout_body_error_passes_through_without_firing() {
     // A body that fails fast must surface its own error unwrapped — no
     // TIMEOUT prefix when the deadline never elapsed.
     let steps = vec![timeout_step(
-        std::time::Duration::from_secs(30),
-        vec![step(StepKind::Exit(3))],
+        "30s",
+        vec![step(StepKind::Exit(oxdock_parser::Arg::String("3".to_string(), false)))],
     )];
     let fs = MockFs::new();
     let fs = Box::new(fs) as Box<dyn WorkspaceFs>;
@@ -1398,7 +1401,7 @@ impl BackgroundHandle for BlockingHandle {
 )]
 fn timeout_fires_and_kills_blocking_command() {
     let steps = vec![timeout_step(
-        std::time::Duration::from_millis(200),
+        "200ms",
         vec![step(StepKind::Run("hang".into()))],
     )];
     let fs = MockFs::new();

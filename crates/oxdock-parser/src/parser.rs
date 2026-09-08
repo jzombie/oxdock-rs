@@ -1,5 +1,5 @@
 use crate::ast::{Arg, Guard, GuardExpr, IoBinding, IoStream, PlatformGuard, Step, StepKind};
-use crate::commands::parse_duration;
+use crate::command::ArgType;
 use crate::lexer::{self, RawToken, Rule};
 use anyhow::{Result, anyhow, bail};
 use pest::iterators::Pair;
@@ -708,12 +708,20 @@ fn lower_env_command(tokens: Vec<InsToken>) -> Result<StepKind> {
         bail!("ENV requires KEY=value");
     }
     match tokens.as_slice() {
-        [InsToken::Assign(key, value)] => Ok(StepKind::Env {
-            key: key.clone(),
-            value: value.clone(),
-        }),
+        [InsToken::Assign(key, value)] => {
+            // Same KeyValue check the central validator applies on the
+            // `lower_command` path, over the joined assignment form.
+            ArgType::KeyValue.check_arg(&Arg::String(
+                format!("{key}={}", value.render()),
+                false,
+            ))?;
+            Ok(StepKind::Env {
+                key: key.clone(),
+                value: value.clone(),
+            })
+        }
         [InsToken::Pos(Arg::String(text, _))] => {
-            match crate::commands::split_legacy_assignment(text)? {
+            match crate::command::split_legacy_assignment(text)? {
                 Some((key, value)) => Ok(StepKind::Env { key, value }),
                 None => bail!("ENV requires KEY=value format"),
             }
@@ -730,16 +738,25 @@ fn lower_expand_command(tokens: Vec<InsToken>) -> Result<StepKind> {
     let mut overrides = Vec::new();
     for token in tokens {
         match token {
-            InsToken::Assign(key, value) => overrides.push((key, value)),
+            InsToken::Assign(key, value) => {
+                if key.is_empty() {
+                    bail!("EXPAND requires KEY=value format for overrides")
+                }
+                overrides.push((key, value));
+            }
             InsToken::Pos(arg) => match &arg {
                 Arg::String(text, quoted) if !quoted && text.contains('=') => {
-                    let Some((key, value)) = crate::commands::split_legacy_assignment(text)? else {
+                    let Some((key, value)) = crate::command::split_legacy_assignment(text)? else {
                         bail!("EXPAND requires KEY=value format for overrides")
                     };
                     overrides.push((key, value));
                 }
                 _ => {
                     if path.is_none() {
+                        // Path-typed positional, checked like every other
+                        // `lower_command` path arg (literals always pass;
+                        // resolution stays runtime).
+                        ArgType::Path.check_arg(&arg)?;
                         path = Some(arg);
                     } else {
                         bail!("EXPAND accepts at most one path");
@@ -905,16 +922,37 @@ fn parse_cancel_statement_from_pair(pair: Pair<Rule>) -> Result<StepKind> {
     })
 }
 
+/// Build a TIMEOUT duration [`Arg`] from the widened `timeout_duration`
+/// alternatives. Static literals type-check now via the declared Duration
+/// arg type; dynamics (`$var`, templates) resolve at runtime.
+fn parse_timeout_duration_arg(pair: Pair<Rule>) -> Result<Arg> {
+    for inner in pair.into_inner() {
+        let arg = match inner.as_rule() {
+            Rule::timeout_literal => Arg::String(inner.as_str().to_string(), false),
+            Rule::dollar_ident => Arg::Expr(Expr::Var(parse_dollar_ident(inner))),
+            Rule::quoted_string => Arg::String(
+                crate::command::strip_surrounding_quotes(inner.as_str()).to_string(),
+                true,
+            ),
+            Rule::templated_arg => Arg::String(inner.as_str().to_string(), false),
+            _ => continue,
+        };
+        ArgType::Duration.check_arg(&arg)?;
+        return Ok(arg);
+    }
+    bail!("TIMEOUT requires a duration")
+}
+
 fn parse_timeout_statement_from_pair(
     pair: Pair<Rule>,
     lower: &dyn Fn(&str, Vec<Arg>) -> Result<StepKind>,
 ) -> Result<StepKind> {
-    let mut duration = None;
+    let mut duration: Option<Arg> = None;
     let mut body: Option<Vec<Step>> = None;
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::timeout_duration => {
-                duration = Some(parse_duration(inner.as_str())?);
+                duration = Some(parse_timeout_duration_arg(inner)?);
             }
             Rule::block => {
                 body = Some(parse_block_elements_with_lower(inner, lower)?);

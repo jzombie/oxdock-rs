@@ -15,11 +15,15 @@
 use std::fmt;
 
 use crate::ast::{Arg, ArgPart, Expr, IoBinding, IoStream, Step, WorkspaceTarget};
-use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream};
+use crate::command::{ArgSpec, ArgType, CommandMeta, Example, FlagSpec, FlagValueType, IoDirection, Stream, split_legacy_assignment};
 use anyhow::{Result, anyhow, bail};
 use indoc::indoc;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// Value-parsing helpers (`strip_surrounding_quotes`,
+// `split_legacy_assignment`, `parse_duration`, `format_duration`) live in
+// `crate::command` beside the `ArgType` validators that call them.
 
 /// Join free-text tail arguments into one value. Single args pass through
 /// untouched (preserving `Arg::Expr`); all-`String` tails join exactly like the
@@ -53,32 +57,6 @@ fn join_value(args: Vec<Arg>, cmd_name: &str) -> Result<Arg> {
         }
     }
     Ok(Arg::Parts(parts))
-}
-
-/// Strip one layer of surrounding `"` or `'` quotes (both kinds, everywhere).
-pub(crate) fn strip_surrounding_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-        .unwrap_or(value)
-}
-
-/// Legacy single-token `KEY=value` split for direct `lower_command` callers and
-/// exotic keys the grammar cannot classify (single tokens only — no whitespace
-/// reassembly, so the quoted-space corruption class cannot arise here).
-/// Returns `Ok(None)` when there is no `=`.
-pub(crate) fn split_legacy_assignment(text: &str) -> Result<Option<(String, Arg)>> {
-    let Some((key, raw)) = text.split_once('=') else {
-        return Ok(None);
-    };
-    if key.is_empty() {
-        bail!("assignment requires KEY=value format");
-    }
-    Ok(Some((
-        key.to_string(),
-        Arg::String(strip_surrounding_quotes(raw).to_string(), false),
-    )))
 }
 
 /// Canonical `lower_command` entry for direct callers holding one pre-joined
@@ -137,8 +115,7 @@ fn quote_arg(s: &str) -> String {
     }
 }
 
-fn quote_msg(s: &str) -> String {
-    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+fn quote_msg(s: &str) -> String {    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.starts_with(|c: char| c.is_ascii_digit())
         && crate::Command::parse(s).is_none();
     if safe && !s.is_empty() {
@@ -166,8 +143,17 @@ fn quote_run(s: &str) -> String {
         .join(" ")
 }
 
-fn fmt_io(b: &IoBinding) -> String {
-    let s = match b.stream {
+/// Render an [`Arg`] for `Display`: the quoted flag drives quoting (not
+/// content sniffing — digit-leading values like `10s` or `0` must stay
+/// bare to reparse with the same flag).
+fn fmt_raw_arg(arg: &Arg) -> String {
+    match arg {
+        Arg::String(s, true) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        _ => arg.render(),
+    }
+}
+
+fn fmt_io(b: &IoBinding) -> String {    let s = match b.stream {
         IoStream::Stdin => "stdin",
         IoStream::Stdout => "stdout",
         IoStream::Stderr => "stderr",
@@ -176,48 +162,6 @@ fn fmt_io(b: &IoBinding) -> String {
         format!("{}=pipe:{}", s, p)
     } else {
         s.to_string()
-    }
-}
-
-/// Parse a TIMEOUT duration token (`500ms`, `10s`, `2m`, `1h`; a bare
-/// number means seconds).
-pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
-    let (digits, unit_ms): (&str, u64) = if let Some(v) = s.strip_suffix("ms") {
-        (v, 1)
-    } else if let Some(v) = s.strip_suffix('s') {
-        (v, 1_000)
-    } else if let Some(v) = s.strip_suffix('m') {
-        (v, 60_000)
-    } else if let Some(v) = s.strip_suffix('h') {
-        (v, 3_600_000)
-    } else {
-        (s, 1_000)
-    };
-    let n: u64 = digits
-        .parse()
-        .map_err(|_| anyhow!("invalid TIMEOUT duration: {s}"))?;
-    let millis = n
-        .checked_mul(unit_ms)
-        .ok_or_else(|| anyhow!("TIMEOUT duration out of range: {s}"))?;
-    if millis == 0 {
-        bail!("TIMEOUT duration must be positive, got: {s}");
-    }
-    Ok(std::time::Duration::from_millis(millis))
-}
-
-/// Canonical display for a duration: largest exact unit (`500ms`, `10s`,
-/// `2m`, `1h`), falling back to milliseconds. Round-trips through
-/// [`parse_duration`].
-pub fn format_duration(d: &std::time::Duration) -> String {
-    let millis = d.as_millis();
-    if millis.is_multiple_of(3_600_000) {
-        format!("{}h", millis / 3_600_000)
-    } else if millis.is_multiple_of(60_000) {
-        format!("{}m", millis / 60_000)
-    } else if millis.is_multiple_of(1_000) {
-        format!("{}s", millis / 1_000)
-    } else {
-        format!("{millis}ms")
     }
 }
 
@@ -374,6 +318,11 @@ macro_rules! declare_commands {
                             default_output: $out, examples: $examples,
                         };
                         let (flags, positional) = crate::strip_flags(raw_args, &meta)?;
+                        crate::command::validate_positionals_against_meta(
+                            s,
+                            &meta.args,
+                            &positional,
+                        )?;
                         let lower_fn: fn(Vec<(String, Arg)>, Vec<Arg>) -> Result<StepKind> = $lower;
                         lower_fn(flags, positional)
                     }
@@ -410,7 +359,7 @@ declare_commands! {
         AssignAsync { var: String, body: Vec<Step> },
         Await { var: String },
         Cancel { var: String },
-        Timeout { duration: std::time::Duration, body: Vec<Step> },
+        Timeout { duration: Arg, body: Vec<Step> },
     ]
 
     Workdir => [
@@ -928,7 +877,7 @@ declare_commands! {
 
     Exit => [
         name: "EXIT",
-        variant: Exit(i32),
+        variant: Exit(Arg),
         syntax: "EXIT <code>",
         summary: "Exit pipeline.",
         description: "Stops the pipeline immediately with an `EXIT requested with code <code>` error; steps after it never run, at any nesting depth. Enclosing blocks still unwind their LET/ENV/WORKDIR/WORKSPACE state, anonymous background tasks are killed synchronously, and files written before the EXIT persist.",
@@ -937,21 +886,37 @@ declare_commands! {
         default_output: None,
         examples: &[ Example { name: "exit", fence_meta: Some("expect_error:\"EXIT requested with code 0\""), code: indoc! {r#"EXIT 0"#} } ],
         lower: |_flags, args| {
-            let code = args.into_iter().next().and_then(|a| a.as_str().parse::<i32>().ok()).unwrap_or(0);
+            // Static literals were already Int-checked by the central
+            // validator; dynamics resolve (and validate) at runtime.
+            let code = args.into_iter().next().ok_or_else(|| anyhow!("EXIT requires a code"))?;
             Ok(StepKind::Exit(code))
         },
     ],
 
     Sleep => [
         name: "SLEEP",
-        variant: Sleep { duration: std::time::Duration },
+        variant: Sleep { duration: Arg },
         syntax: "SLEEP <duration>",
         summary: "Pause execution for a duration.",
         description: "Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for cancellation so an enclosing TIMEOUT or task teardown interrupts the sleep. Cross-platform alternative to shell sleep for testing time boundaries.",
         args: &[ ArgSpec { name: "duration", arg_type: ArgType::Duration, description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,
-        examples: &[ Example { name: "sleep", fence_meta: None, code: indoc! {r#"SLEEP 100ms"#} } ],
+        examples: &[
+            Example { name: "sleep", fence_meta: None, code: indoc! {r#"SLEEP 100ms"#} },
+            Example {
+                name: "sleep variable duration",
+                fence_meta: None,
+                code: indoc! {r#"
+                # durations resolve at runtime, so variables work too —
+                # quoted or bare, both bind the same string
+                LET $pause = "100ms"
+                SLEEP $pause
+                LET $bare = 100ms
+                SLEEP $bare
+            "#},
+            },
+        ],
         lower: |_flags, args| {
             let mut it = args.into_iter();
             let raw = it
@@ -960,9 +925,9 @@ declare_commands! {
             if it.next().is_some() {
                 bail!("SLEEP takes exactly one duration argument");
             }
-            Ok(StepKind::Sleep {
-                duration: parse_duration(raw.as_str())?,
-            })
+            // Static literals were Duration-checked by the central
+            // validator; dynamics ($var, templates) resolve at runtime.
+            Ok(StepKind::Sleep { duration: raw })
         },
     ],
 }
@@ -1066,7 +1031,7 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
             name: "LET",
             syntax: "LET $var = <expr> | LET $var = ASYNC { <commands> }",
             summary: "Bind script-local variables.",
-            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB(\"*.md\")` — never a `{{ ... }}` template; interpolation happens in string values, not here.",
+            description: "Assigns a value to a script-local variable. Variables are usable in templates (`{{ $var }}`), guards, and expressions. With `ASYNC`, spawns a background task and stores its handle (see ASYNC). The `$` sigil on the name is mandatory. The right-hand side is always an expression — literals, lists, maps, comparisons, `GLOB(\"*.md\")` — never a `{{ ... }}` template; interpolation happens in string values, not here. Bare words need no quotes: `LET $d = 30s` binds the same string as `LET $d = \"30s\"`.",
             args: &[],
             flags: &[],
             default_output: None,
@@ -1199,6 +1164,16 @@ pub fn all_structural_metadata() -> Vec<CommandMeta> {
                         WRITE a.txt one
                         WRITE b.txt two
                     }
+                "#},
+                },
+                Example {
+                    name: "timeout variable duration",
+                    fence_meta: None,
+                    code: indoc! {r#"
+                    # durations resolve at runtime, so variables work too
+                    LET $budget = "30s"
+                    TIMEOUT $budget WRITE heartbeat.txt alive
+                    ASSERT_FILE heartbeat.txt alive
                 "#},
                 },
             ],
@@ -1340,8 +1315,8 @@ impl fmt::Display for StepKind {
             StepKind::HashSha256 { path } => {
                 write!(f, "HASH_SHA256 {}", fmt_value(path, quote_arg))
             }
-            StepKind::Exit(c) => write!(f, "EXIT {}", c),
-            StepKind::Sleep { duration } => write!(f, "SLEEP {}", format_duration(duration)),
+            StepKind::Exit(code) => write!(f, "EXIT {}", fmt_raw_arg(code)),
+            StepKind::Sleep { duration } => write!(f, "SLEEP {}", fmt_raw_arg(duration)),
             StepKind::For {
                 key_var,
                 var,
@@ -1402,7 +1377,7 @@ impl fmt::Display for StepKind {
             StepKind::Await { var } => write!(f, "AWAIT ${}", var),
             StepKind::Cancel { var } => write!(f, "CANCEL ${}", var),
             StepKind::Timeout { duration, body } => {
-                let budget = format_duration(duration);
+                let budget = fmt_raw_arg(duration);
                 if body.len() == 1 {
                     write!(f, "TIMEOUT {} {}", budget, body[0].kind)
                 } else {
@@ -1420,6 +1395,7 @@ impl fmt::Display for StepKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::{format_duration, parse_duration};
     use crate::parser::parse_script;
 
     fn parse_err(script: &str) -> String {
@@ -1501,7 +1477,6 @@ mod tests {
     #[test]
     fn structural_metadata_covers_all_structural_kinds() {
         use crate::ast::Value;
-        use std::time::Duration;
 
         // Tripwire: adding a structural StepKind variant without registering
         // documentation fails to compile here (non-exhaustive match). Leaf
@@ -1581,7 +1556,7 @@ mod tests {
                 var: "t".to_string(),
             },
             StepKind::Timeout {
-                duration: Duration::from_secs(1),
+                duration: Arg::String("1s".to_string(), false),
                 body: Vec::new(),
             },
         ];

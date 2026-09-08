@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Command reference examples demonstrating variable scoping: `ENV` and `LET` assignments inside a braced block revert when the block exits, and `EXPAND` `KEY=val` overrides shadow the environment for that call only
 - `WORKDIR` description now documents relative-to-current-directory resolution, `/` reset to the workspace root, and the sandbox guarantee
 - `ASSERT_*` descriptions now document abort-on-mismatch failure semantics, plus a new `ASSERT_FILE --hash` example
+- Declared argument types are mechanically enforced: static literals type-check at lower time and variables/templates validate on their resolved values at runtime. `SLEEP`/`TIMEOUT` accept dynamic durations (`SLEEP $d`, `TIMEOUT $d`) instead of freezing literals at parse
+
+### Fixed
+
+- `EXIT` with a non-integer code is now an error instead of silently exiting 0
 
 ### Fixed
 

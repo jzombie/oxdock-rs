@@ -169,7 +169,11 @@ cancel_statement = { cancel_keyword ~ sep? ~ "$" ~ ident }
 // with_io_command): explicit `sep` separators starve when implicit
 // whitespace is active, so atomicity is required here, not optional.
 timeout_keyword = _{ "TIMEOUT" ~ !(ASCII_ALPHANUMERIC | "_") }
-timeout_duration = @{ ASCII_DIGIT+ ~ ("ms" | "s" | "m" | "h")? }
+// Static literal durations plus dynamic forms (`$var`, quoted, template):
+// dynamics resolve (and type-check) at runtime via the declared Duration
+// arg type instead of freezing at parse.
+timeout_literal = @{ ASCII_DIGIT+ ~ ("ms" | "s" | "m" | "h")? }
+timeout_duration = { timeout_literal | dollar_ident | quoted_string | templated_arg }
 timeout_statement = ${ timeout_keyword ~ sep ~ timeout_duration ~ sep ~ (block | await_statement | cancel_statement | command) }
 
 command = _{ with_io_command | inherit_env_command | timeout_statement | async_statement_block | async_statement | cancel_statement | instruction_inner }
