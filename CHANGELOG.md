@@ -12,14 +12,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - `WORKDIR` description now documents relative-to-current-directory resolution, `/` reset to the workspace root, and the sandbox guarantee
 - `ASSERT_*` descriptions now document abort-on-mismatch failure semantics, plus a new `ASSERT_FILE --hash` example
 - Declared argument types are mechanically enforced: static literals type-check at lower time and variables/templates validate on their resolved values at runtime. `SLEEP`/`TIMEOUT` accept dynamic durations (`SLEEP $d`, `TIMEOUT $d`) instead of freezing literals at parse
+- Root and `oxdock` READMEs lead with one shared intro (`intro.md.tmpl`): Rust first pitch, native with no containers, daemon, or VM, identical on every OS except `RUN`, plus platform gating, async tasks, and piped workflows, with a version pinned docs.rs link
+- Quick start shows a pinned `cargo install oxdock@<version>` alongside `cargo add oxdock` before the first example
+- New README sections: `oxdock_prepare!` for build only assets, `WITH_IO` streaming pipelines without temp files, and ephemeral snapshot workspaces with `WORKSPACE LOCAL`
+- `COPY --from-current-workspace` reference example
+- `oxdock` crate docs composited by docs-gen (`oxdock/docs/crate_docs.md`, shared lead plus command reference) instead of hardcoded comments
+- docs-gen exits non-zero when any target fails to render, with a regression test pinning the behavior
+
+### Changed
+
+- `oxdock` crate description rewritten around the dual macro plus CLI use
+- Markdown templates renamed `*.tmpl` to `*.md.tmpl` so the output type is visible; the engine still expands any `*.tmpl` suffix
+- README prose style documented in `AGENTS.md`: periods or colons instead of dash punctuation, with DSL `{{ ... }}` fragments kept `.md` verbatim
 
 ### Fixed
 
 - `EXIT` with a non-integer code is now an error instead of silently exiting 0
 - Trailing positionals beyond a command's declared arity fail lowering instead of being silently discarded; tail-joining commands (`ECHO`, `WRITE`/`APPEND` contents, `ASSERT_FILE` expected text, `ASSERT_STDOUT`, `EXPAND` overrides, `INHERIT_ENV` keys) declare variadic `Rest` args so legitimate multi-word use keeps working
-
-### Fixed
-
 - Command reference argument/flag tables escape `|` in type strings (e.g. `SNAPSHOT|LOCAL`), which previously split the WORKSPACE row into extra columns on strict Markdown renderers
 - `SLEEP` summary reworded from "Sleep without spawning a shell" to "Pause execution for a duration"
 
