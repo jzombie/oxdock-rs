@@ -1,3 +1,0 @@
-Don't fallback to COPY operation if symlink cannot be performed.
-
-Explore other avenues...
