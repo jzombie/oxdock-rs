@@ -97,9 +97,15 @@ fn render_meta(meta: &CommandMeta) -> String {
         out.push_str("| --- | --- | --- | --- |\n");
         for arg in meta.args {
             let req = if arg.required { "yes" } else { "no" };
+            // Escape pipes so `|` alternations in type strings (e.g.
+            // `SNAPSHOT|LOCAL`) cannot split the row into extra columns
+            // on renderers without GitHub's code-span table handling.
             out.push_str(&format!(
                 "| `{}` | `{}` | {} | {} |\n",
-                arg.name, arg.arg_type, req, arg.description
+                escape_table_cell(arg.name),
+                escape_table_cell(arg.arg_type),
+                req,
+                escape_table_cell(arg.description)
             ));
         }
         out.push('\n');
@@ -112,7 +118,9 @@ fn render_meta(meta: &CommandMeta) -> String {
         for flag in meta.flags {
             out.push_str(&format!(
                 "| `{}` | {:?} | {} |\n",
-                flag.long, flag.value_type, flag.description
+                escape_table_cell(flag.long),
+                flag.value_type,
+                escape_table_cell(flag.description)
             ));
         }
         out.push('\n');

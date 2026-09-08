@@ -296,7 +296,7 @@ SNAPSHOT or LOCAL root.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `target` | `SNAPSHOT|LOCAL` | yes | Target root |
+| `target` | `SNAPSHOT\|LOCAL` | yes | Target root |
 
 **Examples:**
 
