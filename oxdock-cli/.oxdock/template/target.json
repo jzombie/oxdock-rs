@@ -8,8 +8,10 @@
       "fragments": {
         "local": [
           "oxdock-cli/.oxdock/template/header.md.tmpl",
-          "oxdock-cli/.oxdock/template/fragments/*",
-          "oxdock-cli/.oxdock/template/footer.md.tmpl"
+          "oxdock-cli/.oxdock/template/fragments/*"
+        ],
+        "shared": [
+          ".oxdock/template/shared/footer.md.tmpl"
         ]
       }
     }

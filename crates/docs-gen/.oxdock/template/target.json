@@ -8,8 +8,10 @@
       "fragments": {
         "local": [
           "crates/docs-gen/.oxdock/template/header.md.tmpl",
-          "crates/docs-gen/.oxdock/template/fragments/*",
-          "crates/docs-gen/.oxdock/template/footer.md.tmpl"
+          "crates/docs-gen/.oxdock/template/fragments/*"
+        ],
+        "shared": [
+          ".oxdock/template/shared/footer.md.tmpl"
         ]
       }
     }

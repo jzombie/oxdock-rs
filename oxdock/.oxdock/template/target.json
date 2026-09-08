@@ -7,8 +7,7 @@
       "template": "oxdock/.oxdock/template/README.md.tmpl",
       "fragments": {
         "local": [
-          "oxdock/.oxdock/template/fragments/*",
-          "oxdock/.oxdock/template/footer.md.tmpl"
+          "oxdock/.oxdock/template/fragments/*"
         ],
         "shared": [
           ".oxdock/template/shared/*"
