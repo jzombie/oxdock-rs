@@ -1,7 +1,5 @@
 # OxDock
 
-Dockerfile inspired build DSL. Native. Embed scripts at compile time in Rust, or run the same scripts as standalone CLI pipelines.
-
 **Dockerfile inspired build DSL for Rust**
 
 OxDock is a Dockerfile inspired build DSL for Rust. Embed scripts at compile time with macros, or run the same scripts as standalone CLI pipelines. Native. No containers. No daemon. No VM. All commands run identically on every OS, except RUN.
