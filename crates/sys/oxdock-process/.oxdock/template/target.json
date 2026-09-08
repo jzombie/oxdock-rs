@@ -1,1 +1,19 @@
-{"name": "oxdock-process-readme", "out": "crates/sys/oxdock-process/README.md"}
+{
+  "targets": [
+    {
+      "name": "oxdock-process-readme",
+      "out": "crates/sys/oxdock-process/README.md",
+      "values": "crates/sys/oxdock-process/.oxdock/template/values.json",
+      "template": "crates/sys/oxdock-process/.oxdock/template/README.md.tmpl",
+      "fragments": {
+        "local": [
+          "crates/sys/oxdock-process/.oxdock/template/header.md.tmpl",
+          "crates/sys/oxdock-process/.oxdock/template/fragments/*"
+        ],
+        "shared": [
+          ".oxdock/template/shared/footer.md.tmpl"
+        ]
+      }
+    }
+  ]
+}

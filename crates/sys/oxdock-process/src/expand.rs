@@ -43,6 +43,12 @@ pub struct StreamingExpand {
     pending_brace: bool,
     /// Trailing closing byte from previous chunk — deferred across chunks.
     pending_close_brace: bool,
+    /// Trailing backslash from previous chunk — deferred across chunks so
+    /// `\{{` split across a boundary still emits a literal opener.
+    pending_escape: bool,
+    /// Trailing `\` + `{` from previous chunk — deferred across chunks so
+    /// a `\{` split across a boundary still resolves as an escape pair.
+    pending_escape_brace: bool,
     /// Configurable delimiter syntax.
     delimiters: TemplateDelimiters,
 }
@@ -59,6 +65,8 @@ impl StreamingExpand {
             in_placeholder: false,
             pending_brace: false,
             pending_close_brace: false,
+            pending_escape: false,
+            pending_escape_brace: false,
             delimiters: TemplateDelimiters::default(),
         }
     }
@@ -113,6 +121,45 @@ impl StreamingExpand {
             }
         }
 
+        // Handle pending escape pair from previous chunk: a trailing `\{`
+        // combines with a leading `{` into a literal opener. Anything
+        // else means both bytes were literal; re-emit them, then let the
+        // scan below handle this chunk from the start.
+        if self.pending_escape_brace {
+            self.pending_escape_brace = false;
+            if !input.is_empty() && input[0] == self.delimiters.open[1] {
+                out.extend_from_slice(b"{{");
+                i = 1;
+            } else {
+                out.push(b'\\');
+                out.push(self.delimiters.open[0]);
+            }
+        }
+
+        // Handle pending escape from previous chunk: a lone trailing `\`
+        // combines with a leading `{{` into a literal opener, or with a
+        // leading `\` into a literal backslash (the pair is complete, so
+        // whatever follows processes normally). A lone trailing `{`
+        // cannot decide yet, so it joins the deferred pair above.
+        if self.pending_escape {
+            self.pending_escape = false;
+            if input.len() >= 2 && input[0] == b'{' && input[1] == b'{' {
+                out.extend_from_slice(b"{{");
+                i = 2;
+            } else if input.len() == 1 && input[0] == self.delimiters.open[0] {
+                self.pending_escape_brace = true;
+                i = 1;
+            } else if !input.is_empty() && input[0] == b'\\' {
+                out.push(b'\\');
+                i = 1;
+            } else {
+                // Not an escape — the backslash was literal; reprocess
+                // this chunk from the start (a lone `{` still defers via
+                // the pending_brace path below).
+                out.push(b'\\');
+            }
+        }
+
         if self.in_placeholder {
             // We're inside a placeholder — scan for closing delimiter
             i = self.scan_placeholder(input, i, out)?;
@@ -120,7 +167,32 @@ impl StreamingExpand {
 
         // Normal state — scan for opening byte or flush literals
         while i < input.len() {
-            if input[i] == self.delimiters.open[0] {
+            if input[i] == b'\\' {
+                if i + 2 < input.len() && input[i + 1] == b'{' && input[i + 2] == b'{' {
+                    // Escaped opener — emit a literal `{{`, consume all three
+                    out.extend_from_slice(b"{{");
+                    i += 3;
+                } else if i + 2 == input.len() && input[i + 1] == self.delimiters.open[0] {
+                    // `\{` ends the chunk — defer the pair; the next
+                    // chunk decides literal `{{` vs literal `\` + `{`.
+                    self.pending_escape_brace = true;
+                    i += 2;
+                } else if i + 1 < input.len() && input[i + 1] == b'\\' {
+                    // Escaped backslash — emit one `\`, consume both (this
+                    // keeps `\\{{ ... }}` expanding, matching the lenient
+                    // interpolator used for command arguments)
+                    out.push(b'\\');
+                    i += 2;
+                } else if i + 1 == input.len() {
+                    // Trailing backslash — defer across the chunk boundary
+                    self.pending_escape = true;
+                    i += 1;
+                } else {
+                    // Ordinary backslash — literal, reprocess what follows
+                    out.push(b'\\');
+                    i += 1;
+                }
+            } else if input[i] == self.delimiters.open[0] {
                 if i + 1 < input.len() && input[i + 1] == self.delimiters.open[1] {
                     // Found open delimiter — enter PlaceholderScan
                     self.in_placeholder = true;
@@ -137,9 +209,10 @@ impl StreamingExpand {
                     i += 1;
                 }
             } else {
-                // Flush literal bytes until we find opening byte or end of chunk
+                // Flush literal bytes until we find an opening byte, a
+                // backslash (potential `\{{` escape), or end of chunk
                 let start = i;
-                while i < input.len() && input[i] != self.delimiters.open[0] {
+                while i < input.len() && input[i] != self.delimiters.open[0] && input[i] != b'\\' {
                     i += 1;
                 }
                 out.extend_from_slice(&input[start..i]);
@@ -160,6 +233,17 @@ impl StreamingExpand {
         if self.pending_brace {
             out.push(self.delimiters.open[0]);
             self.pending_brace = false;
+        }
+        // Emit deferred backslash if present
+        if self.pending_escape {
+            out.push(b'\\');
+            self.pending_escape = false;
+        }
+        // Emit deferred escape pair if present
+        if self.pending_escape_brace {
+            out.push(b'\\');
+            out.push(self.delimiters.open[0]);
+            self.pending_escape_brace = false;
         }
         // If inside placeholder, emit open delimiter prefix ONCE before buffer
         if self.in_placeholder {
@@ -550,6 +634,80 @@ mod tests {
     }
 
     #[test]
+    fn escaped_opener_emits_literal() {
+        let mut env = HashMap::new();
+        env.insert("PROJECT".into(), "OxDock".into());
+        let expander = StreamingExpand::new(&[], &env);
+        let result = expander
+            .expand_string("Built with \\{{ env:PROJECT }}")
+            .unwrap();
+        assert_eq!(result, "Built with {{ env:PROJECT }}");
+    }
+
+    #[test]
+    fn escaped_opener_across_chunks() {
+        let mut env = HashMap::new();
+        env.insert("PROJECT".into(), "OxDock".into());
+        let mut expander = StreamingExpand::new(&[], &env);
+        let mut out = Vec::new();
+
+        // Split `\` / `{{ env:PROJECT }}` across chunks
+        expander.process_bytes(b"Built with \\", &mut out).unwrap();
+        expander
+            .process_bytes(b"{{ env:PROJECT }}", &mut out)
+            .unwrap();
+        expander.flush(&mut out).unwrap();
+
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "Built with {{ env:PROJECT }}"
+        );
+    }
+
+    #[test]
+    fn double_backslash_then_placeholder_expands() {
+        let mut env = HashMap::new();
+        env.insert("PROJECT".into(), "OxDock".into());
+        let expander = StreamingExpand::new(&[], &env);
+        let result = expander.expand_string("\\\\{{ env:PROJECT }}").unwrap();
+        assert_eq!(result, "\\OxDock");
+    }
+
+    #[test]
+    fn trailing_backslash_flushes_literal() {
+        let env = HashMap::new();
+        let expander = StreamingExpand::new(&[], &env);
+        let result = expander.expand_string("end\\").unwrap();
+        assert_eq!(result, "end\\");
+    }
+
+    #[test]
+    fn backslash_before_other_text_is_literal() {
+        let env = HashMap::new();
+        let expander = StreamingExpand::new(&[], &env);
+        let result = expander.expand_string("a\\b \\{ once }").unwrap();
+        assert_eq!(result, "a\\b \\{ once }");
+    }
+
+    #[test]
+    fn escaped_pair_split_across_chunks() {
+        let mut env = HashMap::new();
+        env.insert("PROJECT".into(), "OxDock".into());
+        let mut expander = StreamingExpand::new(&[], &env);
+        let mut out = Vec::new();
+
+        // Split `\\` / `{{ env:PROJECT }}` across chunks: the pair
+        // completes to one backslash, then the placeholder expands
+        expander.process_bytes(b"\\", &mut out).unwrap();
+        expander
+            .process_bytes(b"\\{{ env:PROJECT }}", &mut out)
+            .unwrap();
+        expander.flush(&mut out).unwrap();
+
+        assert_eq!(String::from_utf8_lossy(&out), "\\OxDock");
+    }
+
+    #[test]
     fn partial_across_chunks() {
         let mut env = HashMap::new();
         env.insert("NAME".into(), "World".into());
@@ -845,5 +1003,90 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("invalid placeholder format"), "got: {msg}");
+    }
+
+    /// Feed input in fixed-size chunks, then flush: exercises every
+    /// chunk-boundary alignment for the given split size.
+    fn render_split(
+        input: &[u8],
+        size: usize,
+        env: &HashMap<String, String>,
+    ) -> Result<String, anyhow::Error> {
+        let mut expander = StreamingExpand::new(&[], env);
+        let mut out = Vec::new();
+        for chunk in input.chunks(size) {
+            expander.process_bytes(chunk, &mut out)?;
+        }
+        expander.flush(&mut out)?;
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    }
+
+    #[test]
+    fn escaped_opener_one_byte_chunks_stays_literal() {
+        let mut env = HashMap::new();
+        env.insert("NAME".into(), "World".into());
+        // Every byte arrives alone: `\` | `{` | `{` | ... must still
+        // resolve to a literal opener, never an expansion.
+        let out = render_split(b"\\{{ env:NAME }}", 1, &env).unwrap();
+        assert_eq!(out, "{{ env:NAME }}");
+    }
+
+    #[test]
+    fn escaped_opener_two_byte_chunks_stays_literal() {
+        let mut env = HashMap::new();
+        env.insert("NAME".into(), "World".into());
+        // Two-byte splits land `\{` and lone `{` at chunk ends.
+        let out = render_split(b"a\\{{ env:NAME }}b", 2, &env).unwrap();
+        assert_eq!(out, "a{{ env:NAME }}b");
+    }
+
+    #[test]
+    fn escaped_opener_split_variants_stay_literal() {
+        let mut env = HashMap::new();
+        env.insert("NAME".into(), "World".into());
+        for chunks in [
+            vec![b"\\".as_slice(), b"{", b"{ env:NAME }}"],
+            vec![b"\\{".as_slice(), b"{ env:NAME }}"],
+            vec![b"\\{{ env:NAME ".as_slice(), b"}}"],
+        ] {
+            let mut expander = StreamingExpand::new(&[], &env);
+            let mut out = Vec::new();
+            for chunk in chunks {
+                expander.process_bytes(chunk, &mut out).unwrap();
+            }
+            expander.flush(&mut out).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out),
+                "{{ env:NAME }}",
+                "chunks must not corrupt the escape"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_opener_split_chunks_still_expands() {
+        let mut env = HashMap::new();
+        env.insert("NAME".into(), "World".into());
+        // The fix must not swallow genuine openers fragmented the
+        // same way: `{` | `{` opens, then the key resolves.
+        let out = render_split(b"{{ env:NAME }}", 1, &env).unwrap();
+        assert_eq!(out, "World");
+    }
+
+    #[test]
+    fn double_backslash_split_chunks_still_expands() {
+        let mut env = HashMap::new();
+        env.insert("NAME".into(), "World".into());
+        // `\\` completes to one backslash; the opener after it expands.
+        let out = render_split(b"\\\\{{ env:NAME }}", 1, &env).unwrap();
+        assert_eq!(out, "\\World");
+    }
+
+    #[test]
+    fn trailing_escape_brace_flushes_literal() {
+        let env = HashMap::new();
+        let expander = StreamingExpand::new(&[], &env);
+        let result = expander.expand_string("end\\{").unwrap();
+        assert_eq!(result, "end\\{");
     }
 }

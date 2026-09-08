@@ -32,16 +32,16 @@ OxDock is a Dockerfile inspired build DSL for Rust. Embed scripts at compile tim
 
 Supports platform gating, async tasks, and piped workflows for custom pipelines.
 
-[Documentation](https://docs.rs/oxdock/0.9.0-alpha/oxdock/)
+[Documentation](https://docs.rs/oxdock/0.10.0-alpha/oxdock/)
 
 ## Quick start
 
-Install: `cargo install oxdock@0.9.0-alpha` or add the library with `cargo add oxdock`.
+Add it to your Rust build with `cargo add oxdock@0.10.0-alpha`, or install the standalone runner with `cargo install oxdock@0.10.0-alpha`.
 
-Once installed:
+Run a script:
 
 ```sh
-oxdock --script Oxfile
+oxdock <PATH>
 ```
 
 Scripts run during `rustc`, and their artifacts ship inside the binary with zero heap allocation, `no_std` included:
@@ -93,10 +93,53 @@ LS dist
 ASSERT_STDOUT hello.txt
 ```
 
-Run the same file with the CLI (install once, see above):
+Save the script above as `./build.oxfile` and run it by path (install once, see above):
 
 ```sh
-oxdock --script Oxfile
+oxdock ./build.oxfile
+```
+
+### Prepare during the build
+
+`oxdock_embed!` ships artifacts inside the binary. `oxdock_prepare!` runs the same script but emits no runtime module. Use it when assets only need to exist during the build, for codegen or `include!` workflows.
+
+```rust
+use oxdock_macros::oxdock_prepare;
+
+oxdock_prepare! {
+    name: PreparedAssets,
+    script: {
+        MKDIR gen
+        WRITE gen/out.txt generated
+        ASSERT_FILE gen/out.txt generated
+    },
+    out_dir: "target/prebuilt_prepare",
+}
+
+fn main() {}
+```
+
+### Stream bytes between steps
+
+`WITH_IO` routes stdout into named pipes and back into stdin, so steps form custom pipelines without temp files.
+
+```oxdock
+WITH_IO [stdout=pipe:msg] ECHO piped-bytes
+WITH_IO [stdin=pipe:msg] WRITE piped.txt
+READ piped.txt
+ASSERT_STDOUT piped-bytes
+```
+
+### Workspaces start ephemeral
+
+Scripts start in an ephemeral snapshot workspace, an isolated temp dir that leaves the source tree untouched. Pull inputs with `COPY` or `COPY_GIT`. Switch to the local directory with `WORKSPACE LOCAL` when the script should mutate in place.
+
+```oxdock
+WRITE snap.txt from-snapshot
+ASSERT_FILE snap.txt from-snapshot
+WORKSPACE LOCAL
+WRITE local.txt from-local
+ASSERT_FILE local.txt from-local
 ```
 
 ### Prepare during the build
@@ -449,6 +492,7 @@ CANCEL $worker
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
+
 ### WITH_IO
 
 Reroute standard streams.
@@ -1446,7 +1490,6 @@ Script variable reference. The `$` sigil is mandatory.
 ### Value type: KEY=value
 
 `KEY=value` assignment splitting on the first `=` (`KEY=a=b` stores `a=b`). Values follow the unified string-value rules.
-
 
 ## Selective environment inheritance
 

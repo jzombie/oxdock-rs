@@ -35,6 +35,7 @@
 | [`AWAIT`](#await) | `AWAIT $var` |
 | [`CANCEL`](#cancel) | `CANCEL $var` |
 | [`TIMEOUT`](#timeout) | `TIMEOUT <duration> <command...> \| TIMEOUT <duration> { <commands> } \| TIMEOUT <duration> AWAIT $var` |
+
 ### WITH_IO
 
 Reroute standard streams.
@@ -1032,5 +1033,3 @@ Script variable reference. The `$` sigil is mandatory.
 ### Value type: KEY=value
 
 `KEY=value` assignment splitting on the first `=` (`KEY=a=b` stores `a=b`). Values follow the unified string-value rules.
-
-
