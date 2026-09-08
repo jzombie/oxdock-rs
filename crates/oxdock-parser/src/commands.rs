@@ -941,7 +941,7 @@ declare_commands! {
         name: "SLEEP",
         variant: Sleep { duration: std::time::Duration },
         syntax: "SLEEP <duration>",
-        summary: "Sleep without spawning a shell.",
+        summary: "Pause execution for a duration.",
         description: "Parks the step for the duration (e.g. 500ms, 10s, 2m). Cooperative: checks for cancellation so an enclosing TIMEOUT or task teardown interrupts the sleep. Cross-platform alternative to shell sleep for testing time boundaries.",
         args: &[ ArgSpec { name: "duration", arg_type: "duration", description: "How long to sleep", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],

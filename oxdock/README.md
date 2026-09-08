@@ -1022,7 +1022,7 @@ EXIT 0
 
 ### SLEEP
 
-Sleep without spawning a shell.
+Pause execution for a duration.
 
 **Syntax:** `SLEEP <duration>`
 
