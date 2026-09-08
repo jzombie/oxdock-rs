@@ -433,8 +433,7 @@ fn template_target_derives_order_from_includes() {
         member: None,
         template: Some("output.tmpl".to_string()),
     };
-    template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new())
-        .expect("render");
+    template_doc::render_target(fx.repo_root(), &out, None, None, ExecIo::new()).expect("render");
     assert_eq!(
         fx.read("out.md"),
         "Hello world!\nverbatim `{{ env:KEPT }}`\nsigned world\n"
