@@ -418,7 +418,7 @@ declare_commands! {
         variant: Workdir(Arg),
         syntax: "WORKDIR <path>",
         summary: "Change the working directory.",
-        description: "Sets the current working directory.",
+        description: "Sets the current working directory. Relative paths resolve against the current directory; `/` resets to the workspace root. Paths cannot escape the workspace.",
         args: &[ ArgSpec { name: "path", arg_type: "string", description: "Directory to change to", io: IoDirection::Write, index: 0, required: true, fallback_stream: None } ],
         flags: &[],
         default_output: None,

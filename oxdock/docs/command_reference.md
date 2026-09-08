@@ -265,7 +265,7 @@ Change the working directory.
 
 **Syntax:** `WORKDIR <path>`
 
-Sets the current working directory.
+Sets the current working directory. Relative paths resolve against the current directory; `/` resets to the workspace root. Paths cannot escape the workspace.
 
 **Arguments:**
 
